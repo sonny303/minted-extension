@@ -2,7 +2,14 @@
 // carries the caller's Supabase JWT; the server's guard resolves org + role
 // from it. Single-org users send no x-org-id header (v0 assumption).
 import { API_BASE_URL } from "../shared/config";
-import type { ApiEnvelope, ApiMeta, ProviderListItem } from "../shared/apiTypes";
+import type {
+  ApiEnvelope,
+  ApiMeta,
+  CaseListItem,
+  PortalFieldMap,
+  ProviderListItem,
+  ProviderProfileResponse,
+} from "../shared/apiTypes";
 import { forceRefresh, getAccessToken } from "./auth";
 
 export class ApiError extends Error {
@@ -57,4 +64,49 @@ export async function listProviders(): Promise<ProviderListItem[]> {
     "/api/providers?page=1&pageSize=100&sort=last_name&order=asc",
   );
   return data;
+}
+
+export async function listCases(providerId: string): Promise<CaseListItem[]> {
+  const { data } = await apiFetch<CaseListItem[]>(
+    `/api/cases?providerId=${encodeURIComponent(providerId)}`,
+  );
+  return data;
+}
+
+export async function getPortalFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
+  const { data } = await apiFetch<PortalFieldMap[]>(
+    `/api/portal-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
+  );
+  return data;
+}
+
+// PHI-dense payload (unmasked by design for form fill). Never log it.
+export async function getProviderProfile(
+  providerId: string,
+  state: string,
+): Promise<ProviderProfileResponse> {
+  const { data } = await apiFetch<ProviderProfileResponse>(
+    `/api/providers/${encodeURIComponent(providerId)}/profile?state=${encodeURIComponent(state)}`,
+  );
+  return data;
+}
+
+export interface FillEventBody {
+  id: string;
+  caseId: string;
+  providerId: string;
+  portalKey: string;
+  fillMode: "web";
+  startedAt: string;
+  completedAt: string;
+  fieldsFilled: number;
+  fieldsSkipped: unknown;
+}
+
+export async function postFillEvent(body: FillEventBody): Promise<void> {
+  await apiFetch("/api/fill-events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
