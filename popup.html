@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Minted Panel</title>
+  </head>
+  <body>
+    <header class="header">
+      <span class="brand">Minted Panel</span>
+      <button id="signout" class="link" hidden>Sign out</button>
+    </header>
+    <main>
+      <section id="view-loading"><p class="hint">Loading…</p></section>
+
+      <section id="view-signin" hidden>
+        <h1>Sign in</h1>
+        <p class="hint">Use your Minted Panel account.</p>
+        <form id="signin-form">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="username" required />
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required />
+          <div id="signin-error" class="error" hidden></div>
+          <button id="signin-btn" class="primary" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="view-main" hidden>
+        <p id="account-email" class="hint"></p>
+        <div class="row">
+          <label for="provider-select">Provider</label>
+          <button id="refresh" class="link" type="button">Refresh</button>
+        </div>
+        <select id="provider-select"></select>
+        <div id="main-error" class="error" hidden></div>
+        <div id="provider-card" class="card" hidden>
+          <div id="provider-name" class="provider-name"></div>
+          <div id="provider-npi" class="provider-npi"></div>
+          <div id="provider-meta" class="hint"></div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/popup/main.ts"></script>
+  </body>
+</html>
