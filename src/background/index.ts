@@ -1,7 +1,8 @@
 // Background service worker: message router. Owns Supabase auth and all API
-// calls; the popup drives it over chrome.runtime messaging. Requests from
-// content scripts (sender.tab set) are refused — page-adjacent code never
-// triggers auth or API traffic, and tokens never appear in responses.
+// calls; the popup drives it over chrome.runtime messaging. Only senders
+// running on our own chrome-extension:// origin are served — content scripts
+// send with the web page's URL, so page-adjacent code can never trigger auth
+// or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse } from "../shared/messages";
 import { AuthRequiredError, getAuthState, signIn, signOut } from "./auth";
 import { ApiError, listProviders } from "./api";
@@ -52,7 +53,8 @@ function toErrorMessage(error: unknown): string {
 
 chrome.runtime.onMessage.addListener(
   (message: BgRequest, sender, sendResponse: (response: BgResponse<unknown>) => void) => {
-    if (sender.id !== chrome.runtime.id || sender.tab != null) {
+    const ownOrigin = `chrome-extension://${chrome.runtime.id}/`;
+    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(ownOrigin)) {
       sendResponse({ ok: false, error: "Not allowed" });
       return false;
     }
