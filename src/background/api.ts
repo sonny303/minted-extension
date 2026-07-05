@@ -1,0 +1,60 @@
+// The one place extension code talks to the Minted Panel API. Every request
+// carries the caller's Supabase JWT; the server's guard resolves org + role
+// from it. Single-org users send no x-org-id header (v0 assumption).
+import { API_BASE_URL } from "../shared/config";
+import type { ApiEnvelope, ApiMeta, ProviderListItem } from "../shared/apiTypes";
+import { forceRefresh, getAccessToken } from "./auth";
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function requestOnce(path: string, token: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+    },
+  });
+}
+
+// Envelope-aware fetch with the refresh-and-retry contract: if the server
+// rejects the token (401), refresh once and retry once. A second 401 means
+// the refresh token itself is dead — surface as a sign-in-required error.
+export async function apiFetch<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ data: T; meta: ApiMeta | null }> {
+  let token = await getAccessToken();
+  let response = await requestOnce(path, token, init);
+  if (response.status === 401) {
+    token = await forceRefresh();
+    response = await requestOnce(path, token, init);
+  }
+
+  let envelope: ApiEnvelope<T>;
+  try {
+    envelope = (await response.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new ApiError(response.status, `Unexpected non-JSON response (HTTP ${response.status})`);
+  }
+  if (!response.ok || envelope.error != null || envelope.data == null) {
+    throw new ApiError(response.status, envelope.error ?? `HTTP ${response.status}`);
+  }
+  return { data: envelope.data, meta: envelope.meta };
+}
+
+export async function listProviders(): Promise<ProviderListItem[]> {
+  const { data } = await apiFetch<ProviderListItem[]>(
+    "/api/providers?page=1&pageSize=100&sort=last_name&order=asc",
+  );
+  return data;
+}
