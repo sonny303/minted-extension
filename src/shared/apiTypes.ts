@@ -63,15 +63,40 @@ export interface ProviderProfileResponse {
   unresolved: UnresolvedToken[];
 }
 
-// GET /api/cases?providerId=... — the case picker feed (minimal route the
-// extension pulls; see the README's backend-dependency note).
+// GET /api/cases?providerId=... — the case picker feed. Mirrors the merged
+// route (mintedpanel src/services/providerCases.ts): the provider's OPEN
+// cases only (open = credentialing status not in the config's 'complete'
+// action bucket), sorted payer then state.
 export interface CaseListItem {
   id: string;
-  payerId: string | null;
   payerName: string | null;
-  state: string | null;
-  statusLabel: string | null;
+  state: string;
+  status: string | null;
   submittedDate: string | null;
+}
+
+// POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
+// are snake_case per the locked R2 contract (2026-07-05), unlike fill-events'
+// camelCase. The server sets org and the performing user from the JWT;
+// idempotency_id becomes the touch row's id (a replay returns the stored row).
+export interface SubmissionTouchBody {
+  kind: "portal_submission";
+  portal_key: string;
+  fill_session_id?: string | null;
+  note?: string | null;
+  idempotency_id: string;
+}
+
+// The created touch, camelCased like every row in the envelope contract
+// (mintedpanel src/services/submissionTouches.ts).
+export interface SubmissionTouch {
+  id: string;
+  caseId: string;
+  touchDate: string;
+  touchType: string;
+  outcome: string;
+  notes: string | null;
+  source: string;
 }
 
 // GET /api/providers returns the PHI-safe list projection — no SSN, DOB, or

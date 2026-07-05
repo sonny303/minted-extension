@@ -36,8 +36,6 @@ const providerNpi = el<HTMLElement>("provider-npi");
 const providerMeta = el<HTMLElement>("provider-meta");
 const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
-const caseInput = el<HTMLInputElement>("case-input");
-const caseHint = el<HTMLElement>("case-hint");
 const portalStatus = el<HTMLElement>("portal-status");
 const fillBtn = el<HTMLButtonElement>("fill-btn");
 const fillResults = el<HTMLElement>("fill-results");
@@ -45,14 +43,24 @@ const fillSummaryBox = el<HTMLElement>("fill-summary");
 const fillSkippedBox = el<HTMLElement>("fill-skipped");
 const fillManualBox = el<HTMLElement>("fill-manual");
 const fillEventWarn = el<HTMLElement>("fill-event-warn");
+const submitHint = el<HTMLElement>("submit-hint");
+const markSubmittedBtn = el<HTMLButtonElement>("mark-submitted");
+const submitStatus = el<HTMLElement>("submit-status");
+
+// The last successful fill, held so "Mark submitted" can log the touch
+// against the right case and fill session. Cleared whenever the selection
+// changes or a new fill starts.
+interface LastFill {
+  caseId: string;
+  portalKey: string;
+  fillSessionId: string | null;
+}
 
 let providers: ProviderListItem[] = [];
 let cases: CaseListItem[] = [];
-// true once LIST_CASES came back 404 (cases route not deployed yet) — the
-// popup falls back to a paste-the-case-id input.
-let casesUnavailable = false;
 let portal: PortalConfig | null = null;
 let portalTabId: number | null = null;
+let lastFill: LastFill | null = null;
 
 function showView(name: keyof typeof views): void {
   for (const [key, section] of Object.entries(views)) {
@@ -71,7 +79,7 @@ function selectedProviderId(): string | null {
 }
 
 function selectedCaseId(): string | null {
-  const value = casesUnavailable ? caseInput.value.trim() : caseSelect.value;
+  const value = caseSelect.value;
   return UUID_RE.test(value) ? value : null;
 }
 
@@ -80,11 +88,9 @@ function providerLabel(p: ProviderListItem): string {
   return p.npi ? `${name} — ${p.npi}` : name;
 }
 
+// The locked dropdown wording: "<payer> - <state> - <status>".
 function caseLabel(c: CaseListItem): string {
-  const parts = [c.payerName ?? "Unknown payer"];
-  if (c.state) parts.push(c.state);
-  const label = parts.join(" — ");
-  return c.statusLabel ? `${label} · ${c.statusLabel}` : label;
+  return [c.payerName ?? "Unknown payer", c.state, c.status ?? "No status"].join(" - ");
 }
 
 function renderProviderCard(provider: ProviderListItem | null): void {
@@ -118,6 +124,12 @@ function clearFillResults(): void {
   fillSkippedBox.hidden = true;
   fillManualBox.hidden = true;
   fillEventWarn.hidden = true;
+  submitHint.hidden = true;
+  markSubmittedBtn.hidden = true;
+  markSubmittedBtn.disabled = false;
+  markSubmittedBtn.textContent = "Mark submitted";
+  submitStatus.hidden = true;
+  lastFill = null;
 }
 
 function updateFillReady(): void {
@@ -125,6 +137,7 @@ function updateFillReady(): void {
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
     : "Open the BCBS KS enrollment form in the current tab to fill it.";
+  // Case selection is REQUIRED (locked decision): no case, no fill.
   fillBtn.disabled = !(portalOpen && selectedProviderId() && selectedCaseId());
 }
 
@@ -142,6 +155,9 @@ function fieldList(box: HTMLElement, heading: string, fields: ReportedField[]): 
   box.replaceChildren(title, list);
 }
 
+// The review state: filled count, the skipped/manual lists, and the
+// "Mark submitted" button the human presses only after submitting the portal
+// form themselves (the extension never automates the portal's submit).
 function renderFillSummary(summary: FillSummary): void {
   fillResults.hidden = false;
   const attempted = summary.filled + summary.skipped.length;
@@ -152,32 +168,18 @@ function renderFillSummary(summary: FillSummary): void {
     fillEventWarn.hidden = false;
     fillEventWarn.textContent = `The fill was applied but could not be logged to Minted Panel: ${summary.eventError ?? "unknown error"}. Retry from the case record.`;
   }
+  submitHint.hidden = false;
+  markSubmittedBtn.hidden = false;
+  submitStatus.hidden = true;
 }
 
 async function loadCases(providerId: string): Promise<void> {
   clearFillResults();
-  casesUnavailable = false;
-  caseInput.hidden = true;
-  caseHint.hidden = true;
-  caseSelect.hidden = false;
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
   updateFillReady();
 
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
-  if (!response.ok && response.code === 404) {
-    // Cases route not deployed yet — fall back to manual case id entry.
-    casesUnavailable = true;
-    caseSelect.hidden = true;
-    caseInput.hidden = false;
-    caseHint.hidden = false;
-    caseHint.textContent =
-      "Case lookup isn't available on the server yet — paste the case id from Minted Panel.";
-    const remembered = await sendToBackground({ type: "GET_SELECTED_CASE", providerId });
-    if (remembered.ok && remembered.data) caseInput.value = remembered.data;
-    updateFillReady();
-    return;
-  }
   if (!response.ok) {
     setError(mainError, response.error);
     caseSelect.replaceChildren(new Option("Unavailable", ""));
@@ -191,7 +193,7 @@ async function loadCases(providerId: string): Promise<void> {
     remembered.ok && cases.some((c) => c.id === remembered.data) ? remembered.data : null;
   caseSelect.replaceChildren();
   const placeholder = new Option(
-    cases.length ? "Select a case…" : "No cases for this provider",
+    cases.length ? "Select a case…" : "No open cases for this provider",
     "",
     true,
     rememberedId == null,
@@ -307,14 +309,6 @@ caseSelect.addEventListener("change", () => {
   updateFillReady();
 });
 
-caseInput.addEventListener("input", () => {
-  const providerId = selectedProviderId();
-  if (providerId && selectedCaseId()) {
-    void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId: selectedCaseId() });
-  }
-  updateFillReady();
-});
-
 fillBtn.addEventListener("click", () => {
   const providerId = selectedProviderId();
   const caseId = selectedCaseId();
@@ -339,7 +333,41 @@ fillBtn.addEventListener("click", () => {
       setError(mainError, response.error);
       return;
     }
+    lastFill = {
+      caseId,
+      portalKey: portal.key,
+      fillSessionId: response.data.fillSessionId,
+    };
     renderFillSummary(response.data);
+  })();
+});
+
+// Pressed by the human only after they submit the portal form themselves.
+// The background reuses one idempotency id per (case, fill session), so a
+// retry after a failure can never double-log the touch.
+markSubmittedBtn.addEventListener("click", () => {
+  const context = lastFill;
+  if (!context) return;
+  void (async () => {
+    setError(mainError, null);
+    markSubmittedBtn.disabled = true;
+    markSubmittedBtn.textContent = "Logging…";
+    const response = await sendToBackground({
+      type: "MARK_SUBMITTED",
+      caseId: context.caseId,
+      portalKey: context.portalKey,
+      fillSessionId: context.fillSessionId,
+    });
+    if (!response.ok) {
+      markSubmittedBtn.disabled = false;
+      markSubmittedBtn.textContent = "Mark submitted";
+      setError(mainError, response.error);
+      return;
+    }
+    submitHint.hidden = true;
+    markSubmittedBtn.hidden = true;
+    submitStatus.hidden = false;
+    submitStatus.textContent = "Logged to the case.";
   })();
 });
 

@@ -9,6 +9,8 @@ import type {
   PortalFieldMap,
   ProviderListItem,
   ProviderProfileResponse,
+  SubmissionTouch,
+  SubmissionTouchBody,
 } from "../shared/apiTypes";
 import { forceRefresh, getAccessToken } from "./auth";
 
@@ -109,4 +111,23 @@ export async function postFillEvent(body: FillEventBody): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+// POST /api/cases/:id/touches — the "Mark submitted" business log: one
+// append-only touch on the case (never a status change). Idempotent on
+// idempotency_id — a replay returns the stored touch (200) instead of
+// appending (201).
+export async function postSubmissionTouch(
+  caseId: string,
+  body: SubmissionTouchBody,
+): Promise<SubmissionTouch> {
+  const { data } = await apiFetch<SubmissionTouch>(
+    `/api/cases/${encodeURIComponent(caseId)}/touches`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  return data;
 }
