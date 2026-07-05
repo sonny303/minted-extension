@@ -5,22 +5,32 @@
 // or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse } from "../shared/messages";
 import { AuthRequiredError, getAuthState, signIn, signOut } from "./auth";
-import { ApiError, listProviders } from "./api";
+import { ApiError, listCases, listProviders } from "./api";
+import { fillPortal } from "./fill";
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
+const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
 
-async function getSelectedProviderId(): Promise<string | null> {
-  const entry = await chrome.storage.session.get(SELECTED_PROVIDER_KEY);
-  const value = entry[SELECTED_PROVIDER_KEY];
+async function readSessionString(key: string): Promise<string | null> {
+  const entry = await chrome.storage.session.get(key);
+  const value = entry[key];
   return typeof value === "string" ? value : null;
 }
 
-async function setSelectedProviderId(providerId: string | null): Promise<void> {
-  if (providerId == null) {
-    await chrome.storage.session.remove(SELECTED_PROVIDER_KEY);
+async function writeSessionString(key: string, value: string | null): Promise<void> {
+  if (value == null) {
+    await chrome.storage.session.remove(key);
   } else {
-    await chrome.storage.session.set({ [SELECTED_PROVIDER_KEY]: providerId });
+    await chrome.storage.session.set({ [key]: value });
   }
+}
+
+async function clearSelections(): Promise<void> {
+  const all = await chrome.storage.session.get(null);
+  const keys = Object.keys(all).filter(
+    (key) => key === SELECTED_PROVIDER_KEY || key.startsWith(SELECTED_CASE_PREFIX),
+  );
+  if (keys.length) await chrome.storage.session.remove(keys);
 }
 
 async function handleRequest(request: BgRequest): Promise<unknown> {
@@ -30,25 +40,44 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SIGN_IN":
       return signIn(request.email, request.password);
     case "SIGN_OUT":
-      await setSelectedProviderId(null);
+      await clearSelections();
       await signOut();
       return null;
     case "LIST_PROVIDERS":
       return listProviders();
+    case "LIST_CASES":
+      return listCases(request.providerId);
     case "GET_SELECTED_PROVIDER":
-      return getSelectedProviderId();
+      return readSessionString(SELECTED_PROVIDER_KEY);
     case "SET_SELECTED_PROVIDER":
-      await setSelectedProviderId(request.providerId);
+      await writeSessionString(SELECTED_PROVIDER_KEY, request.providerId);
       return null;
+    case "GET_SELECTED_CASE":
+      return readSessionString(SELECTED_CASE_PREFIX + request.providerId);
+    case "SET_SELECTED_CASE":
+      await writeSessionString(SELECTED_CASE_PREFIX + request.providerId, request.caseId);
+      return null;
+    case "FILL":
+      return fillPortal({
+        tabId: request.tabId,
+        providerId: request.providerId,
+        caseId: request.caseId,
+        portalKey: request.portalKey,
+        state: request.state,
+      });
   }
 }
 
-function toErrorMessage(error: unknown): string {
-  if (error instanceof AuthRequiredError) return "Session expired — please sign in again.";
-  if (error instanceof ApiError) return error.message;
-  if (error instanceof TypeError) return "Could not reach Minted Panel — check your connection.";
-  if (error instanceof Error) return error.message;
-  return "Something went wrong.";
+function toFailure(error: unknown): BgResponse<never> {
+  if (error instanceof AuthRequiredError) {
+    return { ok: false, error: "Session expired — please sign in again.", code: 401 };
+  }
+  if (error instanceof ApiError) return { ok: false, error: error.message, code: error.status };
+  if (error instanceof TypeError) {
+    return { ok: false, error: "Could not reach Minted Panel — check your connection." };
+  }
+  if (error instanceof Error) return { ok: false, error: error.message };
+  return { ok: false, error: "Something went wrong." };
 }
 
 chrome.runtime.onMessage.addListener(
@@ -60,7 +89,7 @@ chrome.runtime.onMessage.addListener(
     }
     handleRequest(message)
       .then((data) => sendResponse({ ok: true, data }))
-      .catch((error: unknown) => sendResponse({ ok: false, error: toErrorMessage(error) }));
+      .catch((error: unknown) => sendResponse(toFailure(error)));
     return true; // keep the channel open for the async response
   },
 );
