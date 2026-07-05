@@ -17,7 +17,7 @@ export const PORTALS: PortalConfig[] = [
     key: "bcbs_ks_enrollment",
     label: "BCBS KS network enrollment",
     state: "KS",
-    urlPrefix: "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm",
+    urlPrefix: "https://bluekc.az1.qualtrics.com/jfe/form/SV_3jAoF5MwXJB7yKO",
   },
 ];
 
