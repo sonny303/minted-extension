@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://bluekc.az1.qualtrics.com/jfe/form/SV_3jAoF5MwXJB7yKO*"
+        "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
