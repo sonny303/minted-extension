@@ -28,11 +28,44 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 | Route | Use |
 | --- | --- |
 | `GET /api/providers` | provider picker (PHI-safe list projection) |
-| `GET /api/providers/:id/profile?state=XX` | resolved field-token values for fill (M1) |
-| `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal (M1) |
-| `POST /api/fill-events` | fill log, idempotent on a client-generated UUID (M1) |
+| `GET /api/providers/:id/profile?state=XX` | resolved field-token values for fill |
+| `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
+| `GET /api/cases?providerId=…` | case picker (see note below) |
+| `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
 
 Single-org users send no `x-org-id` header.
+
+**Backend dependency:** `POST /api/fill-events` requires a `caseId` owned by
+the caller's org, so the popup has a case picker fed by
+`GET /api/cases?providerId=…` — a minimal route the extension pulls from the
+backend (consumer-pulled surface). Until that route is deployed, the popup
+detects the 404 and falls back to pasting a case id from Minted Panel.
+
+## Fill flow (M1)
+
+One click on **Fill this page** while the BCBS KS enrollment form
+(`provider.bcbsks.com/...NetworkEnrollmentForm*`) is the active tab:
+
+1. Background fetches the portal's field maps and the provider's `/profile`
+   values (`?state=KS` selects the KS license) in parallel, then plans
+   instructions: `hardcoded` → the fixed value; `token` → the resolved
+   profile value; `manual` and `file` fields are never attempted and are
+   listed for the user; `manual_partial` fills the known part and flags the
+   field for review; empty/unresolved tokens are listed with the server's
+   reason.
+2. The content script resolves each selector (`label:<text>` = exact
+   normalized label-text match — deliberate, the form has both "First Name"
+   and "Provider's First Name" — else CSS, then fallbacks), sets values
+   through native setters, and fires `input`/`change` so the page's own
+   validation runs. Selects match by option value then text; radios by value
+   or label text. Anything unmatched or unappliable is skipped and reported —
+   the engine never throws.
+3. Background POSTs `/api/fill-events` with `id: crypto.randomUUID()` (new
+   per attempt), the case + provider ids, portal key, timestamps, and
+   filled/skipped counts. A logging failure downgrades to a warning — it
+   never un-reports a successful fill.
+4. The popup shows filled count, skipped fields with reasons, and the
+   needs-manual list.
 
 ## Repo layout
 
@@ -84,11 +117,11 @@ env var at both points.
 
 ## Milestones
 
-- **M0 (this)**: scaffold, sign-in, provider picker showing name + NPI,
-  proven token refresh, CI (tsc + lint + build).
-- **M1**: fetch field maps (`bcbs_ks_enrollment`) + profile values, one-click
-  fill on the BCBS KS enrollment page with `input`/`change` events fired,
-  skipped/unfillable fields reported not attempted, fill event POSTed with an
-  idempotency id.
+- **M0**: scaffold, sign-in, provider picker showing name + NPI, proven token
+  refresh, CI (tsc + lint + build).
+- **M1 (this)**: fetch field maps (`bcbs_ks_enrollment`) + profile values,
+  one-click fill on the BCBS KS enrollment page with `input`/`change` events
+  fired, skipped/unfillable fields reported not attempted, fill event POSTed
+  with an idempotency id.
 - **Parked until M1 is verified on the live portal**: attachments, PDF fill,
   CAQH, second-portal generalization.
