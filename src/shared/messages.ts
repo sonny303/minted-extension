@@ -1,7 +1,7 @@
 // The chrome.runtime messaging protocol between the popup and the background
 // service worker. The background owns Supabase auth and every API call; the
 // popup is UI only. Access tokens never appear in any message payload.
-import type { CaseListItem, ProviderListItem } from "./apiTypes";
+import type { CaseListItem, ProviderListItem, SubmissionTouch } from "./apiTypes";
 import type { FillSummary } from "./fill";
 
 export type BgRequest =
@@ -21,6 +21,15 @@ export type BgRequest =
       caseId: string;
       portalKey: string;
       state: string;
+    }
+  // Pressed by the human AFTER they submit the portal form themselves — the
+  // extension never touches the portal's submit button. fillSessionId is the
+  // fill attempt's idempotency id when the fill event was recorded, else null.
+  | {
+      type: "MARK_SUBMITTED";
+      caseId: string;
+      portalKey: string;
+      fillSessionId: string | null;
     };
 
 export interface AuthState {
@@ -45,6 +54,7 @@ export interface BgResponseMap {
   GET_SELECTED_CASE: string | null;
   SET_SELECTED_CASE: null;
   FILL: FillSummary;
+  MARK_SUBMITTED: SubmissionTouch;
 }
 
 // Typed wrapper so popup call sites get the right response type per request.

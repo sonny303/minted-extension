@@ -30,16 +30,17 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 | `GET /api/providers` | provider picker (PHI-safe list projection) |
 | `GET /api/providers/:id/profile?state=XX` | resolved field-token values for fill |
 | `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
-| `GET /api/cases?providerId=…` | case picker (see note below) |
+| `GET /api/cases?providerId=…` | case picker (the provider's OPEN cases) |
 | `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
+| `POST /api/cases/:id/touches` | "Mark submitted" business log (snake_case body per the locked R2 contract) |
 
 Single-org users send no `x-org-id` header.
 
-**Backend dependency:** `POST /api/fill-events` requires a `caseId` owned by
-the caller's org, so the popup has a case picker fed by
-`GET /api/cases?providerId=…` — a minimal route the extension pulls from the
-backend (consumer-pulled surface). Until that route is deployed, the popup
-detects the 404 and falls back to pasting a case id from Minted Panel.
+**Case selection is REQUIRED** (locked decision): the popup's case dropdown is
+fed by `GET /api/cases?providerId=…` (a consumer-pulled route, merged in
+mintedpanel R2), rendered as `<payer> - <state> - <status>`. No case selected,
+no fill. The old paste-a-case-id fallback (for before the route existed) is
+gone.
 
 ## Fill flow (M1)
 
@@ -64,8 +65,14 @@ One click on **Fill this page** while the BCBS KS enrollment form
    per attempt), the case + provider ids, portal key, timestamps, and
    filled/skipped counts. A logging failure downgrades to a warning — it
    never un-reports a successful fill.
-4. The popup shows filled count, skipped fields with reasons, and the
-   needs-manual list.
+4. The popup shows a review state: filled count, skipped fields with reasons,
+   the needs-manual list, and a **Mark submitted** button. The human submits
+   the portal form themselves — the extension never clicks or automates the
+   portal's submit — then presses Mark submitted, which POSTs
+   `/api/cases/:id/touches` (`kind: portal_submission`, the portal key, the
+   fill session's id as `fill_session_id`, and a fresh `idempotency_id` the
+   worker reuses on retries so the touch can never double-log). On success the
+   popup shows "Logged to the case."
 
 ## Repo layout
 

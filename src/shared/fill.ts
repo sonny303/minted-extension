@@ -36,6 +36,10 @@ export interface FillSummary {
   manual: ReportedField[];
   eventRecorded: boolean;
   eventError: string | null;
+  // The fill attempt's idempotency id (= the fill_sessions row PK) when the
+  // event was recorded; null when logging failed — "Mark submitted" must not
+  // reference a fill session the server never stored (it 404s unknown ids).
+  fillSessionId: string | null;
 }
 
 export type ContentRequest = { type: "PING" } | { type: "APPLY_FILL"; instructions: FillInstruction[] };

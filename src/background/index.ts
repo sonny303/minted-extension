@@ -5,11 +5,12 @@
 // or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse } from "../shared/messages";
 import { AuthRequiredError, getAuthState, signIn, signOut } from "./auth";
-import { ApiError, listCases, listProviders } from "./api";
+import { ApiError, listCases, listProviders, postSubmissionTouch } from "./api";
 import { fillPortal } from "./fill";
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
+const SUBMIT_TOUCH_ID_PREFIX = "minted.submitTouchId.";
 
 async function readSessionString(key: string): Promise<string | null> {
   const entry = await chrome.storage.session.get(key);
@@ -28,7 +29,10 @@ async function writeSessionString(key: string, value: string | null): Promise<vo
 async function clearSelections(): Promise<void> {
   const all = await chrome.storage.session.get(null);
   const keys = Object.keys(all).filter(
-    (key) => key === SELECTED_PROVIDER_KEY || key.startsWith(SELECTED_CASE_PREFIX),
+    (key) =>
+      key === SELECTED_PROVIDER_KEY ||
+      key.startsWith(SELECTED_CASE_PREFIX) ||
+      key.startsWith(SUBMIT_TOUCH_ID_PREFIX),
   );
   if (keys.length) await chrome.storage.session.remove(keys);
 }
@@ -65,6 +69,24 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         portalKey: request.portalKey,
         state: request.state,
       });
+    case "MARK_SUBMITTED": {
+      // One idempotency id per (case, fill session), remembered for the
+      // browser session: a retry after a network failure replays the same id,
+      // so the server returns the stored touch instead of appending a second
+      // one. A new fill session gets a fresh id.
+      const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${request.caseId}.${request.fillSessionId ?? "none"}`;
+      let idempotencyId = await readSessionString(idKey);
+      if (!idempotencyId) {
+        idempotencyId = crypto.randomUUID();
+        await writeSessionString(idKey, idempotencyId);
+      }
+      return postSubmissionTouch(request.caseId, {
+        kind: "portal_submission",
+        portal_key: request.portalKey,
+        fill_session_id: request.fillSessionId,
+        idempotency_id: idempotencyId,
+      });
+    }
   }
 }
 

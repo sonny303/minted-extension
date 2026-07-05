@@ -42,8 +42,6 @@
         <div id="fill-section" hidden>
           <label for="case-select" id="case-label">Case</label>
           <select id="case-select"></select>
-          <input id="case-input" type="text" hidden placeholder="Paste the case id" />
-          <p id="case-hint" class="hint" hidden></p>
 
           <p id="portal-status" class="hint"></p>
           <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
@@ -53,6 +51,11 @@
             <div id="fill-skipped" class="error" hidden></div>
             <div id="fill-manual" class="note" hidden></div>
             <div id="fill-event-warn" class="note" hidden></div>
+            <p id="submit-hint" class="hint" hidden>
+              Submit the form on the portal yourself, then log it to the case:
+            </p>
+            <button id="mark-submitted" class="primary" type="button" hidden>Mark submitted</button>
+            <div id="submit-status" class="success" hidden></div>
           </div>
         </div>
       </section>

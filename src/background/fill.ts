@@ -128,6 +128,10 @@ export interface FillRequest {
 
 export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   const startedAt = new Date().toISOString();
+  // The attempt's idempotency id doubles as the fill_sessions row PK; the
+  // popup passes it back as fill_session_id when the human marks the
+  // submission, tying the business log to this machine log.
+  const fillSessionId = crypto.randomUUID();
   const [maps, profile] = await Promise.all([
     getPortalFieldMaps(request.portalKey),
     getProviderProfile(request.providerId, request.state),
@@ -160,7 +164,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   let eventError: string | null = null;
   try {
     await postFillEvent({
-      id: crypto.randomUUID(),
+      id: fillSessionId,
       caseId: request.caseId,
       providerId: request.providerId,
       portalKey: request.portalKey,
@@ -185,5 +189,8 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     manual,
     eventRecorded,
     eventError,
+    // Only reference the session when the server actually stored it — the
+    // touches route validates fill_session_id and 404s an unknown id.
+    fillSessionId: eventRecorded ? fillSessionId : null,
   };
 }
