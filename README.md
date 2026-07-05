@@ -44,7 +44,7 @@ detects the 404 and falls back to pasting a case id from Minted Panel.
 ## Fill flow (M1)
 
 One click on **Fill this page** while the BCBS KS enrollment form
-(`provider.bcbsks.com/...NetworkEnrollmentForm*`) is the active tab:
+(`bluekc.az1.qualtrics.com/jfe/form/SV_3jAoF5MwXJB7yKO*`) is the active tab:
 
 1. Background fetches the portal's field maps and the provider's `/profile`
    values (`?state=KS` selects the KS license) in parallel, then plans
