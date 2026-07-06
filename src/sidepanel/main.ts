@@ -48,8 +48,10 @@ const providerNpi = el<HTMLElement>("provider-npi");
 const providerMeta = el<HTMLElement>("provider-meta");
 const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
+const caseStatusPill = el<HTMLElement>("case-status");
 const portalStatus = el<HTMLElement>("portal-status");
 const fillBtn = el<HTMLButtonElement>("fill-btn");
+const fillNote = el<HTMLElement>("fill-note");
 const fillResults = el<HTMLElement>("fill-results");
 const fillReportTime = el<HTMLElement>("fill-report-time");
 const fillSummaryBox = el<HTMLElement>("fill-summary");
@@ -127,6 +129,33 @@ function caseLabel(c: CaseListItem): string {
   return [c.payerName ?? "Unknown payer", c.state, c.status ?? "No status"].join(" - ");
 }
 
+// Design pill colors for the statuses the design shows; any other label gets
+// the neutral pill. Purely presentational — the label itself is rendered
+// verbatim from the cases response.
+function pillClassFor(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "submitted":
+      return "pill-blue";
+    case "in progress":
+      return "pill-indigo";
+    case "in-network":
+    case "in network":
+      return "pill-green";
+    default:
+      return "";
+  }
+}
+
+// The selected case's status, as a pill on the Case label row (a native
+// <select> can't carry pills inside its options or closed face).
+function renderCaseStatusPill(): void {
+  const id = selectedCaseId();
+  const status = cases.find((c) => c.id === id)?.status ?? null;
+  caseStatusPill.hidden = status == null;
+  caseStatusPill.textContent = status ?? "";
+  caseStatusPill.className = status == null ? "pill" : `pill ${pillClassFor(status)}`.trim();
+}
+
 function renderProviderCard(provider: ProviderListItem | null): void {
   providerCard.hidden = provider == null;
   fillSection.hidden = provider == null;
@@ -172,6 +201,7 @@ function updateFillReady(): void {
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
     : "Open the BCBS KS enrollment form in the current tab to fill it.";
+  portalStatus.classList.toggle("detected", portalOpen);
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
@@ -188,18 +218,46 @@ function updateFillReady(): void {
   );
 }
 
+// A report bucket: a collapsible <details> with the heading, an optional
+// count pill, and the field rows — same data and wording as before, redressed
+// per the design's fill-report card.
+function bucketDetails(heading: string, count: number | null, rows: string[]): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.open = true;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.className = "bucket-heading";
+  title.textContent = heading;
+  summary.append(title);
+  if (count != null) {
+    const pill = document.createElement("span");
+    pill.className = "pill";
+    pill.textContent = String(count);
+    summary.append(pill);
+  }
+  details.append(summary);
+  if (rows.length) {
+    const list = document.createElement("ul");
+    for (const row of rows) {
+      const item = document.createElement("li");
+      item.textContent = row;
+      list.append(item);
+    }
+    details.append(list);
+  }
+  return details;
+}
+
 function fieldList(box: HTMLElement, heading: string, fields: ReportedField[]): void {
   box.hidden = fields.length === 0;
   if (!fields.length) return;
-  const title = document.createElement("div");
-  title.textContent = heading;
-  const list = document.createElement("ul");
-  for (const field of fields) {
-    const item = document.createElement("li");
-    item.textContent = `${field.label} — ${field.reason}`;
-    list.append(item);
-  }
-  box.replaceChildren(title, list);
+  box.replaceChildren(
+    bucketDetails(
+      heading,
+      fields.length,
+      fields.map((field) => `${field.label} — ${field.reason}`),
+    ),
+  );
 }
 
 // "9:42 PM" today, "Jul 5, 9:42 PM" on any other day — a restored report is
@@ -227,7 +285,11 @@ function renderFillSummary(
   fillReportTime.hidden = restored == null;
   if (restored) fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const attempted = summary.filled + summary.skipped.length;
-  fillSummaryBox.textContent = `Filled ${summary.filled} of ${attempted} mapped fields.`;
+  // The heading carries the counts, so no pill; the rows are the filled field
+  // LABELS from the page result — values are never retained (PHI).
+  fillSummaryBox.replaceChildren(
+    bucketDetails(`Filled ${summary.filled} of ${attempted} mapped fields.`, null, summary.filledLabels),
+  );
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
   fieldList(fillManualBox, "Needs manual entry or review:", summary.manual);
   if (!summary.eventRecorded) {
@@ -249,12 +311,15 @@ async function loadCases(providerId: string): Promise<void> {
   clearFillResults();
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
+  renderCaseStatusPill();
   updateFillReady();
 
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
   if (!response.ok) {
     setError(mainError, response.error);
     caseSelect.replaceChildren(new Option("Unavailable", ""));
+    cases = [];
+    renderCaseStatusPill();
     updateFillReady();
     return;
   }
@@ -281,6 +346,7 @@ async function loadCases(providerId: string): Promise<void> {
     caseSelect.add(new Option(caseLabel(c), c.id, false, c.id === rememberedId));
   }
   caseSelect.disabled = cases.length === 0;
+  renderCaseStatusPill();
   await restoreFillReport(providerId, rememberedId);
   updateFillReady();
 }
@@ -585,6 +651,7 @@ caseSelect.addEventListener("change", () => {
       caseId: caseSelect.value || null,
     });
   }
+  renderCaseStatusPill();
   clearFillResults();
   updateFillReady();
 });
@@ -616,6 +683,8 @@ fillBtn.addEventListener("click", () => {
     clearFillResults();
     fillBtn.disabled = true;
     fillBtn.textContent = "Filling…";
+    fillBtn.classList.add("filling");
+    fillNote.hidden = false;
     const response = await sendToBackground({
       type: "FILL",
       tabId: tab.id,
@@ -627,6 +696,8 @@ fillBtn.addEventListener("click", () => {
     });
     fillBtn.textContent = "Fill this page";
     fillBtn.disabled = false;
+    fillBtn.classList.remove("filling");
+    fillNote.hidden = true;
     updateFillReady();
     if (!response.ok) {
       setError(mainError, response.error);
