@@ -1,6 +1,8 @@
 // The one place extension code talks to the Minted Panel API. Every request
 // carries the caller's Supabase JWT; the server's guard resolves org + role
-// from it. Single-org users send no x-org-id header (v0 assumption).
+// from it. Single-org users send no x-org-id header (the server resolves
+// their sole membership); once a multi-org user has picked an org, EVERY
+// call carries x-org-id — the guard 400s a multi-org caller without one.
 import { API_BASE_URL } from "../shared/config";
 import type {
   ApiEnvelope,
@@ -11,8 +13,10 @@ import type {
   ProviderProfileResponse,
   SubmissionTouch,
   SubmissionTouchBody,
+  UserOrgMembership,
 } from "../shared/apiTypes";
 import { forceRefresh, getAccessToken } from "./auth";
+import { readActiveOrgId } from "./orgState";
 
 export class ApiError extends Error {
   constructor(
@@ -25,12 +29,15 @@ export class ApiError extends Error {
 }
 
 async function requestOnce(path: string, token: string, init?: RequestInit): Promise<Response> {
+  // Stored only when a multi-org user has picked; absent = no header sent.
+  const orgId = await readActiveOrgId();
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
       authorization: `Bearer ${token}`,
       accept: "application/json",
+      ...(orgId != null ? { "x-org-id": orgId } : {}),
     },
   });
 }
@@ -53,12 +60,22 @@ export async function apiFetch<T>(
   try {
     envelope = (await response.json()) as ApiEnvelope<T>;
   } catch {
-    throw new ApiError(response.status, `Unexpected non-JSON response (HTTP ${response.status})`);
+    throw new ApiError(
+      response.status,
+      `Minted Panel sent back something unexpected (HTTP ${response.status}). Try again in a moment.`,
+    );
   }
   if (!response.ok || envelope.error != null || envelope.data == null) {
     throw new ApiError(response.status, envelope.error ?? `HTTP ${response.status}`);
   }
   return { data: envelope.data, meta: envelope.meta };
+}
+
+// User-scoped org discovery — the one route that needs no org context (it is
+// how a multi-org caller learns what to send as x-org-id in the first place).
+export async function listMyOrgs(): Promise<UserOrgMembership[]> {
+  const { data } = await apiFetch<UserOrgMembership[]>("/api/me/orgs");
+  return data;
 }
 
 export async function listProviders(): Promise<ProviderListItem[]> {
@@ -83,14 +100,22 @@ export async function getPortalFieldMaps(portalKey: string): Promise<PortalField
 }
 
 // PHI-dense payload (unmasked by design for form fill). Never log it.
+// `facilityId` pins the facility.*/assignment.* token source; without it the
+// server auto-resolves a sole facility or flags meta.needs_facility when the
+// provider has several. Meta is returned so callers can read that flag.
 export async function getProviderProfile(
   providerId: string,
-  state: string,
-): Promise<ProviderProfileResponse> {
-  const { data } = await apiFetch<ProviderProfileResponse>(
-    `/api/providers/${encodeURIComponent(providerId)}/profile?state=${encodeURIComponent(state)}`,
+  options: { state?: string; facilityId?: string | null } = {},
+): Promise<{ profile: ProviderProfileResponse; meta: ApiMeta | null }> {
+  const params = new URLSearchParams();
+  if (options.state) params.set("state", options.state);
+  if (options.facilityId) params.set("facilityId", options.facilityId);
+  const qs = params.toString();
+  const query = qs ? `?${qs}` : "";
+  const { data, meta } = await apiFetch<ProviderProfileResponse>(
+    `/api/providers/${encodeURIComponent(providerId)}/profile${query}`,
   );
-  return data;
+  return { profile: data, meta };
 }
 
 export interface FillEventBody {

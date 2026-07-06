@@ -35,6 +35,9 @@ export interface FillSummary {
   // with no value in Minted Panel, and manual_partial review flags.
   manual: ReportedField[];
   eventRecorded: boolean;
+  // The COMPLETE user-facing warning line for a failed fill-event log,
+  // composed by the background (it knows the failure kind — e.g. a 403 role
+  // error gets its own wording). The panel renders it verbatim.
   eventError: string | null;
   // The fill attempt's idempotency id (= the fill_sessions row PK) when the
   // event was recorded; null when logging failed — "Mark submitted" must not
