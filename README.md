@@ -49,6 +49,20 @@ re-checks the active tab's URL at click time. Tab URLs are only readable for
 origins in `host_permissions` (the portals) — every other page reads as "no
 portal detected", which is the correct state.
 
+The workbench remembers where you were: the selected provider and case and
+the last fill report (per provider + portal) persist in
+`chrome.storage.session` — field labels, counts, and skip reasons only, never
+field values, resolved tokens, or auth material beyond what session auth
+already stores. Reopening the panel restores that state and re-validates it
+silently against the org's current provider and open-case lists; stale
+entries are dropped, not errored. A restored report is labeled with when it
+ran ("Fill report from 9:42 PM.") so it can't pass for a fresh one, and one
+already marked submitted shows "Logged to the case." instead of the button.
+All of it clears on sign-out and whenever a different identity signs in (the
+org is resolved server-side from the identity; a future org picker's
+selection joins that owner check), and dies with the browser session either
+way.
+
 ## Fill flow (M1)
 
 One click on **Fill this page** while the BCBS KS enrollment form
