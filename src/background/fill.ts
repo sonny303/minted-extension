@@ -12,7 +12,7 @@
 //   status "retired"       ignored; "proposed"/"approved" both fill in v0
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
 import type { FillInstruction, FillPageResult, FillSummary, ReportedField } from "../shared/fill";
-import { getPortalFieldMaps, getProviderProfile, postFillEvent } from "./api";
+import { ApiError, getPortalFieldMaps, getProviderProfile, postFillEvent } from "./api";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -91,13 +91,18 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     } else if (map.token != null) {
       raw = tokenValues.get(map.token) ?? null;
     } else {
-      manual.push({ label, reason: "field map has no token — enter manually" });
+      manual.push({ label, reason: "not linked to a Minted Panel field — enter manually" });
       continue;
     }
     if (raw == null || raw === "") {
+      // user.name resolves from the caller's auth metadata (the server notes
+      // the empty in meta.notes, not in unresolved) — tell the user where to
+      // fix it rather than the generic no-value line.
       const reason =
-        (map.token != null ? unresolvedReasons.get(map.token) : null) ??
-        "no value in Minted Panel";
+        map.token === "user.name"
+          ? "Your name isn't set. Add it in Minted Panel under Settings so forms can list you as the preparer."
+          : ((map.token != null ? unresolvedReasons.get(map.token) : null) ??
+            "no value in Minted Panel");
       manual.push({ label, reason });
       continue;
     }
@@ -152,7 +157,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
       instructions,
     })) as { ok: boolean; data?: FillPageResult; error?: string } | undefined;
     if (!response?.ok || !response.data) {
-      throw new Error(response?.error ?? "The page reported no result");
+      throw new Error(response?.error ?? "the page didn't confirm the fill");
     }
     pageResult = response.data;
   } catch (error) {
@@ -186,7 +191,16 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     });
   } catch (error) {
     eventRecorded = false;
-    eventError = error instanceof Error ? error.message : "Failed to record the fill event";
+    // eventError is the COMPLETE warning line the panel shows verbatim. A 403
+    // means the role can't write (billing is read-only) — retrying won't
+    // help, so say what will.
+    if (error instanceof ApiError && error.status === 403) {
+      eventError =
+        "Fill applied, but it couldn't be logged: your account is read-only in this organization. Ask an admin to upgrade your role.";
+    } else {
+      const detail = error instanceof Error ? error.message : "unknown error";
+      eventError = `Fill applied, but it couldn't be logged to Minted Panel: ${detail}. Retry from the case record.`;
+    }
   }
 
   return {

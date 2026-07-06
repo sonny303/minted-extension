@@ -60,7 +60,10 @@ export async function apiFetch<T>(
   try {
     envelope = (await response.json()) as ApiEnvelope<T>;
   } catch {
-    throw new ApiError(response.status, `Unexpected non-JSON response (HTTP ${response.status})`);
+    throw new ApiError(
+      response.status,
+      `Minted Panel sent back something unexpected (HTTP ${response.status}). Try again in a moment.`,
+    );
   }
   if (!response.ok || envelope.error != null || envelope.data == null) {
     throw new ApiError(response.status, envelope.error ?? `HTTP ${response.status}`);

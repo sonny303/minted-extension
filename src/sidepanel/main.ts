@@ -232,7 +232,11 @@ function renderFillSummary(
   fieldList(fillManualBox, "Needs manual entry or review:", summary.manual);
   if (!summary.eventRecorded) {
     fillEventWarn.hidden = false;
-    fillEventWarn.textContent = `The fill was applied but could not be logged to Minted Panel: ${summary.eventError ?? "unknown error"}. Retry from the case record.`;
+    // The background composes the full warning line (it knows the failure
+    // kind); render it as-is.
+    fillEventWarn.textContent =
+      summary.eventError ??
+      "Fill applied, but it couldn't be logged to Minted Panel. Retry from the case record.";
   }
   const submitted = restored?.submitted === true;
   submitHint.hidden = submitted;
@@ -414,7 +418,10 @@ async function loadOrgs(): Promise<void> {
 
   if (orgs.length === 0) {
     orgSelect.replaceChildren(new Option("No organizations", ""));
-    setError(mainError, "Your account has no organization membership in Minted Panel.");
+    setError(
+      mainError,
+      "Your account isn't a member of any organization in Minted Panel yet. Ask an admin to invite you.",
+    );
     return;
   }
 
