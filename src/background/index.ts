@@ -4,7 +4,8 @@
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse } from "../shared/messages";
-import { AuthRequiredError, getAuthState, signIn, signOut } from "./auth";
+import type { FillReportRecord } from "../shared/fill";
+import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import { ApiError, listCases, listProviders, postSubmissionTouch } from "./api";
 import { fillPortal } from "./fill";
 
@@ -19,6 +20,13 @@ chrome.sidePanel
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
 const SUBMIT_TOUCH_ID_PREFIX = "minted.submitTouchId.";
+// Persisted fill reports, keyed `<prefix><providerId>.<portalKey>` (both ids
+// are dot-free). Labels, counts, and reasons only — never field values.
+const FILL_REPORT_PREFIX = "minted.fillReport.";
+// The user id the persisted workbench state belongs to. The org is resolved
+// server-side from this identity (single-org v0), so an identity change is
+// also the org change; a future org picker's selection joins this check.
+const WORKBENCH_OWNER_KEY = "minted.workbenchOwner";
 
 async function readSessionString(key: string): Promise<string | null> {
   const entry = await chrome.storage.session.get(key);
@@ -34,25 +42,71 @@ async function writeSessionString(key: string, value: string | null): Promise<vo
   }
 }
 
-async function clearSelections(): Promise<void> {
+// Wipe every piece of persisted workbench state: selections, fill reports,
+// submit idempotency ids, and the owner marker. Runs on sign-out and when a
+// different identity signs in. Deliberately not the GoTrue session key —
+// auth storage is owned by auth.ts.
+async function clearWorkbenchState(): Promise<void> {
   const all = await chrome.storage.session.get(null);
   const keys = Object.keys(all).filter(
     (key) =>
       key === SELECTED_PROVIDER_KEY ||
+      key === WORKBENCH_OWNER_KEY ||
       key.startsWith(SELECTED_CASE_PREFIX) ||
-      key.startsWith(SUBMIT_TOUCH_ID_PREFIX),
+      key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
+      key.startsWith(FILL_REPORT_PREFIX),
   );
   if (keys.length) await chrome.storage.session.remove(keys);
+}
+
+function fillReportKey(providerId: string, portalKey: string): string {
+  return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
+}
+
+function isFillReportRecord(value: unknown): value is FillReportRecord {
+  const record = value as FillReportRecord | null;
+  return (
+    record != null &&
+    typeof record === "object" &&
+    typeof record.providerId === "string" &&
+    typeof record.portalKey === "string" &&
+    typeof record.caseId === "string" &&
+    typeof record.completedAt === "string" &&
+    typeof record.submitted === "boolean" &&
+    record.summary != null &&
+    typeof record.summary === "object"
+  );
+}
+
+// The provider's most recent stored report across portals (v0 has one
+// portal, so "most recent" is exact). Best-effort by design.
+async function readFillReport(providerId: string): Promise<FillReportRecord | null> {
+  const all = await chrome.storage.session.get(null);
+  const records = Object.entries(all)
+    .filter(([key]) => key.startsWith(`${FILL_REPORT_PREFIX}${providerId}.`))
+    .map(([, value]) => value)
+    .filter(isFillReportRecord)
+    .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+  return records[0] ?? null;
 }
 
 async function handleRequest(request: BgRequest): Promise<unknown> {
   switch (request.type) {
     case "GET_AUTH_STATE":
       return getAuthState();
-    case "SIGN_IN":
-      return signIn(request.email, request.password);
+    case "SIGN_IN": {
+      const state = await signIn(request.email, request.password);
+      // Workbench state belongs to one identity (and the org the server
+      // resolves for it). Same user back after token expiry keeps their
+      // place; anyone else starts clean.
+      const userId = await currentUserId();
+      const previousOwner = await readSessionString(WORKBENCH_OWNER_KEY);
+      if (previousOwner != null && previousOwner !== userId) await clearWorkbenchState();
+      await writeSessionString(WORKBENCH_OWNER_KEY, userId);
+      return state;
+    }
     case "SIGN_OUT":
-      await clearSelections();
+      await clearWorkbenchState();
       await signOut();
       return null;
     case "LIST_PROVIDERS":
@@ -69,14 +123,35 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_CASE":
       await writeSessionString(SELECTED_CASE_PREFIX + request.providerId, request.caseId);
       return null;
-    case "FILL":
-      return fillPortal({
+    case "GET_FILL_REPORT":
+      return readFillReport(request.providerId);
+    case "FILL": {
+      const summary = await fillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
         caseId: request.caseId,
         portalKey: request.portalKey,
         state: request.state,
       });
+      // Persist the review state so reopening the panel restores it. A
+      // storage failure must not un-report a successful fill.
+      try {
+        const record: FillReportRecord = {
+          providerId: request.providerId,
+          portalKey: request.portalKey,
+          caseId: request.caseId,
+          summary,
+          completedAt: new Date().toISOString(),
+          submitted: false,
+        };
+        await chrome.storage.session.set({
+          [fillReportKey(request.providerId, request.portalKey)]: record,
+        });
+      } catch {
+        // best-effort — the fill itself succeeded
+      }
+      return summary;
+    }
     case "MARK_SUBMITTED": {
       // One idempotency id per (case, fill session), remembered for the
       // browser session: a retry after a network failure replays the same id,
@@ -88,12 +163,25 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         idempotencyId = crypto.randomUUID();
         await writeSessionString(idKey, idempotencyId);
       }
-      return postSubmissionTouch(request.caseId, {
+      const touch = await postSubmissionTouch(request.caseId, {
         kind: "portal_submission",
         portal_key: request.portalKey,
         fill_session_id: request.fillSessionId,
         idempotency_id: idempotencyId,
       });
+      // Remember the submission on the stored report so a restored panel
+      // shows "Logged to the case." instead of offering the button again.
+      try {
+        const key = fillReportKey(request.providerId, request.portalKey);
+        const entry = await chrome.storage.session.get(key);
+        const record = entry[key];
+        if (isFillReportRecord(record) && record.caseId === request.caseId) {
+          await chrome.storage.session.set({ [key]: { ...record, submitted: true } });
+        }
+      } catch {
+        // best-effort — the touch itself was logged
+      }
+      return touch;
     }
   }
 }

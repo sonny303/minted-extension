@@ -42,4 +42,22 @@ export interface FillSummary {
   fillSessionId: string | null;
 }
 
+// One persisted fill outcome, keyed per (provider, portal) in
+// chrome.storage.session so reopening the panel restores the review state.
+// Carries only what FillSummary already carries — counts, field labels, skip
+// reasons, the fill session id. Field VALUES (PHI) exist only in transient
+// FillInstructions and are never stored.
+export interface FillReportRecord {
+  providerId: string;
+  portalKey: string;
+  caseId: string;
+  summary: FillSummary;
+  // When the fill ran (ISO). The panel labels a restored report with it so a
+  // stale report is never mistaken for a fresh one.
+  completedAt: string;
+  // "Mark submitted" already logged this report's touch — a restored panel
+  // shows "Logged to the case." instead of offering the button again.
+  submitted: boolean;
+}
+
 export type ContentRequest = { type: "PING" } | { type: "APPLY_FILL"; instructions: FillInstruction[] };

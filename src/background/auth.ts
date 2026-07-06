@@ -61,6 +61,14 @@ export async function signIn(email: string, password: string): Promise<AuthState
   return { signedIn: true, email: data.user?.email ?? email };
 }
 
+// The signed-in user's id — the router scopes persisted workbench state to
+// it (a different identity signing in must not inherit the previous one's
+// selections). Not a token; safe to compare and store.
+export async function currentUserId(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user.id ?? null;
+}
+
 // scope: "local" clears only this extension's session. The default ("global")
 // would revoke every refresh token the user holds — including their Minted
 // Panel web app session.

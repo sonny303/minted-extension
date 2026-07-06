@@ -3,7 +3,7 @@
 // call; the panel is UI only. Access tokens never appear in any message
 // payload.
 import type { CaseListItem, ProviderListItem, SubmissionTouch } from "./apiTypes";
-import type { FillSummary } from "./fill";
+import type { FillReportRecord, FillSummary } from "./fill";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -23,11 +23,15 @@ export type BgRequest =
       portalKey: string;
       state: string;
     }
+  // The provider's most recent persisted fill report, or null. The panel
+  // uses it to restore the review state when it reopens.
+  | { type: "GET_FILL_REPORT"; providerId: string }
   // Pressed by the human AFTER they submit the portal form themselves — the
   // extension never touches the portal's submit button. fillSessionId is the
   // fill attempt's idempotency id when the fill event was recorded, else null.
   | {
       type: "MARK_SUBMITTED";
+      providerId: string;
       caseId: string;
       portalKey: string;
       fillSessionId: string | null;
@@ -54,6 +58,7 @@ export interface BgResponseMap {
   SET_SELECTED_PROVIDER: null;
   GET_SELECTED_CASE: string | null;
   SET_SELECTED_CASE: null;
+  GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
   MARK_SUBMITTED: SubmissionTouch;
 }

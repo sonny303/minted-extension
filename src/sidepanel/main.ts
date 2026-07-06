@@ -5,7 +5,7 @@
 // active tab and the fill re-checks the tab's URL at click time.
 import "./sidepanel.css";
 import type { CaseListItem, ProviderListItem } from "../shared/apiTypes";
-import type { FillSummary, ReportedField } from "../shared/fill";
+import type { FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 
@@ -41,6 +41,7 @@ const caseSelect = el<HTMLSelectElement>("case-select");
 const portalStatus = el<HTMLElement>("portal-status");
 const fillBtn = el<HTMLButtonElement>("fill-btn");
 const fillResults = el<HTMLElement>("fill-results");
+const fillReportTime = el<HTMLElement>("fill-report-time");
 const fillSummaryBox = el<HTMLElement>("fill-summary");
 const fillSkippedBox = el<HTMLElement>("fill-skipped");
 const fillManualBox = el<HTMLElement>("fill-manual");
@@ -51,8 +52,10 @@ const submitStatus = el<HTMLElement>("submit-status");
 
 // The last successful fill, held so "Mark submitted" can log the touch
 // against the right case and fill session. Cleared whenever the selection
-// changes or a new fill starts.
+// changes or a new fill starts; restored from the persisted report when the
+// panel reopens.
 interface LastFill {
+  providerId: string;
   caseId: string;
   portalKey: string;
   fillSessionId: string | null;
@@ -123,6 +126,7 @@ function renderProviderOptions(selectedId: string | null): void {
 
 function clearFillResults(): void {
   fillResults.hidden = true;
+  fillReportTime.hidden = true;
   fillSkippedBox.hidden = true;
   fillManualBox.hidden = true;
   fillEventWarn.hidden = true;
@@ -157,11 +161,30 @@ function fieldList(box: HTMLElement, heading: string, fields: ReportedField[]): 
   box.replaceChildren(title, list);
 }
 
+// "9:42 PM" today, "Jul 5, 9:42 PM" on any other day — a restored report is
+// always labeled with when it ran so it can't pass for a fresh one.
+function fmtReportTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "an earlier session";
+  const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return at.toDateString() === new Date().toDateString()
+    ? time
+    : `${at.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
 // The review state: filled count, the skipped/manual lists, and the
 // "Mark submitted" button the human presses only after submitting the portal
 // form themselves (the extension never automates the portal's submit).
-function renderFillSummary(summary: FillSummary): void {
+// `restored` marks a report re-rendered from the persisted record: it gets a
+// when-it-ran label, and an already-submitted one shows the logged state
+// instead of the button.
+function renderFillSummary(
+  summary: FillSummary,
+  restored?: { completedAt: string; submitted: boolean },
+): void {
   fillResults.hidden = false;
+  fillReportTime.hidden = restored == null;
+  if (restored) fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const attempted = summary.filled + summary.skipped.length;
   fillSummaryBox.textContent = `Filled ${summary.filled} of ${attempted} mapped fields.`;
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
@@ -170,9 +193,11 @@ function renderFillSummary(summary: FillSummary): void {
     fillEventWarn.hidden = false;
     fillEventWarn.textContent = `The fill was applied but could not be logged to Minted Panel: ${summary.eventError ?? "unknown error"}. Retry from the case record.`;
   }
-  submitHint.hidden = false;
-  markSubmittedBtn.hidden = false;
-  submitStatus.hidden = true;
+  const submitted = restored?.submitted === true;
+  submitHint.hidden = submitted;
+  markSubmittedBtn.hidden = submitted;
+  submitStatus.hidden = !submitted;
+  if (submitted) submitStatus.textContent = "Logged to the case.";
 }
 
 async function loadCases(providerId: string): Promise<void> {
@@ -193,6 +218,11 @@ async function loadCases(providerId: string): Promise<void> {
   const remembered = await sendToBackground({ type: "GET_SELECTED_CASE", providerId });
   const rememberedId =
     remembered.ok && cases.some((c) => c.id === remembered.data) ? remembered.data : null;
+  // A remembered case that no longer exists (closed, or another org's) is
+  // dropped silently — from storage too, not just the dropdown.
+  if (remembered.ok && remembered.data != null && rememberedId == null) {
+    void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId: null });
+  }
   caseSelect.replaceChildren();
   const placeholder = new Option(
     cases.length ? "Select a case…" : "No open cases for this provider",
@@ -206,7 +236,30 @@ async function loadCases(providerId: string): Promise<void> {
     caseSelect.add(new Option(caseLabel(c), c.id, false, c.id === rememberedId));
   }
   caseSelect.disabled = cases.length === 0;
+  await restoreFillReport(providerId, rememberedId);
   updateFillReady();
+}
+
+// Re-render the provider's persisted fill report when the panel reopens —
+// only if it belongs to the case that is still open and still selected.
+// Anything stale is skipped silently; the record itself expires with the
+// browser session or the next fill.
+async function restoreFillReport(providerId: string, selectedCase: string | null): Promise<void> {
+  if (selectedCase == null) return;
+  const response = await sendToBackground({ type: "GET_FILL_REPORT", providerId });
+  if (!response.ok || response.data == null) return;
+  const record: FillReportRecord = response.data;
+  if (record.caseId !== selectedCase) return;
+  lastFill = {
+    providerId,
+    caseId: record.caseId,
+    portalKey: record.portalKey,
+    fillSessionId: record.summary.fillSessionId,
+  };
+  renderFillSummary(record.summary, {
+    completedAt: record.completedAt,
+    submitted: record.submitted,
+  });
 }
 
 async function loadProviders(): Promise<void> {
@@ -227,6 +280,11 @@ async function loadProviders(): Promise<void> {
   const selected = await sendToBackground({ type: "GET_SELECTED_PROVIDER" });
   const selectedId =
     selected.ok && providers.some((p) => p.id === selected.data) ? selected.data : null;
+  // A remembered provider that isn't in the current org's list anymore is
+  // dropped silently — from storage too, not just the dropdown.
+  if (selected.ok && selected.data != null && selectedId == null) {
+    void sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: null });
+  }
   renderProviderOptions(selectedId);
   const provider = providers.find((p) => p.id === selectedId) ?? null;
   renderProviderCard(provider);
@@ -367,6 +425,7 @@ fillBtn.addEventListener("click", () => {
       return;
     }
     lastFill = {
+      providerId,
       caseId,
       portalKey: clickPortal.key,
       fillSessionId: response.data.fillSessionId,
@@ -387,6 +446,7 @@ markSubmittedBtn.addEventListener("click", () => {
     markSubmittedBtn.textContent = "Logging…";
     const response = await sendToBackground({
       type: "MARK_SUBMITTED",
+      providerId: context.providerId,
       caseId: context.caseId,
       portalKey: context.portalKey,
       fillSessionId: context.fillSessionId,
