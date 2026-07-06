@@ -3,10 +3,18 @@
 // running on our own chrome-extension:// origin are served — content scripts
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
-import type { BgRequest, BgResponse } from "../shared/messages";
+import type { BgRequest, BgResponse, ProviderFacilitiesInfo } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
-import { ApiError, listCases, listProviders, postSubmissionTouch } from "./api";
+import {
+  ApiError,
+  getProviderProfile,
+  listCases,
+  listMyOrgs,
+  listProviders,
+  postSubmissionTouch,
+} from "./api";
+import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { fillPortal } from "./fill";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
@@ -19,6 +27,7 @@ chrome.sidePanel
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
+const SELECTED_FACILITY_PREFIX = "minted.selectedFacilityId.";
 const SUBMIT_TOUCH_ID_PREFIX = "minted.submitTouchId.";
 // Persisted fill reports, keyed `<prefix><providerId>.<portalKey>` (both ids
 // are dot-free). Labels, counts, and reasons only — never field values.
@@ -42,21 +51,29 @@ async function writeSessionString(key: string, value: string | null): Promise<vo
   }
 }
 
-// Wipe every piece of persisted workbench state: selections, fill reports,
-// submit idempotency ids, and the owner marker. Runs on sign-out and when a
-// different identity signs in. Deliberately not the GoTrue session key —
-// auth storage is owned by auth.ts.
-async function clearWorkbenchState(): Promise<void> {
+// Wipe the ORG-scoped workbench state: selections, facility picks, fill
+// reports, submit idempotency ids. Runs when the active org changes — the new
+// org must never see the old org's ids — and as part of the full clear below.
+async function clearOrgScopedState(): Promise<void> {
   const all = await chrome.storage.session.get(null);
   const keys = Object.keys(all).filter(
     (key) =>
       key === SELECTED_PROVIDER_KEY ||
-      key === WORKBENCH_OWNER_KEY ||
       key.startsWith(SELECTED_CASE_PREFIX) ||
+      key.startsWith(SELECTED_FACILITY_PREFIX) ||
       key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
       key.startsWith(FILL_REPORT_PREFIX),
   );
   if (keys.length) await chrome.storage.session.remove(keys);
+}
+
+// The full wipe: org-scoped state PLUS the active org and the owner marker.
+// Runs on sign-out and when a different identity signs in. Deliberately not
+// the GoTrue session key — auth storage is owned by auth.ts.
+async function clearWorkbenchState(): Promise<void> {
+  await clearOrgScopedState();
+  await writeActiveOrgId(null);
+  await chrome.storage.session.remove(WORKBENCH_OWNER_KEY);
 }
 
 function fillReportKey(providerId: string, portalKey: string): string {
@@ -109,10 +126,35 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       await clearWorkbenchState();
       await signOut();
       return null;
+    case "LIST_MY_ORGS":
+      return listMyOrgs();
+    case "GET_ACTIVE_ORG":
+      return readActiveOrgId();
+    case "SET_ACTIVE_ORG": {
+      // Switching to a DIFFERENT org wipes all org-scoped state first — the
+      // new org must never restore the old org's provider/case/facility ids
+      // or fill reports. Re-asserting the same org (or staying in single-org
+      // mode, null -> null) clears nothing.
+      const previous = await readActiveOrgId();
+      if (previous !== request.orgId) await clearOrgScopedState();
+      await writeActiveOrgId(request.orgId);
+      return null;
+    }
     case "LIST_PROVIDERS":
       return listProviders();
     case "LIST_CASES":
       return listCases(request.providerId);
+    case "GET_PROVIDER_FACILITIES": {
+      // Fetch the profile but hand the panel ONLY the facility fields — the
+      // token payload (PHI) never crosses into UI state it doesn't need.
+      const { profile, meta } = await getProviderProfile(request.providerId);
+      const info: ProviderFacilitiesInfo = {
+        facilities: profile.facilities,
+        selectedFacilityId: profile.selected_facility_id,
+        needsFacility: meta?.needs_facility === true,
+      };
+      return info;
+    }
     case "GET_SELECTED_PROVIDER":
       return readSessionString(SELECTED_PROVIDER_KEY);
     case "SET_SELECTED_PROVIDER":
@@ -123,6 +165,11 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_CASE":
       await writeSessionString(SELECTED_CASE_PREFIX + request.providerId, request.caseId);
       return null;
+    case "GET_SELECTED_FACILITY":
+      return readSessionString(SELECTED_FACILITY_PREFIX + request.providerId);
+    case "SET_SELECTED_FACILITY":
+      await writeSessionString(SELECTED_FACILITY_PREFIX + request.providerId, request.facilityId);
+      return null;
     case "GET_FILL_REPORT":
       return readFillReport(request.providerId);
     case "FILL": {
@@ -132,6 +179,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         caseId: request.caseId,
         portalKey: request.portalKey,
         state: request.state,
+        facilityId: request.facilityId,
       });
       // Persist the review state so reopening the panel restores it. A
       // storage failure must not un-report a successful fill.

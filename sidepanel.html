@@ -27,11 +27,15 @@
 
       <section id="view-main" hidden>
         <p id="account-email" class="hint"></p>
-        <div class="row">
-          <label for="provider-select">Provider</label>
-          <button id="refresh" class="link" type="button">Refresh</button>
+        <label for="org-select">Organization</label>
+        <select id="org-select"></select>
+        <div id="provider-section" hidden>
+          <div class="row">
+            <label for="provider-select">Provider</label>
+            <button id="refresh" class="link" type="button">Refresh</button>
+          </div>
+          <select id="provider-select"></select>
         </div>
-        <select id="provider-select"></select>
         <div id="main-error" class="error" hidden></div>
         <div id="provider-card" class="card" hidden>
           <div id="provider-name" class="provider-name"></div>
@@ -40,6 +44,10 @@
         </div>
 
         <div id="fill-section" hidden>
+          <label for="facility-select">Location</label>
+          <select id="facility-select"></select>
+          <p id="facility-hint" class="hint" hidden>Pick a location first.</p>
+
           <label for="case-select" id="case-label">Case</label>
           <select id="case-select"></select>
 

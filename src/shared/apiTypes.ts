@@ -6,6 +6,13 @@ export interface ApiMeta {
   total?: number;
   page?: number;
   pageSize?: number;
+  // Non-fatal resolution notes (e.g. an empty {{user.*}} token). Advisory.
+  notes?: string[];
+  // GET /api/providers/:id/profile only: the provider has several facilities
+  // and no ?facilityId was sent, so facility.*/assignment.* tokens are empty —
+  // the client must ask the user to pick; the server never guesses.
+  // snake_case is the wire contract (mintedpanel src/server/envelope.ts).
+  needs_facility?: boolean;
 }
 
 export interface ApiEnvelope<T> {
@@ -57,10 +64,33 @@ export interface UnresolvedToken {
   reason: string;
 }
 
+// The provider's resolvable facility set, carried on the profile response so
+// the workbench can render a location picker (mintedpanel
+// src/services/providerProfile.ts).
+export interface ProviderProfileFacility {
+  id: string;
+  name: string;
+}
+
 export interface ProviderProfileResponse {
   provider: { id: string } & Record<string, unknown>;
   tokens: ProfileToken[];
   unresolved: UnresolvedToken[];
+  // snake_case keys are the wire contract for these two, pinned by the
+  // mintedpanel route tests — unlike the camelCased row payloads.
+  facilities: ProviderProfileFacility[];
+  // The facility the facility.*/assignment.* tokens were resolved from:
+  // the ?facilityId when sent, else the provider's sole facility, else null.
+  selected_facility_id: string | null;
+}
+
+// GET /api/me/orgs — the caller's own memberships (user-scoped; works BEFORE
+// an x-org-id can be sent, which is the point). Mirrors mintedpanel
+// src/services/orgMemberships.ts.
+export interface UserOrgMembership {
+  orgId: string;
+  orgName: string;
+  role: string;
 }
 
 // GET /api/cases?providerId=... — the case picker feed. Mirrors the merged

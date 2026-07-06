@@ -1,10 +1,16 @@
-// Side panel UI: sign in, pick a provider and case, fill the open portal
-// page. All auth and API work happens in the background worker; this file
-// only renders state and sends typed messages. Unlike the old popup, the
-// panel stays open across tab switches, so portal detection follows the
-// active tab and the fill re-checks the tab's URL at click time.
+// Side panel UI: sign in, resolve an organization, pick a provider, location,
+// and case, fill the open portal page. All auth and API work happens in the
+// background worker; this file only renders state and sends typed messages.
+// Unlike the old popup, the panel stays open across tab switches, so portal
+// detection follows the active tab and the fill re-checks the tab's URL at
+// click time.
 import "./sidepanel.css";
-import type { CaseListItem, ProviderListItem } from "../shared/apiTypes";
+import type {
+  CaseListItem,
+  ProviderListItem,
+  ProviderProfileFacility,
+  UserOrgMembership,
+} from "../shared/apiTypes";
 import type { FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
@@ -29,8 +35,12 @@ const passwordInput = el<HTMLInputElement>("password");
 const signinBtn = el<HTMLButtonElement>("signin-btn");
 const signinError = el<HTMLElement>("signin-error");
 const accountEmail = el<HTMLElement>("account-email");
+const orgSelect = el<HTMLSelectElement>("org-select");
+const providerSection = el<HTMLElement>("provider-section");
 const refreshBtn = el<HTMLButtonElement>("refresh");
 const providerSelect = el<HTMLSelectElement>("provider-select");
+const facilitySelect = el<HTMLSelectElement>("facility-select");
+const facilityHint = el<HTMLElement>("facility-hint");
 const mainError = el<HTMLElement>("main-error");
 const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
@@ -61,8 +71,17 @@ interface LastFill {
   fillSessionId: string | null;
 }
 
+let orgs: UserOrgMembership[] = [];
+// The multi-org pick (the worker sends it as x-org-id). Stays null in
+// single-org mode — the server resolves the sole membership, no header.
+let activeOrgId: string | null = null;
 let providers: ProviderListItem[] = [];
 let cases: CaseListItem[] = [];
+let facilities: ProviderProfileFacility[] = [];
+let facilitiesLoaded = false;
+// meta.needs_facility from the profile: several locations, server won't
+// guess — the fill gate stays closed until the user picks one.
+let needsFacility = false;
 let portal: PortalConfig | null = null;
 let portalTabId: number | null = null;
 let lastFill: LastFill | null = null;
@@ -86,6 +105,16 @@ function selectedProviderId(): string | null {
 function selectedCaseId(): string | null {
   const value = caseSelect.value;
   return UUID_RE.test(value) ? value : null;
+}
+
+function selectedFacilityId(): string | null {
+  const value = facilitySelect.value;
+  return UUID_RE.test(value) ? value : null;
+}
+
+// Single org resolves by itself (read-only, no header); several need a pick.
+function orgResolved(): boolean {
+  return orgs.length === 1 || (orgs.length > 1 && activeOrgId != null);
 }
 
 function providerLabel(p: ProviderListItem): string {
@@ -143,8 +172,20 @@ function updateFillReady(): void {
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
     : "Open the BCBS KS enrollment form in the current tab to fill it.";
-  // Case selection is REQUIRED (locked decision): no case, no fill.
-  fillBtn.disabled = !(portalOpen && selectedProviderId() && selectedCaseId());
+  // The server flagged several locations and none is picked yet.
+  const facilityBlocked = needsFacility && selectedFacilityId() == null;
+  facilityHint.hidden = !facilityBlocked;
+  // Hard gates, same pattern as the case rule: org resolved, provider
+  // selected, facility resolved (loaded and not awaiting a pick), case
+  // selected — and the portal form in the active tab.
+  fillBtn.disabled = !(
+    portalOpen &&
+    orgResolved() &&
+    selectedProviderId() &&
+    facilitiesLoaded &&
+    !facilityBlocked &&
+    selectedCaseId()
+  );
 }
 
 function fieldList(box: HTMLElement, heading: string, fields: ReportedField[]): void {
@@ -262,6 +303,60 @@ async function restoreFillReport(providerId: string, selectedCase: string | null
   });
 }
 
+// The provider's facility set, from the profile response. Exactly one:
+// auto-selected read-only (the server resolves it the same way). Several:
+// the user picks, remembered per provider and re-validated silently.
+async function loadFacilities(providerId: string): Promise<void> {
+  facilities = [];
+  facilitiesLoaded = false;
+  needsFacility = false;
+  facilitySelect.disabled = true;
+  facilitySelect.replaceChildren(new Option("Loading locations…", ""));
+  updateFillReady();
+
+  const response = await sendToBackground({ type: "GET_PROVIDER_FACILITIES", providerId });
+  if (!response.ok) {
+    facilitySelect.replaceChildren(new Option("Unavailable", ""));
+    setError(mainError, response.error);
+    updateFillReady(); // facilitiesLoaded stays false — gate stays closed
+    return;
+  }
+  facilities = response.data.facilities;
+  needsFacility = response.data.needsFacility;
+  facilitiesLoaded = true;
+
+  if (facilities.length === 0) {
+    // Nothing to resolve: facility tokens come back unresolved with a
+    // reason, which is correct — not a fill blocker.
+    facilitySelect.replaceChildren(new Option("No locations on file", ""));
+    updateFillReady();
+    return;
+  }
+
+  const sole = facilities.length === 1 ? facilities[0] : undefined;
+  if (sole) {
+    facilitySelect.replaceChildren(new Option(sole.name || "Location", sole.id, true, true));
+    updateFillReady();
+    return;
+  }
+
+  const remembered = await sendToBackground({ type: "GET_SELECTED_FACILITY", providerId });
+  const rememberedId =
+    remembered.ok && facilities.some((f) => f.id === remembered.data) ? remembered.data : null;
+  if (remembered.ok && remembered.data != null && rememberedId == null) {
+    void sendToBackground({ type: "SET_SELECTED_FACILITY", providerId, facilityId: null });
+  }
+  facilitySelect.replaceChildren();
+  const placeholder = new Option("Select a location…", "", true, rememberedId == null);
+  placeholder.disabled = true;
+  facilitySelect.add(placeholder);
+  for (const facility of facilities) {
+    facilitySelect.add(new Option(facility.name || facility.id, facility.id, false, facility.id === rememberedId));
+  }
+  facilitySelect.disabled = false;
+  updateFillReady();
+}
+
 async function loadProviders(): Promise<void> {
   setError(mainError, null);
   clearFillResults();
@@ -288,7 +383,74 @@ async function loadProviders(): Promise<void> {
   renderProviderOptions(selectedId);
   const provider = providers.find((p) => p.id === selectedId) ?? null;
   renderProviderCard(provider);
-  if (provider) await loadCases(provider.id);
+  if (provider) await Promise.all([loadCases(provider.id), loadFacilities(provider.id)]);
+}
+
+function orgLabel(org: UserOrgMembership): string {
+  return org.orgName || org.orgId;
+}
+
+// Org resolution comes first — everything below the org dropdown is
+// org-scoped. One membership: shown read-only, no x-org-id ever sent
+// (unchanged single-org behavior). Several: the user must pick before
+// anything loads; the pick is remembered and re-validated silently.
+async function loadOrgs(): Promise<void> {
+  setError(mainError, null);
+  orgs = [];
+  activeOrgId = null;
+  orgSelect.disabled = true;
+  orgSelect.replaceChildren(new Option("Loading organizations…", ""));
+  providerSection.hidden = true;
+  renderProviderCard(null);
+  clearFillResults();
+
+  const response = await sendToBackground({ type: "LIST_MY_ORGS" });
+  if (!response.ok) {
+    orgSelect.replaceChildren(new Option("Unavailable", ""));
+    setError(mainError, response.error);
+    return;
+  }
+  orgs = response.data;
+
+  if (orgs.length === 0) {
+    orgSelect.replaceChildren(new Option("No organizations", ""));
+    setError(mainError, "Your account has no organization membership in Minted Panel.");
+    return;
+  }
+
+  const sole = orgs.length === 1 ? orgs[0] : undefined;
+  if (sole) {
+    // Clearing any stored org id also wipes stale multi-org leftovers in
+    // the worker (SET_ACTIVE_ORG clears org-scoped state on change).
+    await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
+    orgSelect.replaceChildren(new Option(orgLabel(sole), sole.orgId, true, true));
+    providerSection.hidden = false;
+    await loadProviders();
+    return;
+  }
+
+  const stored = await sendToBackground({ type: "GET_ACTIVE_ORG" });
+  const storedId = stored.ok && orgs.some((o) => o.orgId === stored.data) ? stored.data : null;
+  if (stored.ok && stored.data != null && storedId == null) {
+    // Membership to the remembered org is gone: drop silently (the worker
+    // clears that org's dependent state too).
+    await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
+  }
+  activeOrgId = storedId;
+  orgSelect.replaceChildren();
+  const placeholder = new Option("Select an organization…", "", true, storedId == null);
+  placeholder.disabled = true;
+  orgSelect.add(placeholder);
+  for (const org of orgs) {
+    orgSelect.add(new Option(orgLabel(org), org.orgId, false, org.orgId === storedId));
+  }
+  orgSelect.disabled = false;
+  if (activeOrgId != null) {
+    providerSection.hidden = false;
+    await loadProviders();
+  } else {
+    updateFillReady();
+  }
 }
 
 // The active tab in the panel's window. Its url is visible to us only for
@@ -323,7 +485,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 function showMain(email: string | null): void {
   accountEmail.textContent = email ? `Signed in as ${email}` : "Signed in";
   showView("main");
-  void loadProviders();
+  void loadOrgs();
   void detectPortal();
 }
 
@@ -358,19 +520,53 @@ signinForm.addEventListener("submit", (event) => {
 signoutBtn.addEventListener("click", () => {
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
+    orgs = [];
+    activeOrgId = null;
     providers = [];
     cases = [];
+    facilities = [];
+    facilitiesLoaded = false;
+    needsFacility = false;
     showSignin();
   })();
 });
 
 refreshBtn.addEventListener("click", () => void loadProviders());
 
+orgSelect.addEventListener("change", () => {
+  const orgId = orgSelect.value || null;
+  if (orgId == null || orgId === activeOrgId) return;
+  void (async () => {
+    activeOrgId = orgId;
+    // The worker wipes provider/case/facility/report state before storing
+    // the new org; every call from here on carries x-org-id.
+    await sendToBackground({ type: "SET_ACTIVE_ORG", orgId });
+    clearFillResults();
+    providerSection.hidden = false;
+    await loadProviders();
+  })();
+});
+
 providerSelect.addEventListener("change", () => {
   const id = selectedProviderId();
   void sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: id });
   renderProviderCard(providers.find((p) => p.id === id) ?? null);
-  if (id) void loadCases(id);
+  if (id) {
+    void loadCases(id);
+    void loadFacilities(id);
+  }
+});
+
+facilitySelect.addEventListener("change", () => {
+  const providerId = selectedProviderId();
+  if (providerId) {
+    void sendToBackground({
+      type: "SET_SELECTED_FACILITY",
+      providerId,
+      facilityId: selectedFacilityId(),
+    });
+  }
+  updateFillReady();
 });
 
 caseSelect.addEventListener("change", () => {
@@ -389,7 +585,11 @@ caseSelect.addEventListener("change", () => {
 fillBtn.addEventListener("click", () => {
   const providerId = selectedProviderId();
   const caseId = selectedCaseId();
-  if (!providerId || !caseId) return;
+  const facilityId = selectedFacilityId();
+  // Same hard gates the disabled state enforces: org resolved, provider,
+  // facility resolved, case selected.
+  if (!orgResolved() || !providerId || !caseId) return;
+  if (!facilitiesLoaded || (needsFacility && facilityId == null)) return;
   void (async () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
@@ -416,6 +616,7 @@ fillBtn.addEventListener("click", () => {
       caseId,
       portalKey: clickPortal.key,
       state: clickPortal.state,
+      facilityId,
     });
     fillBtn.textContent = "Fill this page";
     fillBtn.disabled = false;

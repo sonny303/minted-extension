@@ -28,14 +28,30 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 
 | Route | Use |
 | --- | --- |
+| `GET /api/me/orgs` | org picker (the caller's own memberships; user-scoped, needs no org context) |
 | `GET /api/providers` | provider picker (PHI-safe list projection) |
-| `GET /api/providers/:id/profile?state=XX` | resolved field-token values for fill |
+| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill; carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
 | `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
 | `GET /api/cases?providerId=…` | case picker (the provider's OPEN cases) |
 | `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
 | `POST /api/cases/:id/touches` | "Mark submitted" business log (snake_case body per the locked R2 contract) |
 
-Single-org users send no `x-org-id` header.
+Org context: a single-org user sends no `x-org-id` header — the server
+resolves their sole membership (unchanged v0 behavior) and the panel shows
+the org read-only. A multi-org user must pick from the org dropdown (fed by
+`GET /api/me/orgs`) before anything org-scoped loads; the background worker
+then sends `x-org-id` on EVERY subsequent API call (the server 400s a
+multi-org caller without it — never guesses). Switching orgs clears all
+org-scoped workbench state: provider, case, location, and fill reports.
+
+Location context: the facility dropdown between provider and case is fed by
+the profile response's `facilities` list. Exactly one location auto-selects
+and shows read-only (the server resolves it the same way); several require a
+pick — while `meta.needs_facility` is unanswered the fill button stays
+disabled with "Pick a location first." The fill's profile fetch carries
+`facilityId` so `facility.*`/`assignment.*` tokens resolve from the chosen
+location. The fill gate overall: org resolved, provider selected, facility
+resolved, case selected — same hard-gate pattern as the locked case rule.
 
 **Case selection is REQUIRED** (locked decision): the panel's case dropdown is
 fed by `GET /api/cases?providerId=…` (a consumer-pulled route, merged in
@@ -49,19 +65,19 @@ re-checks the active tab's URL at click time. Tab URLs are only readable for
 origins in `host_permissions` (the portals) — every other page reads as "no
 portal detected", which is the correct state.
 
-The workbench remembers where you were: the selected provider and case and
-the last fill report (per provider + portal) persist in
-`chrome.storage.session` — field labels, counts, and skip reasons only, never
-field values, resolved tokens, or auth material beyond what session auth
-already stores. Reopening the panel restores that state and re-validates it
-silently against the org's current provider and open-case lists; stale
+The workbench remembers where you were: the active org (multi-org users),
+the selected provider, location, and case, and the last fill report (per
+provider + portal) persist in `chrome.storage.session` — field labels,
+counts, and skip reasons only, never field values, resolved tokens, or auth
+material beyond what session auth already stores. Reopening the panel
+restores that state and re-validates it silently against the caller's
+current memberships and the org's provider/facility/open-case lists; stale
 entries are dropped, not errored. A restored report is labeled with when it
 ran ("Fill report from 9:42 PM.") so it can't pass for a fresh one, and one
 already marked submitted shows "Logged to the case." instead of the button.
-All of it clears on sign-out and whenever a different identity signs in (the
-org is resolved server-side from the identity; a future org picker's
-selection joins that owner check), and dies with the browser session either
-way.
+Org-scoped state clears on org switch; everything clears on sign-out and
+whenever a different identity signs in, and dies with the browser session
+either way.
 
 ## Fill flow (M1)
 

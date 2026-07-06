@@ -124,6 +124,10 @@ export interface FillRequest {
   caseId: string;
   portalKey: string;
   state: string;
+  // The resolved location: the user's pick, or the provider's sole facility.
+  // null when the provider has no facilities — facility.* tokens then come
+  // back unresolved with a reason, which is correct, not an error.
+  facilityId: string | null;
 }
 
 export async function fillPortal(request: FillRequest): Promise<FillSummary> {
@@ -132,9 +136,12 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   // panel passes it back as fill_session_id when the human marks the
   // submission, tying the business log to this machine log.
   const fillSessionId = crypto.randomUUID();
-  const [maps, profile] = await Promise.all([
+  const [maps, { profile }] = await Promise.all([
     getPortalFieldMaps(request.portalKey),
-    getProviderProfile(request.providerId, request.state),
+    getProviderProfile(request.providerId, {
+      state: request.state,
+      facilityId: request.facilityId,
+    }),
   ]);
   const { instructions, manual } = planFill(maps, profile);
 
