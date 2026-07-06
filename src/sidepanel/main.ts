@@ -1,7 +1,9 @@
-// Popup UI: sign in, pick a provider and case, fill the open portal page.
-// All auth and API work happens in the background worker; this file only
-// renders state and sends typed messages.
-import "./popup.css";
+// Side panel UI: sign in, pick a provider and case, fill the open portal
+// page. All auth and API work happens in the background worker; this file
+// only renders state and sends typed messages. Unlike the old popup, the
+// panel stays open across tab switches, so portal detection follows the
+// active tab and the fill re-checks the tab's URL at click time.
+import "./sidepanel.css";
 import type { CaseListItem, ProviderListItem } from "../shared/apiTypes";
 import type { FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground } from "../shared/messages";
@@ -231,17 +233,34 @@ async function loadProviders(): Promise<void> {
   if (provider) await loadCases(provider.id);
 }
 
-async function detectPortal(): Promise<void> {
+// The active tab in the panel's window. Its url is visible to us only for
+// origins we hold host permissions on (the portals) — for every other page
+// it comes back undefined, which matchPortal already treats as "no portal".
+async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    portal = matchPortal(tab?.url);
-    portalTabId = portal != null && tab?.id != null ? tab.id : null;
+    return tab ?? null;
   } catch {
-    portal = null;
-    portalTabId = null;
+    return null;
   }
+}
+
+async function detectPortal(): Promise<void> {
+  const tab = await queryActiveTab();
+  portal = matchPortal(tab?.url);
+  portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
 }
+
+// The panel reflects the ACTIVE tab: re-detect on tab switch and on
+// navigation in the active tab (a fill result stays on screen — the user
+// hops to the portal tab to submit, then comes back for Mark submitted).
+chrome.tabs.onActivated.addListener(() => void detectPortal());
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (tab.active && (changeInfo.url != null || changeInfo.status === "complete")) {
+    void detectPortal();
+  }
+});
 
 function showMain(email: string | null): void {
   accountEmail.textContent = email ? `Signed in as ${email}` : "Signed in";
@@ -312,19 +331,33 @@ caseSelect.addEventListener("change", () => {
 fillBtn.addEventListener("click", () => {
   const providerId = selectedProviderId();
   const caseId = selectedCaseId();
-  if (!providerId || !caseId || !portal || portalTabId == null) return;
+  if (!providerId || !caseId) return;
   void (async () => {
+    // The panel outlives tab switches, so never trust detection state from
+    // earlier: re-read the active tab and re-match its URL at click time.
+    const tab = await queryActiveTab();
+    const clickPortal = matchPortal(tab?.url);
+    portal = clickPortal;
+    portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
+    updateFillReady();
+    if (!clickPortal || tab?.id == null) {
+      setError(
+        mainError,
+        "The enrollment form is no longer the active tab — switch back to it and try again.",
+      );
+      return;
+    }
     setError(mainError, null);
     clearFillResults();
     fillBtn.disabled = true;
     fillBtn.textContent = "Filling…";
     const response = await sendToBackground({
       type: "FILL",
-      tabId: portalTabId,
+      tabId: tab.id,
       providerId,
       caseId,
-      portalKey: portal.key,
-      state: portal.state,
+      portalKey: clickPortal.key,
+      state: clickPortal.state,
     });
     fillBtn.textContent = "Fill this page";
     fillBtn.disabled = false;
@@ -335,7 +368,7 @@ fillBtn.addEventListener("click", () => {
     }
     lastFill = {
       caseId,
-      portalKey: portal.key,
+      portalKey: clickPortal.key,
       fillSessionId: response.data.fillSessionId,
     };
     renderFillSummary(response.data);

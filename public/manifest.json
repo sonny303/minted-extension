@@ -4,17 +4,20 @@
   "version": "0.1.0",
   "description": "One-click payer portal form fill from Minted Panel provider data.",
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Minted Panel"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "sidePanel"],
   "host_permissions": [
     "https://mintedpanel.vercel.app/*",
-    "https://fkvuhfsqcmujywzgczmc.supabase.co/*"
+    "https://fkvuhfsqcmujywzgczmc.supabase.co/*",
+    "https://provider.bcbsks.com/*"
   ],
   "content_scripts": [
     {
