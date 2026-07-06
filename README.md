@@ -12,11 +12,12 @@ Three rules everything else follows from:
    key.** Supabase auth is used only to mint a JWT (anon key + email/password
    sign-in). All data flows through the Minted Panel server API at
    `https://mintedpanel.vercel.app` with `Authorization: Bearer <jwt>`.
-2. **The background service worker owns every API call.** The popup is UI
-   only and talks to the worker over `chrome.runtime` messaging. The content
-   script receives resolved fill values via messaging, applies them to the
-   page, and reports results — tokens never touch page context, and the
-   worker refuses messages that originate from a tab.
+2. **The background service worker owns every API call.** The workbench UI —
+   a Chrome side panel, opened by clicking the toolbar icon — is UI only and
+   talks to the worker over `chrome.runtime` messaging; it never holds
+   tokens. The content script receives resolved fill values via messaging,
+   applies them to the page, and reports results — tokens never touch page
+   context, and the worker refuses messages that originate from a tab.
 3. **Session lives in `chrome.storage.session`** (in-memory, gone when the
    browser exits) with supabase-js handling refresh. MV3 workers restart
    constantly, so refresh is on-demand: `getSession()` refreshes expired
@@ -36,11 +37,17 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 
 Single-org users send no `x-org-id` header.
 
-**Case selection is REQUIRED** (locked decision): the popup's case dropdown is
+**Case selection is REQUIRED** (locked decision): the panel's case dropdown is
 fed by `GET /api/cases?providerId=…` (a consumer-pulled route, merged in
 mintedpanel R2), rendered as `<payer> - <state> - <status>`. No case selected,
 no fill. The old paste-a-case-id fallback (for before the route existed) is
 gone.
+
+The panel stays open across tab switches and always reflects the ACTIVE tab:
+portal detection re-runs on `tabs.onActivated`/`onUpdated`, and the fill
+re-checks the active tab's URL at click time. Tab URLs are only readable for
+origins in `host_permissions` (the portals) — every other page reads as "no
+portal detected", which is the correct state.
 
 ## Fill flow (M1)
 
@@ -66,25 +73,25 @@ is the active tab:
    per attempt), the case + provider ids, portal key, timestamps, and
    filled/skipped counts. A logging failure downgrades to a warning — it
    never un-reports a successful fill.
-4. The popup shows a review state: filled count, skipped fields with reasons,
+4. The panel shows a review state: filled count, skipped fields with reasons,
    the needs-manual list, and a **Mark submitted** button. The human submits
    the portal form themselves — the extension never clicks or automates the
    portal's submit — then presses Mark submitted, which POSTs
    `/api/cases/:id/touches` (`kind: portal_submission`, the portal key, the
    fill session's id as `fill_session_id`, and a fresh `idempotency_id` the
    worker reuses on retries so the touch can never double-log). On success the
-   popup shows "Logged to the case."
+   panel shows "Logged to the case."
 
 ## Repo layout
 
 ```
 public/manifest.json        Manifest V3 (copied verbatim into dist/)
-popup.html                  popup entry (Vite html input)
-src/popup/                  popup UI (vanilla TS, no framework)
+sidepanel.html              side panel entry (Vite html input)
+src/sidepanel/              workbench side panel UI (vanilla TS, no framework)
 src/background/             service worker: auth.ts, api.ts, index.ts (router)
 src/content/                content script (IIFE build, messaging only)
 src/shared/                 message protocol, API types, deploy constants
-vite.config.ts              popup + background build
+vite.config.ts              side panel + background build
 vite.content.config.ts      content script build (content scripts can't be ESM)
 ```
 
@@ -98,11 +105,13 @@ npm install
 npm run build        # dist/ = loadable extension
 npm run typecheck
 npm run lint
-npm run watch        # rebuild popup/background on change
+npm run watch        # rebuild panel/background on change
 ```
 
 Load it: `chrome://extensions` → Developer mode → **Load unpacked** → pick
-`dist/`. After code changes, rebuild and hit the extension's reload button.
+`dist/`. Click the toolbar icon to open the workbench side panel (the worker
+sets `openPanelOnActionClick`; there is no action popup). After code changes,
+rebuild and hit the extension's reload button.
 
 ## One-time backend config (owner does this manually)
 
@@ -116,10 +125,10 @@ env var at both points.
 
 ## Verifying token refresh (M0 exit criterion)
 
-1. Sign in from the popup and confirm the provider list loads.
+1. Sign in from the side panel and confirm the provider list loads.
 2. Leave the browser alone past the access token's expiry (1 hour), or kill
    the worker early via `chrome://serviceworker-internals` → Stop.
-3. Reopen the popup and hit **Refresh**. The list must load without a sign-in
+3. Reopen the panel and hit **Refresh**. The list must load without a sign-in
    prompt: `getSession()` re-reads storage and exchanges the refresh token,
    and any straggling 401 is retried once after a forced refresh.
 

@@ -1,6 +1,7 @@
-// The chrome.runtime messaging protocol between the popup and the background
-// service worker. The background owns Supabase auth and every API call; the
-// popup is UI only. Access tokens never appear in any message payload.
+// The chrome.runtime messaging protocol between the side panel and the
+// background service worker. The background owns Supabase auth and every API
+// call; the panel is UI only. Access tokens never appear in any message
+// payload.
 import type { CaseListItem, ProviderListItem, SubmissionTouch } from "./apiTypes";
 import type { FillSummary } from "./fill";
 
@@ -57,7 +58,7 @@ export interface BgResponseMap {
   MARK_SUBMITTED: SubmissionTouch;
 }
 
-// Typed wrapper so popup call sites get the right response type per request.
+// Typed wrapper so panel call sites get the right response type per request.
 export async function sendToBackground<T extends BgRequest["type"]>(
   request: Extract<BgRequest, { type: T }>,
 ): Promise<BgResponse<BgResponseMap[T]>> {

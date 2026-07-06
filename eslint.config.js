@@ -7,9 +7,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     // Architecture guardrail: the background worker owns Supabase auth and all
-    // API calls. Nothing else may import supabase-js — the popup and content
-    // script talk to the background over chrome runtime messaging only.
-    files: ["src/popup/**", "src/content/**", "src/shared/**"],
+    // API calls. Nothing else may import supabase-js — the side panel and
+    // content script talk to the background over chrome runtime messaging only.
+    files: ["src/sidepanel/**", "src/content/**", "src/shared/**"],
     rules: {
       "no-restricted-imports": [
         "error",

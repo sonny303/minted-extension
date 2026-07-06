@@ -129,7 +129,7 @@ export interface FillRequest {
 export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   const startedAt = new Date().toISOString();
   // The attempt's idempotency id doubles as the fill_sessions row PK; the
-  // popup passes it back as fill_session_id when the human marks the
+  // panel passes it back as fill_session_id when the human marks the
   // submission, tying the business log to this machine log.
   const fillSessionId = crypto.randomUUID();
   const [maps, profile] = await Promise.all([

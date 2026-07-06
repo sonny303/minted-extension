@@ -1,7 +1,7 @@
 // Types shared by the fill pipeline: background (plans instructions from
 // field maps + profile values), content script (applies them to the page),
-// popup (renders the outcome). Instructions carry only what the page needs —
-// selectors and final values — never tokens or auth material.
+// side panel (renders the outcome). Instructions carry only what the page
+// needs — selectors and final values — never tokens or auth material.
 import type { PortalFieldType } from "./apiTypes";
 
 export interface FillInstruction {
@@ -26,7 +26,7 @@ export interface FillPageResult {
   skipped: ReportedField[]; // matched-but-unappliable or selector not found
 }
 
-// The popup-facing outcome of one fill attempt.
+// The panel-facing outcome of one fill attempt.
 export interface FillSummary {
   filled: number;
   filledLabels: string[];

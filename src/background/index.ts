@@ -1,5 +1,5 @@
 // Background service worker: message router. Owns Supabase auth and all API
-// calls; the popup drives it over chrome.runtime messaging. Only senders
+// calls; the side panel drives it over chrome.runtime messaging. Only senders
 // running on our own chrome-extension:// origin are served — content scripts
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
@@ -7,6 +7,14 @@ import type { BgRequest, BgResponse } from "../shared/messages";
 import { AuthRequiredError, getAuthState, signIn, signOut } from "./auth";
 import { ApiError, listCases, listProviders, postSubmissionTouch } from "./api";
 import { fillPortal } from "./fill";
+
+// Clicking the toolbar icon toggles the workbench side panel (the action has
+// no popup). Top-level so every worker start re-asserts the behavior. The
+// optional chain keeps the router alive in builds without the sidePanel API
+// (headless test Chromium) — a throw here would kill the whole worker.
+chrome.sidePanel
+  ?.setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error: unknown) => console.error("sidePanel.setPanelBehavior failed", error));
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
