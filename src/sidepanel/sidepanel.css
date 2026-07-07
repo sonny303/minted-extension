@@ -273,23 +273,25 @@ label {
   margin-bottom: 0;
 }
 
+/* Inputs & selects — the app's shadcn control: 36px, cool border, 4px radius,
+   subtle shadow, crisp 1px primary focus ring. */
 input,
 select {
   width: 100%;
   height: 36px;
   padding: 0 11px;
   font: 500 13px var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
-  border-radius: var(--mp-r-ctl);
-  box-shadow: var(--mp-shadow-ctl);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
 }
 
 select {
   appearance: none;
   padding-right: 30px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%2396A29A' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%2399A49B' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 11px center;
   background-size: 10px 10px;
@@ -297,13 +299,15 @@ select {
 }
 
 /* Read-only resolution (sole org, sole location) renders as a quiet chip:
-   cream fill, muted text, no chevron. Loading/empty selects share the look. */
+   muted fill, secondary text, no chevron. Loading/empty selects share the look.
+   Kept as a display chip (not the app's faded opacity-50) because these
+   selects are intentionally read-only value displays, not dead controls. */
 select:disabled {
-  background: var(--mp-cream-100);
+  background: var(--mp-muted);
   background-image: none;
-  border-color: #e7e3d6;
+  border-color: var(--mp-border);
   box-shadow: none;
-  color: #3d4a42;
+  color: var(--mp-ink-secondary);
   cursor: default;
   opacity: 1;
 }
@@ -311,13 +315,13 @@ select:disabled {
 input:focus,
 select:focus {
   outline: none;
-  border-color: var(--mp-green-700);
+  border-color: var(--mp-primary);
   box-shadow: var(--mp-focus);
 }
 
 input::placeholder {
   font-weight: 400;
-  color: var(--mp-ink-400);
+  color: var(--mp-ink-faint);
 }
 
 /* ---- buttons ---- */
@@ -738,23 +742,23 @@ button.link:hover {
   min-height: 52px;
   padding: 8px 11px;
   font: 500 12.5px/1.4 var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
-  border-radius: var(--mp-r-ctl);
-  box-shadow: var(--mp-shadow-ctl);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
   resize: vertical;
 }
 
 .submit-field textarea:focus {
   outline: none;
-  border-color: var(--mp-green-700);
+  border-color: var(--mp-primary);
   box-shadow: var(--mp-focus);
 }
 
 .submit-field textarea::placeholder {
   font-weight: 400;
-  color: var(--mp-ink-400);
+  color: var(--mp-ink-faint);
 }
 
 /* ---- coverage sensor (Epic 3a): read-only pre-fill data-gap panel ---- */
