@@ -62,13 +62,13 @@ export interface AuthState {
   email: string | null;
 }
 
-// The location-picker feed: the profile response's facility fields and
-// nothing else (no tokens, no provider row).
+// The location-picker feed: the provider's facility set from the profile
+// response and nothing else (no tokens, no provider row). The panel owns
+// facility selection — a sole facility auto-selects, several are picked and
+// remembered per provider — so the server's resolved selected_facility_id is
+// deliberately not carried here.
 export interface ProviderFacilitiesInfo {
   facilities: ProviderProfileFacility[];
-  // The server's selected_facility_id — set when ?facilityId was sent or the
-  // provider has exactly one facility; null otherwise.
-  selectedFacilityId: string | null;
   // meta.needs_facility: several facilities, none picked — the fill gate
   // stays closed until the user picks ("Pick a location first.").
   needsFacility: boolean;

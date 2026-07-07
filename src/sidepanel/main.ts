@@ -88,6 +88,23 @@ let portal: PortalConfig | null = null;
 let portalTabId: number | null = null;
 let lastFill: LastFill | null = null;
 
+// Request-generation guard against stale async responses (fill-safety: a slow
+// response for provider A must never render A's cases or facilities under
+// provider B after a fast switch — that is a wrong-record-fill risk). Any
+// context switch that changes what the pickers should show — the initial /
+// restore load, org switch, provider switch, refresh, sign-out — bumps this
+// counter via bumpGeneration(). Every async loader captures the value at entry
+// and, after each await, discards its result (no module-state write, no DOM
+// rebuild) when a newer context has superseded it. The restore flow runs as a
+// single uninterrupted generation, so the guard never starves it.
+let loadGeneration = 0;
+function bumpGeneration(): number {
+  return ++loadGeneration;
+}
+function isCurrent(generation: number): boolean {
+  return generation === loadGeneration;
+}
+
 function showView(name: keyof typeof views): void {
   for (const [key, section] of Object.entries(views)) {
     section.hidden = key !== name;
@@ -101,7 +118,8 @@ function setError(box: HTMLElement, message: string | null): void {
 }
 
 function selectedProviderId(): string | null {
-  return providerSelect.value || null;
+  const value = providerSelect.value;
+  return UUID_RE.test(value) ? value : null;
 }
 
 function selectedCaseId(): string | null {
@@ -307,7 +325,7 @@ function renderFillSummary(
   if (submitted) submitStatus.textContent = "Logged to the case.";
 }
 
-async function loadCases(providerId: string): Promise<void> {
+async function loadCases(providerId: string, generation: number): Promise<void> {
   clearFillResults();
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
@@ -315,6 +333,8 @@ async function loadCases(providerId: string): Promise<void> {
   updateFillReady();
 
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
+  // A newer provider/org selection superseded this load — discard silently.
+  if (!isCurrent(generation)) return;
   if (!response.ok) {
     setError(mainError, response.error);
     caseSelect.replaceChildren(new Option("Unavailable", ""));
@@ -326,6 +346,7 @@ async function loadCases(providerId: string): Promise<void> {
 
   cases = response.data;
   const remembered = await sendToBackground({ type: "GET_SELECTED_CASE", providerId });
+  if (!isCurrent(generation)) return;
   const rememberedId =
     remembered.ok && cases.some((c) => c.id === remembered.data) ? remembered.data : null;
   // A remembered case that no longer exists (closed, or another org's) is
@@ -347,7 +368,7 @@ async function loadCases(providerId: string): Promise<void> {
   }
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
-  await restoreFillReport(providerId, rememberedId);
+  await restoreFillReport(providerId, rememberedId, generation);
   updateFillReady();
 }
 
@@ -355,9 +376,14 @@ async function loadCases(providerId: string): Promise<void> {
 // only if it belongs to the case that is still open and still selected.
 // Anything stale is skipped silently; the record itself expires with the
 // browser session or the next fill.
-async function restoreFillReport(providerId: string, selectedCase: string | null): Promise<void> {
+async function restoreFillReport(
+  providerId: string,
+  selectedCase: string | null,
+  generation: number,
+): Promise<void> {
   if (selectedCase == null) return;
   const response = await sendToBackground({ type: "GET_FILL_REPORT", providerId });
+  if (!isCurrent(generation)) return;
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
   if (record.caseId !== selectedCase) return;
@@ -376,7 +402,7 @@ async function restoreFillReport(providerId: string, selectedCase: string | null
 // The provider's facility set, from the profile response. Exactly one:
 // auto-selected read-only (the server resolves it the same way). Several:
 // the user picks, remembered per provider and re-validated silently.
-async function loadFacilities(providerId: string): Promise<void> {
+async function loadFacilities(providerId: string, generation: number): Promise<void> {
   facilities = [];
   facilitiesLoaded = false;
   needsFacility = false;
@@ -385,6 +411,8 @@ async function loadFacilities(providerId: string): Promise<void> {
   updateFillReady();
 
   const response = await sendToBackground({ type: "GET_PROVIDER_FACILITIES", providerId });
+  // A newer provider/org selection superseded this load — discard silently.
+  if (!isCurrent(generation)) return;
   if (!response.ok) {
     facilitySelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
@@ -411,6 +439,7 @@ async function loadFacilities(providerId: string): Promise<void> {
   }
 
   const remembered = await sendToBackground({ type: "GET_SELECTED_FACILITY", providerId });
+  if (!isCurrent(generation)) return;
   const rememberedId =
     remembered.ok && facilities.some((f) => f.id === remembered.data) ? remembered.data : null;
   if (remembered.ok && remembered.data != null && rememberedId == null) {
@@ -427,7 +456,7 @@ async function loadFacilities(providerId: string): Promise<void> {
   updateFillReady();
 }
 
-async function loadProviders(): Promise<void> {
+async function loadProviders(generation: number): Promise<void> {
   setError(mainError, null);
   clearFillResults();
   providerSelect.disabled = true;
@@ -435,6 +464,8 @@ async function loadProviders(): Promise<void> {
   renderProviderCard(null);
 
   const response = await sendToBackground({ type: "LIST_PROVIDERS" });
+  // A newer org switch / refresh superseded this load — discard silently.
+  if (!isCurrent(generation)) return;
   if (!response.ok) {
     providerSelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
@@ -443,6 +474,7 @@ async function loadProviders(): Promise<void> {
   providers = response.data;
 
   const selected = await sendToBackground({ type: "GET_SELECTED_PROVIDER" });
+  if (!isCurrent(generation)) return;
   const selectedId =
     selected.ok && providers.some((p) => p.id === selected.data) ? selected.data : null;
   // A remembered provider that isn't in the current org's list anymore is
@@ -453,7 +485,14 @@ async function loadProviders(): Promise<void> {
   renderProviderOptions(selectedId);
   const provider = providers.find((p) => p.id === selectedId) ?? null;
   renderProviderCard(provider);
-  if (provider) await Promise.all([loadCases(provider.id), loadFacilities(provider.id)]);
+  // Same generation flows down: if a switch lands during these loads they
+  // discard themselves, and loadProviders is never reached by a stale caller
+  // (the checks above bail first).
+  if (provider)
+    await Promise.all([
+      loadCases(provider.id, generation),
+      loadFacilities(provider.id, generation),
+    ]);
 }
 
 function orgLabel(org: UserOrgMembership): string {
@@ -464,7 +503,7 @@ function orgLabel(org: UserOrgMembership): string {
 // org-scoped. One membership: shown read-only, no x-org-id ever sent
 // (unchanged single-org behavior). Several: the user must pick before
 // anything loads; the pick is remembered and re-validated silently.
-async function loadOrgs(): Promise<void> {
+async function loadOrgs(generation: number): Promise<void> {
   setError(mainError, null);
   orgs = [];
   activeOrgId = null;
@@ -475,6 +514,8 @@ async function loadOrgs(): Promise<void> {
   clearFillResults();
 
   const response = await sendToBackground({ type: "LIST_MY_ORGS" });
+  // A newer sign-out / re-entry superseded this load — discard silently.
+  if (!isCurrent(generation)) return;
   if (!response.ok) {
     orgSelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
@@ -496,18 +537,21 @@ async function loadOrgs(): Promise<void> {
     // Clearing any stored org id also wipes stale multi-org leftovers in
     // the worker (SET_ACTIVE_ORG clears org-scoped state on change).
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
+    if (!isCurrent(generation)) return;
     orgSelect.replaceChildren(new Option(orgLabel(sole), sole.orgId, true, true));
     providerSection.hidden = false;
-    await loadProviders();
+    await loadProviders(generation);
     return;
   }
 
   const stored = await sendToBackground({ type: "GET_ACTIVE_ORG" });
+  if (!isCurrent(generation)) return;
   const storedId = stored.ok && orgs.some((o) => o.orgId === stored.data) ? stored.data : null;
   if (stored.ok && stored.data != null && storedId == null) {
     // Membership to the remembered org is gone: drop silently (the worker
     // clears that org's dependent state too).
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
+    if (!isCurrent(generation)) return;
   }
   activeOrgId = storedId;
   orgSelect.replaceChildren();
@@ -520,7 +564,7 @@ async function loadOrgs(): Promise<void> {
   orgSelect.disabled = false;
   if (activeOrgId != null) {
     providerSection.hidden = false;
-    await loadProviders();
+    await loadProviders(generation);
   } else {
     updateFillReady();
   }
@@ -558,7 +602,9 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 function showMain(email: string | null): void {
   accountEmail.textContent = email ? `Signed in as ${email}` : "Signed in";
   showView("main");
-  void loadOrgs();
+  // Fresh context: this restore load (and every loader it chains into) runs
+  // under one generation so it populates uninterrupted.
+  void loadOrgs(bumpGeneration());
   void detectPortal();
 }
 
@@ -591,6 +637,9 @@ signinForm.addEventListener("submit", (event) => {
 });
 
 signoutBtn.addEventListener("click", () => {
+  // Invalidate any in-flight loader so a late response can't render into the
+  // now-hidden main view after sign-out.
+  bumpGeneration();
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
     orgs = [];
@@ -604,29 +653,36 @@ signoutBtn.addEventListener("click", () => {
   })();
 });
 
-refreshBtn.addEventListener("click", () => void loadProviders());
+refreshBtn.addEventListener("click", () => void loadProviders(bumpGeneration()));
 
 orgSelect.addEventListener("change", () => {
   const orgId = orgSelect.value || null;
   if (orgId == null || orgId === activeOrgId) return;
+  // Bump synchronously so any in-flight loader for the previous org is
+  // invalidated the instant the switch happens.
+  const generation = bumpGeneration();
   void (async () => {
     activeOrgId = orgId;
     // The worker wipes provider/case/facility/report state before storing
     // the new org; every call from here on carries x-org-id.
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId });
+    if (!isCurrent(generation)) return;
     clearFillResults();
     providerSection.hidden = false;
-    await loadProviders();
+    await loadProviders(generation);
   })();
 });
 
 providerSelect.addEventListener("change", () => {
   const id = selectedProviderId();
+  // Bump synchronously so a slower in-flight case/facility load for the
+  // previous provider discards itself instead of rendering under this one.
+  const generation = bumpGeneration();
   void sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: id });
   renderProviderCard(providers.find((p) => p.id === id) ?? null);
   if (id) {
-    void loadCases(id);
-    void loadFacilities(id);
+    void loadCases(id, generation);
+    void loadFacilities(id, generation);
   }
 });
 
@@ -657,6 +713,12 @@ caseSelect.addEventListener("change", () => {
 });
 
 fillBtn.addEventListener("click", () => {
+  // Capture the selection generation at click. If the operator switches
+  // provider/org/case while this fill is in flight, the generation changes and
+  // the result is discarded rather than rendered under the wrong provider —
+  // the same wrong-record guard the loaders use. The fill itself still ran and
+  // is logged server-side against the click-time provider/case.
+  const generation = loadGeneration;
   const providerId = selectedProviderId();
   const caseId = selectedCaseId();
   const facilityId = selectedFacilityId();
@@ -699,6 +761,9 @@ fillBtn.addEventListener("click", () => {
     fillBtn.classList.remove("filling");
     fillNote.hidden = true;
     updateFillReady();
+    // Selection changed mid-fill: drop this result so it can't render under the
+    // provider now selected. Button chrome above is already restored.
+    if (!isCurrent(generation)) return;
     if (!response.ok) {
       setError(mainError, response.error);
       return;

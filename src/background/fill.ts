@@ -150,6 +150,24 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   ]);
   const { instructions, manual } = planFill(maps, profile);
 
+  // Pre-flight ping: confirm the content script is actually live in the target
+  // tab BEFORE handing it the (PHI-bearing) fill instructions. The common
+  // failure — the active tab isn't the portal, or the page hasn't finished
+  // loading the content script — throws "Receiving end does not exist" here and
+  // surfaces as clear reload guidance, instead of a cryptic messaging error
+  // after we've already planned the fill.
+  try {
+    const pong = (await chrome.tabs.sendMessage(request.tabId, { type: "PING" })) as
+      | { ok?: boolean }
+      | undefined;
+    if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
+  } catch (error) {
+    throw new Error(
+      "Could not reach the enrollment form — open the BCBS KS enrollment page in the current tab and reload it.",
+      { cause: error },
+    );
+  }
+
   let pageResult: FillPageResult;
   try {
     const response = (await chrome.tabs.sendMessage(request.tabId, {
@@ -161,10 +179,16 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     }
     pageResult = response.data;
   } catch (error) {
+    // The pre-flight ping just proved the content script is reachable, so a
+    // failure here is a genuine page/apply error. The one residual edge is a
+    // tab that navigates away in the window between the ping and this call —
+    // that reads as "Receiving end does not exist", for which the reload
+    // guidance is still the right advice.
+    const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
-      error instanceof Error && !error.message.includes("Receiving end does not exist")
-        ? `Fill failed on the page: ${error.message}`
-        : "Could not reach the enrollment form — open the BCBS KS enrollment page in the current tab and reload it.",
+      message.includes("Receiving end does not exist")
+        ? "Could not reach the enrollment form — open the BCBS KS enrollment page in the current tab and reload it."
+        : `Fill failed on the page: ${message}`,
       { cause: error },
     );
   }

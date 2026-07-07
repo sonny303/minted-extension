@@ -15,7 +15,7 @@ import type {
   SubmissionTouchBody,
   UserOrgMembership,
 } from "../shared/apiTypes";
-import { forceRefresh, getAccessToken } from "./auth";
+import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
 
 export class ApiError extends Error {
@@ -31,13 +31,18 @@ export class ApiError extends Error {
 async function requestOnce(path: string, token: string, init?: RequestInit): Promise<Response> {
   // Stored only when a multi-org user has picked; absent = no header sent.
   const orgId = await readActiveOrgId();
+  // Org discovery must work BEFORE/WITHOUT org context — it is how a multi-org
+  // caller learns what to send as x-org-id — so /api/me/orgs never carries the
+  // header. A stale/revoked stored org id must not brick that recovery path.
+  // Match the pathname precisely (ignore any query string).
+  const pathname = path.split("?")[0];
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
       authorization: `Bearer ${token}`,
       accept: "application/json",
-      ...(orgId != null ? { "x-org-id": orgId } : {}),
+      ...(orgId != null && pathname !== "/api/me/orgs" ? { "x-org-id": orgId } : {}),
     },
   });
 }
@@ -52,8 +57,14 @@ export async function apiFetch<T>(
   let token = await getAccessToken();
   let response = await requestOnce(path, token, init);
   if (response.status === 401) {
+    // forceRefresh() throws AuthRequiredError when the refresh token itself is
+    // dead. If the refresh SUCCEEDS but the server still 401s the retry, the
+    // identity no longer authorizes this call — surface the SAME
+    // sign-in-required path (AuthRequiredError), not a generic ApiError, per
+    // the contract in this function's header comment.
     token = await forceRefresh();
     response = await requestOnce(path, token, init);
+    if (response.status === 401) throw new AuthRequiredError();
   }
 
   let envelope: ApiEnvelope<T>;

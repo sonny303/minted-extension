@@ -148,9 +148,12 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // Fetch the profile but hand the panel ONLY the facility fields — the
       // token payload (PHI) never crosses into UI state it doesn't need.
       const { profile, meta } = await getProviderProfile(request.providerId);
+      // The panel owns facility SELECTION (sole auto-select, or the user's
+      // per-provider pick remembered in session storage), so the server's
+      // resolved selected_facility_id isn't threaded through here — only the
+      // facility set and the needs-a-pick flag are.
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
-        selectedFacilityId: profile.selected_facility_id,
         needsFacility: meta?.needs_facility === true,
       };
       return info;
