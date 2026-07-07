@@ -30,11 +30,11 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 | --- | --- |
 | `GET /api/me/orgs` | org picker (the caller's own memberships; user-scoped, needs no org context) |
 | `GET /api/providers` | provider picker (PHI-safe list projection) |
-| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill; carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
+| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill; the worker also projects the five card identifiers (NPI, license, CAQH, TIN/EIN, DEA) from its tokens; carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
 | `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
-| `GET /api/cases?providerId=…` | case picker (the provider's OPEN cases) |
+| `GET /api/cases?providerId=…` | case picker (the provider's OPEN cases); each row also carries `payerReferenceId` (prefill), `latestNote` (card), and `lastSubmittedAt` (duplicate-submission guard) |
 | `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
-| `POST /api/cases/:id/touches` | "Mark submitted" business log (snake_case body per the locked R2 contract) |
+| `POST /api/cases/:id/touches` | "Mark submitted" business log (snake_case body per the locked R2 contract); optional write-back on the same POST — `payer_reference_id`, `wip_note`, `task_id`, `pdf_filename` |
 
 Org context: a single-org user sends no `x-org-id` header — the server
 resolves their sole membership (unchanged v0 behavior) and the panel shows
@@ -78,6 +78,32 @@ already marked submitted shows "Logged to the case." instead of the button.
 Org-scoped state clears on org switch; everything clears on sign-out and
 whenever a different identity signs in, and dies with the browser session
 either way.
+
+## Touchlog write-back (workbench Stories 4–11)
+
+The workbench surfaces case context and writes structured activity back to the
+case touchlog. All of it rides existing routes; the server bridge is in
+mintedpanel `submissionTouches.ts` / `providerCases.ts`.
+
+- **Key identifiers (4):** the provider card shows NPI, license #, CAQH ID,
+  TIN/EIN, and DEA, each with a copy button; a missing value renders greyed.
+  Values come from the profile the worker already fetches — only these five
+  non-PHI identifiers cross into the panel.
+- **Payer reference / submission ID (5):** a box at the bottom of the fill,
+  prefilled from the case's `payerReferenceId`; on submit it overwrites the
+  case's latest-wins reference.
+- **WIP note (6):** an optional note box → a touchlog `note` entry on submit.
+- **Submit → task + logs (7):** every submit writes a `system_event` "Form
+  submitted to {payer}"; the server closes a linked SOP task and records a
+  `task_update` when `task_id` is supplied. The v1 panel has no task source, so
+  it sends none — the plumbing is ready (locked decision (c)).
+- **Field-gap flag (9):** before submit, the count of mapped fields with no
+  value (skipped + needs-manual) is flagged; submitting is never blocked.
+- **Duplicate-submission guard (10):** if the case was marked submitted within
+  14 days (`lastSubmittedAt`), the first "Mark submitted" click warns and
+  re-labels to "Log anyway"; the next click logs it.
+- **Latest note (11):** the selected case's most recent touchlog note shows
+  under the case picker.
 
 ## Fill flow (M1)
 

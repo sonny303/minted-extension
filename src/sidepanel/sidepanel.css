@@ -512,6 +512,176 @@ button.link:hover {
   color: var(--mp-ink-400);
 }
 
+/* ---- provider identifiers (Story 4): copy-able key/value grid on the card ---- */
+.ids {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--mp-line-100);
+}
+
+.ids dt {
+  align-self: center;
+  font: 700 9.5px/1.5 var(--mp-font);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mp-label);
+}
+
+.ids dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.id-value {
+  overflow: hidden;
+  font: 500 12px var(--mp-mono);
+  color: var(--mp-ink-900);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.id-empty {
+  font: 500 12px var(--mp-mono);
+  color: var(--mp-ink-400);
+}
+
+.id-copy {
+  flex: none;
+  width: auto;
+  height: auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  font: 600 9.5px/1.5 var(--mp-font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--mp-green-700);
+  background: var(--mp-cream-50);
+  border: 1px solid var(--mp-line-200);
+  border-radius: 6px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.id-copy:hover {
+  background: var(--mp-mint-200);
+  border-color: var(--mp-mint-300);
+}
+
+.id-copy.copied {
+  color: var(--mp-green-600);
+  background: var(--mp-mint-200);
+  border-color: var(--mp-mint-300);
+}
+
+/* ---- case latest note (Story 11), under the case picker ---- */
+.case-note {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--mp-cream-50);
+  border: 1px solid var(--mp-line-100);
+  border-radius: var(--mp-r-ctl);
+}
+
+.case-note-label {
+  font: 700 9.5px/1.4 var(--mp-font);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mp-label);
+}
+
+.case-note-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mp-ink-600);
+}
+
+/* ---- submit write-back fields (Stories 5/6): reference + WIP note ---- */
+.submit-field {
+  margin: 0 0 10px;
+}
+
+.submit-field textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 11px;
+  font: 500 12.5px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+  background: #ffffff;
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-r-ctl);
+  box-shadow: var(--mp-shadow-ctl);
+  resize: vertical;
+}
+
+.submit-field textarea:focus {
+  outline: none;
+  border-color: var(--mp-green-700);
+  box-shadow: var(--mp-focus);
+}
+
+.submit-field textarea::placeholder {
+  font-weight: 400;
+  color: var(--mp-ink-400);
+}
+
+/* ---- field-gap flag (Story 9): amber advisory; submitting stays allowed ---- */
+.gap-flag {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #7a5b1e;
+  background: #fbf3df;
+  border: 1px solid #ecd9a6;
+  border-radius: var(--mp-r-card);
+}
+
+.gap-flag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  flex: none;
+  border-radius: 50%;
+  background: #cf9b34;
+}
+
+/* ---- duplicate-submission warning (Story 10): red, one-click override ---- */
+.dup-warn {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  font: 600 11.5px/1.45 var(--mp-font);
+  color: #7a4636;
+  background: var(--mp-red-100);
+  border: 1px solid var(--mp-red-300);
+  border-radius: var(--mp-r-card);
+}
+
+.dup-warn::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--mp-red-600);
+}
+
 /* ---- fill report: one white card, three collapsible buckets ---- */
 
 .report-card {

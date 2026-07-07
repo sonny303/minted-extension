@@ -72,6 +72,7 @@
           <div id="provider-name" class="provider-name"></div>
           <div id="provider-npi" class="provider-npi"></div>
           <div id="provider-meta" class="provider-meta"></div>
+          <dl id="provider-ids" class="ids" hidden></dl>
         </div>
 
         <div id="fill-section" hidden>
@@ -87,6 +88,7 @@
               <span id="case-status" class="pill" hidden></span>
             </div>
             <select id="case-select"></select>
+            <p id="case-note" class="case-note" hidden></p>
           </div>
 
           <p id="portal-status" class="banner"></p>
@@ -101,9 +103,30 @@
               <div id="fill-manual" class="bucket bucket-manual" hidden></div>
             </div>
             <div id="fill-event-warn" class="error" hidden></div>
+            <div id="gap-flag" class="gap-flag" hidden></div>
+            <div id="submit-details" hidden>
+              <div class="field submit-field">
+                <label for="payer-ref-input">Payer reference / submission ID</label>
+                <input
+                  id="payer-ref-input"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Optional — confirmation or tracking #"
+                />
+              </div>
+              <div class="field submit-field">
+                <label for="wip-note-input">Note</label>
+                <textarea
+                  id="wip-note-input"
+                  rows="2"
+                  placeholder="Optional — anything worth logging with this submission"
+                ></textarea>
+              </div>
+            </div>
             <p id="submit-hint" class="btn-note" hidden>
               Submit the form on the portal yourself, then log it to the case:
             </p>
+            <div id="dup-warn" class="dup-warn" hidden></div>
             <button id="mark-submitted" class="secondary" type="button" hidden>Mark submitted</button>
             <div id="submit-status" class="logged" hidden></div>
           </div>
