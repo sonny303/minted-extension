@@ -1,71 +1,137 @@
-/* Minted Panel side-panel styling, from the design doc "Minted Panel Filler —
-   Side Panel States" (spec 1k). Figtree is self-hosted from /fonts — the
-   panel never makes an external font request. It is a design-approved
-   stand-in; swap the woff2 files if a licensed brand font arrives. */
+/* Minted Panel side-panel styling. Instrument Sans is self-hosted from /fonts
+   (the same four static weights the app ships), so the panel matches the app's
+   type and never makes an external font request. Swap the woff2 files if a
+   licensed brand font arrives. */
 
-/* latin */
 @font-face {
-  font-family: "Figtree";
+  font-family: "Instrument Sans";
   font-style: normal;
-  font-weight: 300 900;
+  font-weight: 400;
   font-display: swap;
-  src: url("/fonts/figtree-latin.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
-    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  src: url("/fonts/instrument-sans-latin-400-normal.woff2") format("woff2");
 }
-/* latin-ext */
 @font-face {
-  font-family: "Figtree";
+  font-family: "Instrument Sans";
   font-style: normal;
-  font-weight: 300 900;
+  font-weight: 500;
   font-display: swap;
-  src: url("/fonts/figtree-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
-    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
-    U+2C60-2C7F, U+A720-A7FF;
+  src: url("/fonts/instrument-sans-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/instrument-sans-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/instrument-sans-latin-700-normal.woff2") format("woff2");
 }
 
-/* Color, type, and geometry tokens — pasted from the design spec (1k). */
+/* Design tokens — aligned to the Minted Panel app (the source of truth). The
+   canonical block below mirrors `mintedpanel/src/styles/tokens.css` name-for-
+   name and value-for-value; the legacy green/cream/line/ink token names the
+   panel CSS was originally written against are retained as aliases pointing at
+   the canonical tokens, so every existing selector now resolves to a Minted
+   Panel value while the markup and class structure stay untouched. */
 :root {
-  --mp-font: "Figtree", -apple-system, "Segoe UI", sans-serif;
-  --mp-mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --mp-green-950: #14291f;
-  --mp-green-900: #173a2c;
+  /* ---- Canonical Minted Panel tokens (names + values from the app) ---- */
+
+  /* Type families. Instrument Sans is self-hosted (see the @font-face blocks);
+     Geist Mono is the app's mono but is not bundled here, so the mono stack
+     falls back to the system monospace (mono is used only for digit-only
+     NPI/ID readouts, where the difference is imperceptible). */
+  --mp-font: "Instrument Sans", "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mp-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surfaces */
+  --mp-sidebar: #0c2a1d;
+  --mp-app: #f5f6f5;
+  --mp-card: #ffffff;
+  --mp-border: #e5e8e6;
+  --mp-muted: #eff1ef;
+  --mp-primary: #164a2f;
+  --mp-primary-hover: #1d5c3c;
+  --mp-primary-tint: #e4efe7;
+
+  /* Ink */
+  --mp-ink: #182b20;
+  --mp-ink-secondary: #5b6b60;
+  --mp-ink-faint: #99a49b;
+
+  /* Status hues */
+  --mp-ok: #059669;
+  --mp-info: #2563eb;
+  --mp-warn: #d97706;
+  --mp-danger: #dc2626;
+  --mp-pending: #0891b2;
+  --mp-neutral: #9ca3af;
+
+  /* Status tints — the panel's `color-mix(hue 12–14%, white)` pill/badge fills */
+  --mp-ok-tint: color-mix(in srgb, var(--mp-ok) 12%, white);
+  --mp-info-tint: color-mix(in srgb, var(--mp-info) 12%, white);
+  --mp-warn-tint: color-mix(in srgb, var(--mp-warn) 12%, white);
+  --mp-danger-tint: color-mix(in srgb, var(--mp-danger) 12%, white);
+  --mp-pending-tint: color-mix(in srgb, var(--mp-pending) 12%, white);
+  --mp-neutral-tint: color-mix(in srgb, var(--mp-neutral) 14%, white);
+
+  /* Radius. The panel's shadcn controls (button/input/select/card) render at
+     `rounded-md` = 4px; nav/tiles use --mp-radius-sm = 6px. Flip
+     --mp-radius-control to 6px for a slightly softer panel. */
+  --mp-radius-sm: 6px;
+  --mp-radius-md: 8px;
+  --mp-radius-lg: 10px;
+  --mp-radius-control: 4px;
+  --mp-radius-pill: 999px;
+
+  /* Shadows (panel values, keyed off the ink hue) */
+  --mp-shadow-sm: 0 1px 2px rgba(24, 43, 32, 0.06);
+  --mp-shadow-md: 0 2px 8px rgba(24, 43, 32, 0.08);
+  --mp-shadow-lg: 0 8px 24px rgba(24, 43, 32, 0.14);
+  /* Focus mirrors the app's `focus-visible:ring-1 ring-ring` (1px primary) */
+  --mp-focus: 0 0 0 1px var(--mp-primary);
+
+  /* ---- Legacy aliases → canonical tokens (keep existing selectors working) ---- */
+  --mp-green-950: var(--mp-sidebar);
+  --mp-green-900: var(--mp-primary);
   --mp-green-800: #1e4b39;
-  --mp-green-700: #2e6249;
-  --mp-green-600: #2e7d53;
-  --mp-mint-300: #c9e0d0;
-  --mp-mint-200: #dfede3;
-  --mp-mint-150: #ddebe0;
-  --mp-cream-50: #f7f5f0;
-  --mp-cream-100: #f0ede3;
-  --mp-line-200: #e3e0d6;
-  --mp-line-100: #eeebe1;
-  --mp-line-dash: #d6d2c4;
-  --mp-ink-900: #1a2b23;
-  --mp-ink-600: #5f6e64;
-  --mp-ink-400: #96a29a;
-  --mp-label: #7c877e;
-  --mp-disabled-bg: #e8e5da;
-  --mp-disabled-ink: #a5a296;
-  --mp-blue-100: #d9edf6;
-  --mp-blue-700: #2379a1;
-  --mp-indigo-100: #e4e7fb;
-  --mp-indigo-700: #4a5cd0;
-  --mp-grn-100: #d9efe1;
-  --mp-grn-700: #257a50;
-  --mp-slate-100: #e9eef0;
-  --mp-slate-700: #66756e;
-  --mp-red-100: #fbe9e4;
-  --mp-red-300: #f0d2c9;
-  --mp-red-600: #c2452f;
-  --mp-red-800: #a63a26;
-  --mp-r-ctl: 8px;
-  --mp-r-card: 10px;
-  --mp-r-btn: 10px;
-  --mp-shadow-menu: 0 8px 24px rgba(20, 41, 31, 0.14);
-  --mp-focus: 0 0 0 2px rgba(46, 98, 73, 0.16);
-  --mp-shadow-ctl: 0 1px 1px rgba(20, 41, 31, 0.03);
+  --mp-green-700: var(--mp-primary);
+  --mp-green-600: var(--mp-ok);
+  --mp-mint-300: color-mix(in srgb, var(--mp-primary) 22%, white);
+  --mp-mint-200: var(--mp-primary-tint);
+  --mp-mint-150: var(--mp-primary-tint);
+  --mp-cream-50: var(--mp-app);
+  --mp-cream-100: var(--mp-muted);
+  --mp-line-200: var(--mp-border);
+  --mp-line-100: color-mix(in srgb, var(--mp-border) 55%, white);
+  --mp-line-dash: #cfd5d0;
+  --mp-ink-900: var(--mp-ink);
+  --mp-ink-600: var(--mp-ink-secondary);
+  --mp-ink-400: var(--mp-ink-faint);
+  --mp-label: color-mix(in srgb, var(--mp-ink-secondary) 62%, white);
+  --mp-disabled-bg: var(--mp-muted);
+  --mp-disabled-ink: var(--mp-ink-faint);
+  --mp-blue-100: var(--mp-info-tint);
+  --mp-blue-700: var(--mp-info);
+  --mp-indigo-100: var(--mp-pending-tint);
+  --mp-indigo-700: var(--mp-pending);
+  --mp-grn-100: var(--mp-ok-tint);
+  --mp-grn-700: var(--mp-ok);
+  --mp-slate-100: var(--mp-neutral-tint);
+  --mp-slate-700: var(--mp-ink-secondary);
+  --mp-red-100: var(--mp-danger-tint);
+  --mp-red-300: color-mix(in srgb, var(--mp-danger) 28%, white);
+  --mp-red-600: var(--mp-danger);
+  --mp-red-800: color-mix(in srgb, var(--mp-danger) 82%, black);
+  --mp-r-ctl: var(--mp-radius-control);
+  --mp-r-card: var(--mp-radius-control);
+  --mp-r-btn: var(--mp-radius-control);
+  --mp-shadow-menu: var(--mp-shadow-lg);
+  --mp-shadow-ctl: var(--mp-shadow-sm);
 }
 
 * {
@@ -92,11 +158,12 @@ body {
   margin: 0;
   font-family: var(--mp-font);
   font-size: 13px;
-  color: var(--mp-ink-900);
-  background: var(--mp-cream-50);
+  color: var(--mp-ink);
+  background: var(--mp-app);
 }
 
-/* ---- header: dark green bar with the logo tile and the account chip ---- */
+/* ---- header: the app's dark-green sidebar surface with a white logo tile and
+   the account line (the app's sidebar top, condensed into the panel bar) ---- */
 
 .header {
   display: flex;
@@ -104,7 +171,7 @@ body {
   gap: 9px;
   height: 50px;
   padding: 0 14px;
-  background: var(--mp-green-950);
+  background: var(--mp-sidebar);
   flex: none;
 }
 
@@ -115,7 +182,7 @@ body {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: #f5f3ec;
+  color: #ffffff;
   white-space: nowrap;
 }
 
@@ -123,10 +190,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: #f5f3ec;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--mp-radius-sm);
+  background: #ffffff;
   flex: none;
 }
 
@@ -140,7 +207,7 @@ body {
   text-align: right;
   font-size: 11px;
   font-weight: 500;
-  color: rgba(245, 243, 236, 0.62);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* The account line lives in the header but belongs to the signed-in view. */
@@ -149,7 +216,7 @@ body:has(#view-main[hidden]) .account {
 }
 
 .header-link {
-  color: rgba(245, 243, 236, 0.85);
+  color: rgba(255, 255, 255, 0.85);
   flex: none;
 }
 
@@ -207,23 +274,25 @@ label {
   margin-bottom: 0;
 }
 
+/* Inputs & selects — the app's shadcn control: 36px, cool border, 4px radius,
+   subtle shadow, crisp 1px primary focus ring. */
 input,
 select {
   width: 100%;
   height: 36px;
   padding: 0 11px;
   font: 500 13px var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
-  border-radius: var(--mp-r-ctl);
-  box-shadow: var(--mp-shadow-ctl);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
 }
 
 select {
   appearance: none;
   padding-right: 30px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%2396A29A' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%2399A49B' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 11px center;
   background-size: 10px 10px;
@@ -231,13 +300,15 @@ select {
 }
 
 /* Read-only resolution (sole org, sole location) renders as a quiet chip:
-   cream fill, muted text, no chevron. Loading/empty selects share the look. */
+   muted fill, secondary text, no chevron. Loading/empty selects share the look.
+   Kept as a display chip (not the app's faded opacity-50) because these
+   selects are intentionally read-only value displays, not dead controls. */
 select:disabled {
-  background: var(--mp-cream-100);
+  background: var(--mp-muted);
   background-image: none;
-  border-color: #e7e3d6;
+  border-color: var(--mp-border);
   box-shadow: none;
-  color: #3d4a42;
+  color: var(--mp-ink-secondary);
   cursor: default;
   opacity: 1;
 }
@@ -245,47 +316,51 @@ select:disabled {
 input:focus,
 select:focus {
   outline: none;
-  border-color: var(--mp-green-700);
+  border-color: var(--mp-primary);
   box-shadow: var(--mp-focus);
 }
 
 input::placeholder {
   font-weight: 400;
-  color: var(--mp-ink-400);
+  color: var(--mp-ink-faint);
 }
 
 /* ---- buttons ---- */
 
+/* Primary button — the app's shadcn default variant: solid primary green,
+   white label, medium weight, subtle shadow, colors transition on hover. The
+   panel keeps its taller 44px full-width CTA target. */
 button.primary {
   width: 100%;
   height: 44px;
   padding: 0 12px;
-  font: 600 14px var(--mp-font);
-  color: #f5f3ec;
-  background: var(--mp-green-900);
-  border: 1px solid var(--mp-green-900);
+  font: 500 14px var(--mp-font);
+  color: #ffffff;
+  background: var(--mp-primary);
+  border: 1px solid var(--mp-primary);
   border-radius: var(--mp-r-btn);
+  box-shadow: var(--mp-shadow-sm);
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--mp-green-950);
-  border-color: var(--mp-green-950);
+  background: var(--mp-primary-hover);
+  border-color: var(--mp-primary-hover);
 }
 
+/* Disabled mirrors the app's disabled:opacity-50 + not-allowed cursor. */
 button.primary:disabled {
-  background: var(--mp-disabled-bg);
-  border-color: var(--mp-disabled-bg);
-  color: var(--mp-disabled-ink);
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* While a fill is running the button is disabled but stays in the primary
-   dark green (per the design's 1e state), with a spinner. */
+   green (per the design's 1e state), fully opaque, with a spinner. */
 button.primary.filling:disabled {
-  background: var(--mp-green-900);
-  border-color: var(--mp-green-900);
-  color: #f5f3ec;
+  opacity: 1;
 }
 
 button.primary.filling::before {
@@ -296,8 +371,8 @@ button.primary.filling::before {
   margin-right: 9px;
   vertical-align: -2px;
   border-radius: 50%;
-  border: 2px solid rgba(245, 243, 236, 0.32);
-  border-top-color: #f5f3ec;
+  border: 2px solid rgba(255, 255, 255, 0.32);
+  border-top-color: #ffffff;
   animation: mp-spin 0.8s linear infinite;
 }
 
@@ -307,37 +382,41 @@ button.primary.filling::before {
   }
 }
 
+/* Secondary button — the app's outline/secondary variant: white surface, cool
+   border, subtle shadow, hover to the muted fill. */
 button.secondary {
   width: 100%;
   height: 38px;
   padding: 0 12px;
-  font: 600 13px var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid #d8d4c8;
-  border-radius: 9px;
+  font: 500 13px var(--mp-font);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 button.secondary:hover:not(:disabled) {
-  background: #fbfaf6;
-  border-color: #c6c2b4;
+  background: var(--mp-muted);
 }
 
 button.secondary:disabled {
-  color: #aba89b;
-  border-color: var(--mp-line-200);
-  background: transparent;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 button.link {
   padding: 0;
-  font: 600 11px var(--mp-font);
-  color: var(--mp-green-700);
+  font: 500 11px var(--mp-font);
+  color: var(--mp-primary);
   background: none;
   border: none;
   cursor: pointer;
+  text-underline-offset: 4px;
 }
 
 button.link:hover {
@@ -409,12 +488,12 @@ button.link:hover {
   align-items: flex-start;
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: var(--mp-cream-100);
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-muted);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
   font-size: 11.5px;
   line-height: 1.45;
-  color: var(--mp-ink-600);
+  color: var(--mp-ink-secondary);
 }
 
 .banner::before {
@@ -423,20 +502,21 @@ button.link:hover {
   height: 7px;
   margin-top: 4px;
   border-radius: 50%;
-  background: #a8a297;
+  background: var(--mp-neutral);
   flex: none;
 }
 
 .banner.detected {
-  background: var(--mp-mint-200);
+  background: var(--mp-primary-tint);
   border-color: var(--mp-mint-300);
-  color: #4e6357;
+  color: var(--mp-primary);
 }
 
 .banner.detected::before {
-  background: var(--mp-green-600);
+  background: var(--mp-ok);
 }
 
+/* Error notice — the app's red box (bg/border/text #FEF2F2/#FCA5A5/#B91C1C). */
 .error {
   display: flex;
   gap: 9px;
@@ -445,9 +525,9 @@ button.link:hover {
   padding: 11px 12px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #7a4636;
-  border: 1px solid var(--mp-red-300);
-  background: var(--mp-red-100);
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
   border-radius: var(--mp-r-card);
 }
 
@@ -457,7 +537,7 @@ button.link:hover {
   height: 7px;
   margin-top: 4px;
   border-radius: 50%;
-  background: var(--mp-red-600);
+  background: var(--mp-danger);
   flex: none;
 }
 
@@ -468,11 +548,11 @@ button.link:hover {
   align-items: flex-start;
   margin-bottom: 12px;
   padding: 11px 12px;
-  background: var(--mp-mint-200);
+  background: var(--mp-primary-tint);
   border: 1px solid var(--mp-mint-300);
   border-radius: var(--mp-r-card);
   font: 700 12.5px/1.3 var(--mp-font);
-  color: #17402d;
+  color: var(--mp-primary);
 }
 
 .logged::before {
@@ -481,19 +561,18 @@ button.link:hover {
   height: 16px;
   margin-top: -1px;
   flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%232E7D53'/%3E%3Cpath d='M4.5 8.4l2.2 2.2 4.8-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%23059669'/%3E%3Cpath d='M4.5 8.4l2.2 2.2 4.8-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 16px no-repeat;
 }
 
-/* ---- provider card ---- */
+/* ---- provider card — the app's Card: cool border, 4px radius, no shadow ---- */
 
 .card {
   margin-bottom: 12px;
   padding: 11px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .provider-name {
@@ -612,10 +691,9 @@ button.link:hover {
   gap: 9px;
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .case-context-row {
@@ -664,33 +742,32 @@ button.link:hover {
   min-height: 52px;
   padding: 8px 11px;
   font: 500 12.5px/1.4 var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
-  border-radius: var(--mp-r-ctl);
-  box-shadow: var(--mp-shadow-ctl);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
   resize: vertical;
 }
 
 .submit-field textarea:focus {
   outline: none;
-  border-color: var(--mp-green-700);
+  border-color: var(--mp-primary);
   box-shadow: var(--mp-focus);
 }
 
 .submit-field textarea::placeholder {
   font-weight: 400;
-  color: var(--mp-ink-400);
+  color: var(--mp-ink-faint);
 }
 
 /* ---- coverage sensor (Epic 3a): read-only pre-fill data-gap panel ---- */
 .coverage {
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .coverage-count {
@@ -727,7 +804,7 @@ button.link:hover {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #cf9b34;
+  background: var(--mp-warn);
 }
 
 .coverage-gap-label {
@@ -742,7 +819,8 @@ button.link:hover {
   color: var(--mp-ink-600);
 }
 
-/* ---- field-gap flag (Story 9): amber advisory; submitting stays allowed ---- */
+/* ---- field-gap flag (Story 9): the app's amber note box (bg/border/text
+   #FEF3C7/#FDE68A/#92400E); submitting stays allowed ---- */
 .gap-flag {
   display: flex;
   gap: 9px;
@@ -751,9 +829,9 @@ button.link:hover {
   padding: 10px 12px;
   font-size: 11.5px;
   line-height: 1.45;
-  color: #7a5b1e;
-  background: #fbf3df;
-  border: 1px solid #ecd9a6;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
   border-radius: var(--mp-r-card);
 }
 
@@ -764,10 +842,11 @@ button.link:hover {
   margin-top: 4px;
   flex: none;
   border-radius: 50%;
-  background: #cf9b34;
+  background: var(--mp-warn);
 }
 
-/* ---- duplicate-submission warning (Story 10): red, one-click override ---- */
+/* ---- duplicate-submission warning (Story 10): the app's red box, one-click
+   override ---- */
 .dup-warn {
   display: flex;
   gap: 9px;
@@ -775,9 +854,9 @@ button.link:hover {
   margin: 0 0 10px;
   padding: 10px 12px;
   font: 600 11.5px/1.45 var(--mp-font);
-  color: #7a4636;
-  background: var(--mp-red-100);
-  border: 1px solid var(--mp-red-300);
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
   border-radius: var(--mp-r-card);
 }
 
@@ -788,15 +867,15 @@ button.link:hover {
   margin-top: 4px;
   flex: none;
   border-radius: 50%;
-  background: var(--mp-red-600);
+  background: var(--mp-danger);
 }
 
 /* ---- fill report: one white card, three collapsible buckets ---- */
 
 .report-card {
   margin-bottom: 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
   overflow: hidden;
 }
@@ -831,7 +910,7 @@ button.link:hover {
 }
 
 .bucket summary:hover {
-  background: #fbfaf6;
+  background: var(--mp-muted);
 }
 
 .bucket summary::before {
@@ -839,7 +918,7 @@ button.link:hover {
   width: 9px;
   height: 9px;
   flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3 1.8l3.4 3.2L3 8.2' fill='none' stroke='%2396A29A' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3 1.8l3.4 3.2L3 8.2' fill='none' stroke='%2399A49B' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 9px no-repeat;
   transition: transform 0.15s ease;
 }
