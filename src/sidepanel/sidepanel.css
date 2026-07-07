@@ -488,12 +488,12 @@ button.link:hover {
   align-items: flex-start;
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: var(--mp-cream-100);
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-muted);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
   font-size: 11.5px;
   line-height: 1.45;
-  color: var(--mp-ink-600);
+  color: var(--mp-ink-secondary);
 }
 
 .banner::before {
@@ -502,20 +502,21 @@ button.link:hover {
   height: 7px;
   margin-top: 4px;
   border-radius: 50%;
-  background: #a8a297;
+  background: var(--mp-neutral);
   flex: none;
 }
 
 .banner.detected {
-  background: var(--mp-mint-200);
+  background: var(--mp-primary-tint);
   border-color: var(--mp-mint-300);
-  color: #4e6357;
+  color: var(--mp-primary);
 }
 
 .banner.detected::before {
-  background: var(--mp-green-600);
+  background: var(--mp-ok);
 }
 
+/* Error notice — the app's red box (bg/border/text #FEF2F2/#FCA5A5/#B91C1C). */
 .error {
   display: flex;
   gap: 9px;
@@ -524,9 +525,9 @@ button.link:hover {
   padding: 11px 12px;
   font-size: 11.5px;
   line-height: 1.5;
-  color: #7a4636;
-  border: 1px solid var(--mp-red-300);
-  background: var(--mp-red-100);
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
   border-radius: var(--mp-r-card);
 }
 
@@ -536,7 +537,7 @@ button.link:hover {
   height: 7px;
   margin-top: 4px;
   border-radius: 50%;
-  background: var(--mp-red-600);
+  background: var(--mp-danger);
   flex: none;
 }
 
@@ -547,11 +548,11 @@ button.link:hover {
   align-items: flex-start;
   margin-bottom: 12px;
   padding: 11px 12px;
-  background: var(--mp-mint-200);
+  background: var(--mp-primary-tint);
   border: 1px solid var(--mp-mint-300);
   border-radius: var(--mp-r-card);
   font: 700 12.5px/1.3 var(--mp-font);
-  color: #17402d;
+  color: var(--mp-primary);
 }
 
 .logged::before {
@@ -560,19 +561,18 @@ button.link:hover {
   height: 16px;
   margin-top: -1px;
   flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%232E7D53'/%3E%3Cpath d='M4.5 8.4l2.2 2.2 4.8-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%23059669'/%3E%3Cpath d='M4.5 8.4l2.2 2.2 4.8-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 16px no-repeat;
 }
 
-/* ---- provider card ---- */
+/* ---- provider card — the app's Card: cool border, 4px radius, no shadow ---- */
 
 .card {
   margin-bottom: 12px;
   padding: 11px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .provider-name {
@@ -691,10 +691,9 @@ button.link:hover {
   gap: 9px;
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .case-context-row {
@@ -766,10 +765,9 @@ button.link:hover {
 .coverage {
   margin: 2px 0 12px;
   padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  box-shadow: var(--mp-shadow-ctl);
 }
 
 .coverage-count {
@@ -806,7 +804,7 @@ button.link:hover {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #cf9b34;
+  background: var(--mp-warn);
 }
 
 .coverage-gap-label {
@@ -821,7 +819,8 @@ button.link:hover {
   color: var(--mp-ink-600);
 }
 
-/* ---- field-gap flag (Story 9): amber advisory; submitting stays allowed ---- */
+/* ---- field-gap flag (Story 9): the app's amber note box (bg/border/text
+   #FEF3C7/#FDE68A/#92400E); submitting stays allowed ---- */
 .gap-flag {
   display: flex;
   gap: 9px;
@@ -830,9 +829,9 @@ button.link:hover {
   padding: 10px 12px;
   font-size: 11.5px;
   line-height: 1.45;
-  color: #7a5b1e;
-  background: #fbf3df;
-  border: 1px solid #ecd9a6;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
   border-radius: var(--mp-r-card);
 }
 
@@ -843,10 +842,11 @@ button.link:hover {
   margin-top: 4px;
   flex: none;
   border-radius: 50%;
-  background: #cf9b34;
+  background: var(--mp-warn);
 }
 
-/* ---- duplicate-submission warning (Story 10): red, one-click override ---- */
+/* ---- duplicate-submission warning (Story 10): the app's red box, one-click
+   override ---- */
 .dup-warn {
   display: flex;
   gap: 9px;
@@ -854,9 +854,9 @@ button.link:hover {
   margin: 0 0 10px;
   padding: 10px 12px;
   font: 600 11.5px/1.45 var(--mp-font);
-  color: #7a4636;
-  background: var(--mp-red-100);
-  border: 1px solid var(--mp-red-300);
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
   border-radius: var(--mp-r-card);
 }
 
@@ -867,15 +867,15 @@ button.link:hover {
   margin-top: 4px;
   flex: none;
   border-radius: 50%;
-  background: var(--mp-red-600);
+  background: var(--mp-danger);
 }
 
 /* ---- fill report: one white card, three collapsible buckets ---- */
 
 .report-card {
   margin-bottom: 12px;
-  background: #ffffff;
-  border: 1px solid var(--mp-line-200);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
   overflow: hidden;
 }
@@ -910,7 +910,7 @@ button.link:hover {
 }
 
 .bucket summary:hover {
-  background: #fbfaf6;
+  background: var(--mp-muted);
 }
 
 .bucket summary::before {
@@ -918,7 +918,7 @@ button.link:hover {
   width: 9px;
   height: 9px;
   flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3 1.8l3.4 3.2L3 8.2' fill='none' stroke='%2396A29A' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3 1.8l3.4 3.2L3 8.2' fill='none' stroke='%2399A49B' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 9px no-repeat;
   transition: transform 0.15s ease;
 }
