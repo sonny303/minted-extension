@@ -25,47 +25,106 @@
     U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* Color, type, and geometry tokens — pasted from the design spec (1k). */
+/* Design tokens — aligned to the Minted Panel app (the source of truth). The
+   canonical block below mirrors `mintedpanel/src/styles/tokens.css` name-for-
+   name and value-for-value; the legacy green/cream/line/ink token names the
+   panel CSS was originally written against are retained as aliases pointing at
+   the canonical tokens, so every existing selector now resolves to a Minted
+   Panel value while the markup and class structure stay untouched. */
 :root {
-  --mp-font: "Figtree", -apple-system, "Segoe UI", sans-serif;
-  --mp-mono: ui-monospace, "SF Mono", Menlo, monospace;
-  --mp-green-950: #14291f;
-  --mp-green-900: #173a2c;
+  /* ---- Canonical Minted Panel tokens (names + values from the app) ---- */
+
+  /* Type families. Instrument Sans is self-hosted (see the @font-face blocks);
+     Geist Mono is the app's mono but is not bundled here, so the mono stack
+     falls back to the system monospace (mono is used only for digit-only
+     NPI/ID readouts, where the difference is imperceptible). */
+  --mp-font: "Figtree", "Instrument Sans", -apple-system, "Segoe UI", sans-serif;
+  --mp-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surfaces */
+  --mp-sidebar: #0c2a1d;
+  --mp-app: #f5f6f5;
+  --mp-card: #ffffff;
+  --mp-border: #e5e8e6;
+  --mp-muted: #eff1ef;
+  --mp-primary: #164a2f;
+  --mp-primary-hover: #1d5c3c;
+  --mp-primary-tint: #e4efe7;
+
+  /* Ink */
+  --mp-ink: #182b20;
+  --mp-ink-secondary: #5b6b60;
+  --mp-ink-faint: #99a49b;
+
+  /* Status hues */
+  --mp-ok: #059669;
+  --mp-info: #2563eb;
+  --mp-warn: #d97706;
+  --mp-danger: #dc2626;
+  --mp-pending: #0891b2;
+  --mp-neutral: #9ca3af;
+
+  /* Status tints — the panel's `color-mix(hue 12–14%, white)` pill/badge fills */
+  --mp-ok-tint: color-mix(in srgb, var(--mp-ok) 12%, white);
+  --mp-info-tint: color-mix(in srgb, var(--mp-info) 12%, white);
+  --mp-warn-tint: color-mix(in srgb, var(--mp-warn) 12%, white);
+  --mp-danger-tint: color-mix(in srgb, var(--mp-danger) 12%, white);
+  --mp-pending-tint: color-mix(in srgb, var(--mp-pending) 12%, white);
+  --mp-neutral-tint: color-mix(in srgb, var(--mp-neutral) 14%, white);
+
+  /* Radius. The panel's shadcn controls (button/input/select/card) render at
+     `rounded-md` = 4px; nav/tiles use --mp-radius-sm = 6px. Flip
+     --mp-radius-control to 6px for a slightly softer panel. */
+  --mp-radius-sm: 6px;
+  --mp-radius-md: 8px;
+  --mp-radius-lg: 10px;
+  --mp-radius-control: 4px;
+  --mp-radius-pill: 999px;
+
+  /* Shadows (panel values, keyed off the ink hue) */
+  --mp-shadow-sm: 0 1px 2px rgba(24, 43, 32, 0.06);
+  --mp-shadow-md: 0 2px 8px rgba(24, 43, 32, 0.08);
+  --mp-shadow-lg: 0 8px 24px rgba(24, 43, 32, 0.14);
+  /* Focus mirrors the app's `focus-visible:ring-1 ring-ring` (1px primary) */
+  --mp-focus: 0 0 0 1px var(--mp-primary);
+
+  /* ---- Legacy aliases → canonical tokens (keep existing selectors working) ---- */
+  --mp-green-950: var(--mp-sidebar);
+  --mp-green-900: var(--mp-primary);
   --mp-green-800: #1e4b39;
-  --mp-green-700: #2e6249;
-  --mp-green-600: #2e7d53;
-  --mp-mint-300: #c9e0d0;
-  --mp-mint-200: #dfede3;
-  --mp-mint-150: #ddebe0;
-  --mp-cream-50: #f7f5f0;
-  --mp-cream-100: #f0ede3;
-  --mp-line-200: #e3e0d6;
-  --mp-line-100: #eeebe1;
-  --mp-line-dash: #d6d2c4;
-  --mp-ink-900: #1a2b23;
-  --mp-ink-600: #5f6e64;
-  --mp-ink-400: #96a29a;
-  --mp-label: #7c877e;
-  --mp-disabled-bg: #e8e5da;
-  --mp-disabled-ink: #a5a296;
-  --mp-blue-100: #d9edf6;
-  --mp-blue-700: #2379a1;
-  --mp-indigo-100: #e4e7fb;
-  --mp-indigo-700: #4a5cd0;
-  --mp-grn-100: #d9efe1;
-  --mp-grn-700: #257a50;
-  --mp-slate-100: #e9eef0;
-  --mp-slate-700: #66756e;
-  --mp-red-100: #fbe9e4;
-  --mp-red-300: #f0d2c9;
-  --mp-red-600: #c2452f;
-  --mp-red-800: #a63a26;
-  --mp-r-ctl: 8px;
-  --mp-r-card: 10px;
-  --mp-r-btn: 10px;
-  --mp-shadow-menu: 0 8px 24px rgba(20, 41, 31, 0.14);
-  --mp-focus: 0 0 0 2px rgba(46, 98, 73, 0.16);
-  --mp-shadow-ctl: 0 1px 1px rgba(20, 41, 31, 0.03);
+  --mp-green-700: var(--mp-primary);
+  --mp-green-600: var(--mp-ok);
+  --mp-mint-300: color-mix(in srgb, var(--mp-primary) 22%, white);
+  --mp-mint-200: var(--mp-primary-tint);
+  --mp-mint-150: var(--mp-primary-tint);
+  --mp-cream-50: var(--mp-app);
+  --mp-cream-100: var(--mp-muted);
+  --mp-line-200: var(--mp-border);
+  --mp-line-100: color-mix(in srgb, var(--mp-border) 55%, white);
+  --mp-line-dash: #cfd5d0;
+  --mp-ink-900: var(--mp-ink);
+  --mp-ink-600: var(--mp-ink-secondary);
+  --mp-ink-400: var(--mp-ink-faint);
+  --mp-label: color-mix(in srgb, var(--mp-ink-secondary) 62%, white);
+  --mp-disabled-bg: var(--mp-muted);
+  --mp-disabled-ink: var(--mp-ink-faint);
+  --mp-blue-100: var(--mp-info-tint);
+  --mp-blue-700: var(--mp-info);
+  --mp-indigo-100: var(--mp-pending-tint);
+  --mp-indigo-700: var(--mp-pending);
+  --mp-grn-100: var(--mp-ok-tint);
+  --mp-grn-700: var(--mp-ok);
+  --mp-slate-100: var(--mp-neutral-tint);
+  --mp-slate-700: var(--mp-ink-secondary);
+  --mp-red-100: var(--mp-danger-tint);
+  --mp-red-300: color-mix(in srgb, var(--mp-danger) 28%, white);
+  --mp-red-600: var(--mp-danger);
+  --mp-red-800: color-mix(in srgb, var(--mp-danger) 82%, black);
+  --mp-r-ctl: var(--mp-radius-control);
+  --mp-r-card: var(--mp-radius-control);
+  --mp-r-btn: var(--mp-radius-control);
+  --mp-shadow-menu: var(--mp-shadow-lg);
+  --mp-shadow-ctl: var(--mp-shadow-sm);
 }
 
 * {
