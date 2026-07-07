@@ -633,6 +633,65 @@ button.link:hover {
   color: var(--mp-ink-400);
 }
 
+/* ---- coverage sensor (Epic 3a): read-only pre-fill data-gap panel ---- */
+.coverage {
+  margin: 2px 0 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-r-card);
+  box-shadow: var(--mp-shadow-ctl);
+}
+
+.coverage-count {
+  margin: 0;
+  font: 600 12.5px/1.35 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.coverage-gaps {
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--mp-line-100);
+}
+
+/* No gaps (full coverage): drop the list and its divider entirely. */
+.coverage-gaps:empty {
+  display: none;
+}
+
+.coverage-gaps li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0 4px 12px;
+}
+
+.coverage-gaps li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #cf9b34;
+}
+
+.coverage-gap-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-ink-900);
+}
+
+.coverage-gap-reason {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--mp-ink-600);
+}
+
 /* ---- field-gap flag (Story 9): amber advisory; submitting stays allowed ---- */
 .gap-flag {
   display: flex;

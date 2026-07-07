@@ -9,7 +9,7 @@ import type {
   SubmissionTouch,
   UserOrgMembership,
 } from "./apiTypes";
-import type { FillReportRecord, FillSummary } from "./fill";
+import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -41,6 +41,18 @@ export type BgRequest =
       state: string;
       // The resolved location (user pick or sole facility); null only when
       // the provider has no facilities.
+      facilityId: string | null;
+    }
+  // Read-only coverage sensor (Epic 3a): resolve the same profile + field maps
+  // a fill would fetch for this selection and return "M of N + gaps" WITHOUT
+  // touching the page or logging anything. Carries the fill selection's data
+  // inputs (no tabId — no page is filled).
+  | {
+      type: "GET_FILL_COVERAGE";
+      providerId: string;
+      caseId: string;
+      portalKey: string;
+      state: string;
       facilityId: string | null;
     }
   // The provider's most recent persisted fill report, or null. The panel
@@ -116,6 +128,7 @@ export interface BgResponseMap {
   SET_SELECTED_CASE: null;
   GET_SELECTED_FACILITY: string | null;
   SET_SELECTED_FACILITY: null;
+  GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
   MARK_SUBMITTED: SubmissionTouch;
