@@ -158,11 +158,12 @@ body {
   margin: 0;
   font-family: var(--mp-font);
   font-size: 13px;
-  color: var(--mp-ink-900);
-  background: var(--mp-cream-50);
+  color: var(--mp-ink);
+  background: var(--mp-app);
 }
 
-/* ---- header: dark green bar with the logo tile and the account chip ---- */
+/* ---- header: the app's dark-green sidebar surface with a white logo tile and
+   the account line (the app's sidebar top, condensed into the panel bar) ---- */
 
 .header {
   display: flex;
@@ -170,7 +171,7 @@ body {
   gap: 9px;
   height: 50px;
   padding: 0 14px;
-  background: var(--mp-green-950);
+  background: var(--mp-sidebar);
   flex: none;
 }
 
@@ -181,7 +182,7 @@ body {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: #f5f3ec;
+  color: #ffffff;
   white-space: nowrap;
 }
 
@@ -189,10 +190,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: #f5f3ec;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--mp-radius-sm);
+  background: #ffffff;
   flex: none;
 }
 
@@ -206,7 +207,7 @@ body {
   text-align: right;
   font-size: 11px;
   font-weight: 500;
-  color: rgba(245, 243, 236, 0.62);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* The account line lives in the header but belongs to the signed-in view. */
@@ -215,7 +216,7 @@ body:has(#view-main[hidden]) .account {
 }
 
 .header-link {
-  color: rgba(245, 243, 236, 0.85);
+  color: rgba(255, 255, 255, 0.85);
   flex: none;
 }
 
