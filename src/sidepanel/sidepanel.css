@@ -604,6 +604,56 @@ button.link:hover {
   color: var(--mp-ink-600);
 }
 
+/* ---- case context block (Epic 3d): reference id(s) + latest note/touch for
+   the selected case, read-only and informational ---- */
+.case-context {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 2px 0 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-r-card);
+  box-shadow: var(--mp-shadow-ctl);
+}
+
+.case-context-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.case-context-label {
+  font: 700 9.5px/1.4 var(--mp-font);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--mp-label);
+}
+
+.case-context-ref-value {
+  font: 500 12px var(--mp-mono);
+  color: var(--mp-ink-900);
+  word-break: break-word;
+}
+
+.case-context-note-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mp-ink-600);
+}
+
+.case-context-meta {
+  font-size: 11px;
+  color: var(--mp-ink-400);
+}
+
+.case-context-touch-value {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--mp-ink-600);
+}
+
 /* ---- submit write-back fields (Stories 5/6): reference + WIP note ---- */
 .submit-field {
   margin: 0 0 10px;

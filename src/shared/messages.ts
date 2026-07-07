@@ -3,6 +3,7 @@
 // call; the panel is UI only. Access tokens never appear in any message
 // payload.
 import type {
+  CaseContext,
   CaseListItem,
   ProviderListItem,
   ProviderProfileFacility,
@@ -23,6 +24,9 @@ export type BgRequest =
   | { type: "SET_ACTIVE_ORG"; orgId: string | null }
   | { type: "LIST_PROVIDERS" }
   | { type: "LIST_CASES"; providerId: string }
+  // Epic 3d: the selected case's reference number(s), latest note, and latest
+  // touch — a read-only, org-scoped fetch to show case context in the panel.
+  | { type: "GET_CASE_CONTEXT"; caseId: string }
   // The provider's facility set for the location picker, projected from the
   // profile response — the panel never receives the token payload itself.
   | { type: "GET_PROVIDER_FACILITIES"; providerId: string }
@@ -121,6 +125,7 @@ export interface BgResponseMap {
   SET_ACTIVE_ORG: null;
   LIST_PROVIDERS: ProviderListItem[];
   LIST_CASES: CaseListItem[];
+  GET_CASE_CONTEXT: CaseContext;
   GET_PROVIDER_FACILITIES: ProviderFacilitiesInfo;
   GET_SELECTED_PROVIDER: string | null;
   SET_SELECTED_PROVIDER: null;
