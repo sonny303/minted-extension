@@ -322,36 +322,40 @@ input::placeholder {
 
 /* ---- buttons ---- */
 
+/* Primary button — the app's shadcn default variant: solid primary green,
+   white label, medium weight, subtle shadow, colors transition on hover. The
+   panel keeps its taller 44px full-width CTA target. */
 button.primary {
   width: 100%;
   height: 44px;
   padding: 0 12px;
-  font: 600 14px var(--mp-font);
-  color: #f5f3ec;
-  background: var(--mp-green-900);
-  border: 1px solid var(--mp-green-900);
+  font: 500 14px var(--mp-font);
+  color: #ffffff;
+  background: var(--mp-primary);
+  border: 1px solid var(--mp-primary);
   border-radius: var(--mp-r-btn);
+  box-shadow: var(--mp-shadow-sm);
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--mp-green-950);
-  border-color: var(--mp-green-950);
+  background: var(--mp-primary-hover);
+  border-color: var(--mp-primary-hover);
 }
 
+/* Disabled mirrors the app's disabled:opacity-50 + not-allowed cursor. */
 button.primary:disabled {
-  background: var(--mp-disabled-bg);
-  border-color: var(--mp-disabled-bg);
-  color: var(--mp-disabled-ink);
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* While a fill is running the button is disabled but stays in the primary
-   dark green (per the design's 1e state), with a spinner. */
+   green (per the design's 1e state), fully opaque, with a spinner. */
 button.primary.filling:disabled {
-  background: var(--mp-green-900);
-  border-color: var(--mp-green-900);
-  color: #f5f3ec;
+  opacity: 1;
 }
 
 button.primary.filling::before {
@@ -362,8 +366,8 @@ button.primary.filling::before {
   margin-right: 9px;
   vertical-align: -2px;
   border-radius: 50%;
-  border: 2px solid rgba(245, 243, 236, 0.32);
-  border-top-color: #f5f3ec;
+  border: 2px solid rgba(255, 255, 255, 0.32);
+  border-top-color: #ffffff;
   animation: mp-spin 0.8s linear infinite;
 }
 
@@ -373,37 +377,41 @@ button.primary.filling::before {
   }
 }
 
+/* Secondary button — the app's outline/secondary variant: white surface, cool
+   border, subtle shadow, hover to the muted fill. */
 button.secondary {
   width: 100%;
   height: 38px;
   padding: 0 12px;
-  font: 600 13px var(--mp-font);
-  color: var(--mp-ink-900);
-  background: #ffffff;
-  border: 1px solid #d8d4c8;
-  border-radius: 9px;
+  font: 500 13px var(--mp-font);
+  color: var(--mp-ink);
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+  box-shadow: var(--mp-shadow-sm);
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 button.secondary:hover:not(:disabled) {
-  background: #fbfaf6;
-  border-color: #c6c2b4;
+  background: var(--mp-muted);
 }
 
 button.secondary:disabled {
-  color: #aba89b;
-  border-color: var(--mp-line-200);
-  background: transparent;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 button.link {
   padding: 0;
-  font: 600 11px var(--mp-font);
-  color: var(--mp-green-700);
+  font: 500 11px var(--mp-font);
+  color: var(--mp-primary);
   background: none;
   border: none;
   cursor: pointer;
+  text-underline-offset: 4px;
 }
 
 button.link:hover {
