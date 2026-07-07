@@ -1,4 +1,4 @@
-# Minted Panel Fill — Chrome extension
+# Minted Panel Workbench — Chrome extension
 
 Fills payer portal enrollment forms with Minted Panel provider data in one
 click. v0 is unlisted (loaded unpacked); the first target portal is the BCBS
