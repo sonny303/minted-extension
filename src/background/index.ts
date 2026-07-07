@@ -21,7 +21,7 @@ import {
   postSubmissionTouch,
 } from "./api";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
-import { fillPortal } from "./fill";
+import { coveragePortal, fillPortal } from "./fill";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -201,6 +201,18 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_FACILITY":
       await writeSessionString(SELECTED_FACILITY_PREFIX + request.providerId, request.facilityId);
       return null;
+    case "GET_FILL_COVERAGE":
+      // Read-only preview: reuse the fill flow's own field-maps + profile fetch
+      // (coveragePortal calls the same getters fillPortal does) and compute
+      // coverage. No content-script message, no fill-event write. caseId is part
+      // of the selection but coverage doesn't depend on it, so it isn't threaded
+      // into the fetch.
+      return coveragePortal({
+        providerId: request.providerId,
+        portalKey: request.portalKey,
+        state: request.state,
+        facilityId: request.facilityId,
+      });
     case "GET_FILL_REPORT":
       return readFillReport(request.providerId);
     case "FILL": {

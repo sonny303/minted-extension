@@ -11,7 +11,7 @@ import type {
   ProviderProfileFacility,
   UserOrgMembership,
 } from "../shared/apiTypes";
-import type { FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
+import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type ProviderIdentifiers } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 
@@ -56,6 +56,9 @@ const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
 const caseNote = el<HTMLElement>("case-note");
 const portalStatus = el<HTMLElement>("portal-status");
+const coveragePanel = el<HTMLElement>("coverage-panel");
+const coverageCount = el<HTMLElement>("coverage-count");
+const coverageGaps = el<HTMLUListElement>("coverage-gaps");
 const fillBtn = el<HTMLButtonElement>("fill-btn");
 const fillNote = el<HTMLElement>("fill-note");
 const fillResults = el<HTMLElement>("fill-results");
@@ -102,6 +105,12 @@ let lastFill: LastFill | null = null;
 // submitted case surfaces the warning; the next click logs anyway. Reset on any
 // selection change or a fresh fill.
 let dupConfirmPending = false;
+// Epic 3a: the fill-ready selection the coverage panel currently reflects (or
+// has a request in flight for). De-dupes the many updateFillReady() calls into
+// one fetch per distinct selection; null when the selection isn't fill-ready
+// (panel hidden). Depends only on what coverage depends on — provider, facility,
+// portal, state — not the case, so switching cases doesn't refetch.
+let coverageKey: string | null = null;
 
 // Request-generation guard against stale async responses (fill-safety: a slow
 // response for provider A must never render A's cases or facilities under
@@ -333,6 +342,23 @@ function clearFillResults(): void {
   lastFill = null;
 }
 
+// Hard gates, same pattern as the case rule: org resolved, provider selected,
+// facility resolved (loaded and not awaiting a pick), case selected — and the
+// portal form in the active tab. Shared by the Fill button's disabled state and
+// the coverage sensor's readiness check so the two can never disagree.
+function isFillReady(): boolean {
+  const portalOpen = portal != null && portalTabId != null;
+  const facilityBlocked = needsFacility && selectedFacilityId() == null;
+  return Boolean(
+    portalOpen &&
+      orgResolved() &&
+      selectedProviderId() &&
+      facilitiesLoaded &&
+      !facilityBlocked &&
+      selectedCaseId(),
+  );
+}
+
 function updateFillReady(): void {
   const portalOpen = portal != null && portalTabId != null;
   portalStatus.textContent = portalOpen
@@ -342,17 +368,101 @@ function updateFillReady(): void {
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
-  // Hard gates, same pattern as the case rule: org resolved, provider
-  // selected, facility resolved (loaded and not awaiting a pick), case
-  // selected — and the portal form in the active tab.
-  fillBtn.disabled = !(
-    portalOpen &&
-    orgResolved() &&
-    selectedProviderId() &&
-    facilitiesLoaded &&
-    !facilityBlocked &&
-    selectedCaseId()
+  fillBtn.disabled = !isFillReady();
+  // Every gate-state change routes through here, so this is the one place the
+  // pre-fill coverage sensor re-evaluates itself.
+  refreshCoverage();
+}
+
+// The coverage sensor reflects the profile (provider + state + facility) and the
+// portal's field maps — NOT the case — but only shows for a fill-ready
+// selection, so a case must be picked for the key to be non-null. null = not
+// fill-ready = panel hidden.
+function coverageSelectionKey(): string | null {
+  if (!isFillReady()) return null;
+  return [selectedProviderId(), selectedFacilityId() ?? "none", portal?.key ?? "", portal?.state ?? ""].join(
+    "|",
   );
+}
+
+// Request coverage when the fill-ready selection changes, and render it above
+// the Fill button. Purely informational: it never enables/blocks the fill, and
+// on error it just hides. Respects the generation guard exactly like the other
+// loaders — a superseded selection's response is discarded, never rendered.
+function refreshCoverage(): void {
+  const key = coverageSelectionKey();
+  // Unchanged selection (this also swallows the many redundant updateFillReady
+  // calls fired during intermediate loading states) — keep the current panel /
+  // in-flight request as-is.
+  if (key === coverageKey) return;
+  coverageKey = key;
+  if (key == null) {
+    renderCoverage(null);
+    return;
+  }
+  const providerId = selectedProviderId();
+  const caseId = selectedCaseId();
+  const activePortal = portal;
+  // Unreachable when key != null (isFillReady guaranteed all three), but keep
+  // the narrowing explicit for the type checker.
+  if (!providerId || !caseId || activePortal == null) return;
+  const facilityId = selectedFacilityId();
+  // Capture the generation at request time, like every other loader: an org /
+  // provider / refresh / sign-out switch bumps it and this response is dropped.
+  const generation = loadGeneration;
+  renderCoverageLoading();
+  void (async () => {
+    const response = await sendToBackground({
+      type: "GET_FILL_COVERAGE",
+      providerId,
+      caseId,
+      portalKey: activePortal.key,
+      state: activePortal.state,
+      facilityId,
+    });
+    // Discard a stale response: a newer generation superseded this selection,
+    // OR the fill-ready selection changed to a different coverage key while we
+    // were in flight (facility/case changes don't bump the generation, so the
+    // key check is what catches those).
+    if (!isCurrent(generation) || key !== coverageKey) return;
+    if (!response.ok) {
+      // Non-blocking sensor: hide on error, never raise the error box.
+      renderCoverage(null);
+      return;
+    }
+    renderCoverage(response.data);
+  })();
+}
+
+function renderCoverageLoading(): void {
+  coveragePanel.hidden = false;
+  coverageCount.textContent = "Checking field coverage…";
+  coverageGaps.replaceChildren();
+}
+
+// "Can fill M of N mapped fields." plus one row per gap (label + reason). A null
+// argument hides the panel. The gap list is empty (and CSS-collapsed) at full
+// coverage. Read-only — no field values are shown, only labels and reasons.
+function renderCoverage(coverage: FillCoverage | null): void {
+  coveragePanel.hidden = coverage == null;
+  if (coverage == null) {
+    coverageGaps.replaceChildren();
+    return;
+  }
+  const noun = coverage.total === 1 ? "field" : "fields";
+  coverageCount.textContent = `Can fill ${coverage.available} of ${coverage.total} mapped ${noun}.`;
+  coverageGaps.replaceChildren();
+  for (const gap of coverage.gaps) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "coverage-gap-label";
+    label.textContent = gap.label;
+    const reason = document.createElement("span");
+    reason.className = "coverage-gap-reason";
+    reason.textContent = gap.reason;
+    li.append(label, reason);
+    coverageGaps.append(li);
+  }
 }
 
 // A report bucket: a collapsible <details> with the heading, an optional

@@ -26,6 +26,17 @@ export interface FillPageResult {
   skipped: ReportedField[]; // matched-but-unappliable or selector not found
 }
 
+// The read-only coverage sensor shown BEFORE a fill (Epic 3a): how many mapped
+// fields Minted Panel can supply (`available`) out of the total fillable mapped
+// fields (`total`, web + non-retired), plus the gap list — the same fields
+// planFill flags for manual entry, each with its reason. Derived purely from
+// planFill; computing it never executes a fill.
+export interface FillCoverage {
+  available: number;
+  total: number;
+  gaps: ReportedField[];
+}
+
 // The panel-facing outcome of one fill attempt.
 export interface FillSummary {
   filled: number;

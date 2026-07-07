@@ -11,7 +11,13 @@
 //   source "manual_partial" fill the token value AND flag for manual review
 //   status "retired"       ignored; "proposed"/"approved" both fill in v0
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
-import type { FillInstruction, FillPageResult, FillSummary, ReportedField } from "../shared/fill";
+import type {
+  FillCoverage,
+  FillInstruction,
+  FillPageResult,
+  FillSummary,
+  ReportedField,
+} from "../shared/fill";
 import { ApiError, getPortalFieldMaps, getProviderProfile, postFillEvent } from "./api";
 
 const STATE_ABBREVS: Record<string, string> = {
@@ -121,6 +127,49 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
   }
 
   return { instructions, manual };
+}
+
+// The coverage sensor (Epic 3a): reuse planFill so the "we can supply M of N"
+// count and the gap list are derived from the exact same rules a real fill
+// would follow — never a second, drifting derivation. `available` = the fields
+// we have a value for, `total` = every fillable mapped field, `gaps` = the
+// fields that need manual entry (with the server's reason). Pure; runs no fill.
+export function computeCoverage(
+  maps: PortalFieldMap[],
+  profile: ProviderProfileResponse,
+): FillCoverage {
+  const { instructions, manual } = planFill(maps, profile);
+  return {
+    available: instructions.length,
+    total: instructions.length + manual.length,
+    gaps: manual,
+  };
+}
+
+// What the panel requests to preview coverage without filling — the fill
+// selection minus the tab (no page is touched). Mirrors FillRequest's data
+// inputs; the case id rides along for selection parity but coverage depends
+// only on the profile (provider + state + facility) and the portal's maps.
+export interface CoverageRequest {
+  providerId: string;
+  portalKey: string;
+  state: string;
+  facilityId: string | null;
+}
+
+// Resolve the SAME field maps + profile the fill flow fetches and compute
+// coverage — no new endpoint, no duplicated API calls (the two getters here are
+// exactly what fillPortal uses). Read-only: it never messages the content
+// script or logs a fill event.
+export async function coveragePortal(request: CoverageRequest): Promise<FillCoverage> {
+  const [maps, { profile }] = await Promise.all([
+    getPortalFieldMaps(request.portalKey),
+    getProviderProfile(request.providerId, {
+      state: request.state,
+      facilityId: request.facilityId,
+    }),
+  ]);
+  return computeCoverage(maps, profile);
 }
 
 export interface FillRequest {
