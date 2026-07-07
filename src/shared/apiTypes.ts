@@ -93,28 +93,56 @@ export interface UserOrgMembership {
   role: string;
 }
 
+// The case's most recent touchlog note, author-resolved (Story 11).
+export interface CaseLatestNote {
+  text: string;
+  author: string | null;
+  at: string;
+}
+
 // GET /api/cases?providerId=... — the case picker feed. Mirrors the merged
 // route (mintedpanel src/services/providerCases.ts): the provider's OPEN
 // cases only (open = credentialing status not in the config's 'complete'
-// action bucket), sorted payer then state.
+// action bucket), sorted payer then state. PR C added three touchlog-derived
+// fields the panel prefills/guards off.
 export interface CaseListItem {
   id: string;
   payerName: string | null;
   state: string;
   status: string | null;
   submittedDate: string | null;
+  // Story 5: the case's latest-wins payer reference — prefills the ref box.
+  payerReferenceId: string | null;
+  // Story 11: the most recent note on the case, shown on the card.
+  latestNote: CaseLatestNote | null;
+  // Story 10: the most recent submission (a touchpoint with outcome
+  // 'submitted') as an ISO timestamp — drives the duplicate-submission guard.
+  lastSubmittedAt: string | null;
 }
 
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
 // are snake_case per the locked R2 contract (2026-07-05), unlike fill-events'
 // camelCase. The server sets org and the performing user from the JWT;
-// idempotency_id becomes the touch row's id (a replay returns the stored row).
+// idempotency_id becomes the anchor touch row's id (a replay returns the
+// stored row). PR C (Stories 5-7) adds optional write-back fields on the same
+// POST, all snake_case.
 export interface SubmissionTouchBody {
   kind: "portal_submission";
   portal_key: string;
   fill_session_id?: string | null;
   note?: string | null;
   idempotency_id: string;
+  // Story 5: overwrite the case's latest-wins payer reference / submission id.
+  payer_reference_id?: string | null;
+  // Story 6: a work-in-progress note → a touchlog note entry (task-linked when
+  // task_id is known).
+  wip_note?: string | null;
+  // Story 7: the SOP task the human just submitted — org-validated + marked
+  // done server-side (locked decision (c)). The v1 panel has no task source,
+  // so this stays undefined and no task is closed; the plumbing is ready.
+  task_id?: string | null;
+  // Story 7: the attached PDF's filename → a second system_event.
+  pdf_filename?: string | null;
 }
 
 // The created touch, camelCased like every row in the envelope contract

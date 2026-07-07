@@ -3,7 +3,13 @@
 // running on our own chrome-extension:// origin are served — content scripts
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
-import type { BgRequest, BgResponse, ProviderFacilitiesInfo } from "../shared/messages";
+import type {
+  BgRequest,
+  BgResponse,
+  ProviderFacilitiesInfo,
+  ProviderIdentifiers,
+} from "../shared/messages";
+import type { ProfileToken } from "../shared/apiTypes";
 import type { FillReportRecord } from "../shared/fill";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import {
@@ -80,6 +86,26 @@ function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
+// Story 4: map the five card identifiers from the profile's resolved tokens.
+// These are professional identifiers (safe to display), not the PHI columns
+// the profile also carries. An empty/absent token renders greyed in the panel.
+function pickIdentifiers(tokens: ProfileToken[]): ProviderIdentifiers {
+  const byToken = new Map(tokens.map((t) => [t.token, t.value]));
+  const str = (token: string): string | null => {
+    const value = byToken.get(token);
+    if (value == null) return null;
+    const text = String(value).trim();
+    return text === "" ? null : text;
+  };
+  return {
+    npi: str("provider.npi"),
+    license: str("provider.licenseNumber"),
+    caqh: str("provider.caqhId"),
+    tin: str("group.tin"),
+    dea: str("provider.deaNumber"),
+  };
+}
+
 function isFillReportRecord(value: unknown): value is FillReportRecord {
   const record = value as FillReportRecord | null;
   return (
@@ -145,8 +171,9 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "LIST_CASES":
       return listCases(request.providerId);
     case "GET_PROVIDER_FACILITIES": {
-      // Fetch the profile but hand the panel ONLY the facility fields — the
-      // token payload (PHI) never crosses into UI state it doesn't need.
+      // Fetch the profile but hand the panel ONLY the facility fields and the
+      // Story 4 identifiers — the PHI-dense token payload (SSN, DOB, home
+      // address) never crosses into UI state it doesn't need.
       const { profile, meta } = await getProviderProfile(request.providerId);
       // The panel owns facility SELECTION (sole auto-select, or the user's
       // per-provider pick remembered in session storage), so the server's
@@ -155,6 +182,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
+        identifiers: pickIdentifiers(profile.tokens),
       };
       return info;
     }
@@ -214,11 +242,23 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         idempotencyId = crypto.randomUUID();
         await writeSessionString(idKey, idempotencyId);
       }
+      // PR C write-back (Stories 5-7): the payer reference, an optional WIP
+      // note, and a task_id when one is known ride on the same POST. Empty
+      // strings are dropped to null so a blank field is a no-op (the server
+      // treats a blank payer reference as "don't overwrite"). task_id stays
+      // undefined in v1 — the panel has no task source (locked decision (c)).
+      const clean = (value: string | null | undefined): string | null => {
+        const text = value?.trim();
+        return text ? text : null;
+      };
       const touch = await postSubmissionTouch(request.caseId, {
         kind: "portal_submission",
         portal_key: request.portalKey,
         fill_session_id: request.fillSessionId,
         idempotency_id: idempotencyId,
+        payer_reference_id: clean(request.payerReferenceId),
+        wip_note: clean(request.wipNote),
+        task_id: request.taskId ?? null,
       });
       // Remember the submission on the stored report so a restored panel
       // shows "Logged to the case." instead of offering the button again.

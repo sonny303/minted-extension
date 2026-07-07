@@ -12,10 +12,14 @@ import type {
   UserOrgMembership,
 } from "../shared/apiTypes";
 import type { FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
-import { sendToBackground } from "../shared/messages";
+import { sendToBackground, type ProviderIdentifiers } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Story 10: warn before logging a second submission on a case that was marked
+// submitted within this window. The human can still log anyway (one click).
+const DUPLICATE_WINDOW_DAYS = 14;
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -46,9 +50,11 @@ const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
 const providerNpi = el<HTMLElement>("provider-npi");
 const providerMeta = el<HTMLElement>("provider-meta");
+const providerIds = el<HTMLElement>("provider-ids");
 const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
+const caseNote = el<HTMLElement>("case-note");
 const portalStatus = el<HTMLElement>("portal-status");
 const fillBtn = el<HTMLButtonElement>("fill-btn");
 const fillNote = el<HTMLElement>("fill-note");
@@ -58,7 +64,12 @@ const fillSummaryBox = el<HTMLElement>("fill-summary");
 const fillSkippedBox = el<HTMLElement>("fill-skipped");
 const fillManualBox = el<HTMLElement>("fill-manual");
 const fillEventWarn = el<HTMLElement>("fill-event-warn");
+const gapFlag = el<HTMLElement>("gap-flag");
+const submitDetails = el<HTMLElement>("submit-details");
+const payerRefInput = el<HTMLInputElement>("payer-ref-input");
+const wipNoteInput = el<HTMLTextAreaElement>("wip-note-input");
 const submitHint = el<HTMLElement>("submit-hint");
+const dupWarn = el<HTMLElement>("dup-warn");
 const markSubmittedBtn = el<HTMLButtonElement>("mark-submitted");
 const submitStatus = el<HTMLElement>("submit-status");
 
@@ -87,6 +98,10 @@ let needsFacility = false;
 let portal: PortalConfig | null = null;
 let portalTabId: number | null = null;
 let lastFill: LastFill | null = null;
+// Story 10: set true after the first "Mark submitted" click on a recently
+// submitted case surfaces the warning; the next click logs anyway. Reset on any
+// selection change or a fresh fill.
+let dupConfirmPending = false;
 
 // Request-generation guard against stale async responses (fill-safety: a slow
 // response for provider A must never render A's cases or facilities under
@@ -177,11 +192,111 @@ function renderCaseStatusPill(): void {
 function renderProviderCard(provider: ProviderListItem | null): void {
   providerCard.hidden = provider == null;
   fillSection.hidden = provider == null;
+  // Identifiers arrive with the profile (loadFacilities), a beat after the card;
+  // clear them here so a switch never shows the previous provider's ids.
+  renderIdentifiers(null);
   if (!provider) return;
   const credentials = provider.credentials ? `, ${provider.credentials}` : "";
   providerName.textContent = `${provider.firstName} ${provider.lastName}${credentials}`;
   providerNpi.textContent = provider.npi ? `NPI ${provider.npi}` : "No NPI on file";
   providerMeta.textContent = [provider.specialty, provider.status].filter(Boolean).join(" · ");
+}
+
+// Story 4: the provider's key identifiers as a copy-able grid on the card. A
+// missing value renders greyed ("—") with no copy button. Values are never
+// logged; the copy button writes the raw value to the clipboard only.
+const IDENTIFIER_ROWS: Array<{ key: keyof ProviderIdentifiers; label: string }> = [
+  { key: "npi", label: "NPI" },
+  { key: "license", label: "License #" },
+  { key: "caqh", label: "CAQH ID" },
+  { key: "tin", label: "TIN / EIN" },
+  { key: "dea", label: "DEA" },
+];
+
+function renderIdentifiers(ids: ProviderIdentifiers | null): void {
+  providerIds.replaceChildren();
+  providerIds.hidden = ids == null;
+  if (ids == null) return;
+  for (const { key, label } of IDENTIFIER_ROWS) {
+    const value = ids[key];
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (value == null) {
+      dd.textContent = "—";
+      dd.classList.add("id-empty");
+    } else {
+      const text = document.createElement("span");
+      text.className = "id-value";
+      text.textContent = value;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "id-copy";
+      copy.textContent = "Copy";
+      copy.setAttribute("aria-label", `Copy ${label}`);
+      copy.addEventListener("click", () => void copyValue(value, copy));
+      dd.append(text, copy);
+    }
+    providerIds.append(dt, dd);
+  }
+}
+
+// Copy a single identifier to the clipboard, with brief "Copied" feedback.
+// Best-effort: a clipboard permission denial just leaves the label unchanged.
+async function copyValue(value: string, button: HTMLButtonElement): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+    button.textContent = "Copied";
+    button.classList.add("copied");
+    window.setTimeout(() => {
+      button.textContent = "Copy";
+      button.classList.remove("copied");
+    }, 1200);
+  } catch {
+    // clipboard blocked — leave the button as-is
+  }
+}
+
+// Story 11: the selected case's latest touchlog note, shown under the case
+// picker. Hidden when no case is selected or the case has no note.
+function renderCaseNote(): void {
+  const id = selectedCaseId();
+  const note = cases.find((c) => c.id === id)?.latestNote ?? null;
+  caseNote.hidden = note == null;
+  if (note == null) {
+    caseNote.replaceChildren();
+    return;
+  }
+  const label = document.createElement("span");
+  label.className = "case-note-label";
+  const who = note.author ? ` · ${note.author}` : "";
+  label.textContent = `Latest note${who}`;
+  const body = document.createElement("span");
+  body.className = "case-note-body";
+  body.textContent = note.text;
+  caseNote.replaceChildren(label, body);
+}
+
+// Story 5: prefill the payer-reference box from the selected case's stored
+// reference; a fresh WIP note per case. Called on every case (re)selection.
+function resetSubmitInputs(): void {
+  const id = selectedCaseId();
+  const caseItem = cases.find((c) => c.id === id) ?? null;
+  payerRefInput.value = caseItem?.payerReferenceId ?? "";
+  wipNoteInput.value = "";
+}
+
+// Story 10: how long ago the selected case was last marked submitted, when
+// that is inside the duplicate window — else null (no warning).
+function recentSubmissionPhrase(caseItem: CaseListItem | undefined): string | null {
+  if (!caseItem?.lastSubmittedAt) return null;
+  const at = new Date(caseItem.lastSubmittedAt);
+  if (Number.isNaN(at.getTime())) return null;
+  const days = (Date.now() - at.getTime()) / 86_400_000;
+  if (days > DUPLICATE_WINDOW_DAYS || days < 0) return null;
+  if (days < 1) return "earlier today";
+  const whole = Math.round(days);
+  return whole === 1 ? "yesterday" : `${whole} days ago`;
 }
 
 function renderProviderOptions(selectedId: string | null): void {
@@ -206,7 +321,11 @@ function clearFillResults(): void {
   fillSkippedBox.hidden = true;
   fillManualBox.hidden = true;
   fillEventWarn.hidden = true;
+  gapFlag.hidden = true;
+  submitDetails.hidden = true;
   submitHint.hidden = true;
+  dupWarn.hidden = true;
+  dupConfirmPending = false;
   markSubmittedBtn.hidden = true;
   markSubmittedBtn.disabled = false;
   markSubmittedBtn.textContent = "Mark submitted";
@@ -318,9 +437,29 @@ function renderFillSummary(
       summary.eventError ??
       "Fill applied, but it couldn't be logged to Minted Panel. Retry from the case record.";
   }
+
+  // Story 9: the field-gap flag — mapped fields that came back without a value
+  // (skipped + needs-manual). Shown BEFORE the submit affordances so the human
+  // sees the gaps first; submitting is never blocked.
+  const gapCount = summary.skipped.length + summary.manual.length;
+  gapFlag.hidden = gapCount === 0;
+  if (gapCount > 0) {
+    gapFlag.textContent =
+      `${gapCount} mapped ${gapCount === 1 ? "field has" : "fields have"} no value yet — ` +
+      "review the lists above and complete them on the portal before you submit.";
+  }
+
   const submitted = restored?.submitted === true;
+  // Stories 5/6: the payer-reference + WIP-note boxes show while the human can
+  // still act; an already-logged (restored) report hides them.
+  submitDetails.hidden = submitted;
+  if (!submitted) resetSubmitInputs();
   submitHint.hidden = submitted;
+  dupWarn.hidden = true;
+  dupConfirmPending = false;
   markSubmittedBtn.hidden = submitted;
+  markSubmittedBtn.disabled = false;
+  markSubmittedBtn.textContent = "Mark submitted";
   submitStatus.hidden = !submitted;
   if (submitted) submitStatus.textContent = "Logged to the case.";
 }
@@ -368,6 +507,7 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   }
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
+  renderCaseNote();
   await restoreFillReport(providerId, rememberedId, generation);
   updateFillReady();
 }
@@ -422,6 +562,8 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   facilities = response.data.facilities;
   needsFacility = response.data.needsFacility;
   facilitiesLoaded = true;
+  // Story 4: the identifiers ride on the same profile fetch as the facilities.
+  renderIdentifiers(response.data.identifiers);
 
   if (facilities.length === 0) {
     // Nothing to resolve: facility tokens come back unresolved with a
@@ -708,6 +850,7 @@ caseSelect.addEventListener("change", () => {
     });
   }
   renderCaseStatusPill();
+  renderCaseNote();
   clearFillResults();
   updateFillReady();
 });
@@ -780,10 +923,27 @@ fillBtn.addEventListener("click", () => {
 
 // Pressed by the human only after they submit the portal form themselves.
 // The background reuses one idempotency id per (case, fill session), so a
-// retry after a failure can never double-log the touch.
+// retry after a failure can never double-log the touch. On submit it also
+// carries the payer reference (Story 5) and the WIP note (Story 6).
 markSubmittedBtn.addEventListener("click", () => {
   const context = lastFill;
   if (!context) return;
+
+  // Story 10: on a case submitted inside the duplicate window, the first click
+  // surfaces a warning and re-labels the button; the next click logs anyway.
+  if (!dupConfirmPending) {
+    const caseItem = cases.find((c) => c.id === context.caseId);
+    const phrase = recentSubmissionPhrase(caseItem);
+    if (phrase != null) {
+      dupConfirmPending = true;
+      dupWarn.hidden = false;
+      dupWarn.textContent = `This case was marked submitted ${phrase}. Log another submission?`;
+      markSubmittedBtn.textContent = "Log anyway";
+      return;
+    }
+  }
+
+  const buttonLabel = dupConfirmPending ? "Log anyway" : "Mark submitted";
   void (async () => {
     setError(mainError, null);
     markSubmittedBtn.disabled = true;
@@ -794,13 +954,18 @@ markSubmittedBtn.addEventListener("click", () => {
       caseId: context.caseId,
       portalKey: context.portalKey,
       fillSessionId: context.fillSessionId,
+      payerReferenceId: payerRefInput.value,
+      wipNote: wipNoteInput.value,
     });
     if (!response.ok) {
       markSubmittedBtn.disabled = false;
-      markSubmittedBtn.textContent = "Mark submitted";
+      markSubmittedBtn.textContent = buttonLabel;
       setError(mainError, response.error);
       return;
     }
+    dupConfirmPending = false;
+    dupWarn.hidden = true;
+    submitDetails.hidden = true;
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;

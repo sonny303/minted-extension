@@ -49,12 +49,17 @@ export type BgRequest =
   // Pressed by the human AFTER they submit the portal form themselves — the
   // extension never touches the portal's submit button. fillSessionId is the
   // fill attempt's idempotency id when the fill event was recorded, else null.
+  // PR C write-back (Stories 5-7): the payer reference the human entered, an
+  // optional WIP note, and a task_id when one is known (v1 sends none).
   | {
       type: "MARK_SUBMITTED";
       providerId: string;
       caseId: string;
       portalKey: string;
       fillSessionId: string | null;
+      payerReferenceId?: string | null;
+      wipNote?: string | null;
+      taskId?: string | null;
     };
 
 export interface AuthState {
@@ -72,6 +77,21 @@ export interface ProviderFacilitiesInfo {
   // meta.needs_facility: several facilities, none picked — the fill gate
   // stays closed until the user picks ("Pick a location first.").
   needsFacility: boolean;
+  // Story 4: the provider's key professional identifiers, projected from the
+  // profile tokens (not PHI — NPI/license/CAQH/TIN/DEA are form-fill fields).
+  // The PHI-dense token payload stays in the worker; only these five cross.
+  identifiers: ProviderIdentifiers;
+}
+
+// Story 4: the identifiers shown on the provider card, each with a copy button.
+// A null value renders greyed ("—"). Keys are camelCase panel fields, not
+// tokens; the worker maps them from provider.*/group.* profile tokens.
+export interface ProviderIdentifiers {
+  npi: string | null;
+  license: string | null;
+  caqh: string | null;
+  tin: string | null;
+  dea: string | null;
 }
 
 export type BgResponse<T> =
