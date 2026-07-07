@@ -6,6 +6,7 @@
 // click time.
 import "./sidepanel.css";
 import type {
+  CaseContext,
   CaseListItem,
   ProviderListItem,
   ProviderProfileFacility,
@@ -55,6 +56,7 @@ const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
 const caseNote = el<HTMLElement>("case-note");
+const caseContextBox = el<HTMLElement>("case-context");
 const portalStatus = el<HTMLElement>("portal-status");
 const coveragePanel = el<HTMLElement>("coverage-panel");
 const coverageCount = el<HTMLElement>("coverage-count");
@@ -111,6 +113,11 @@ let dupConfirmPending = false;
 // (panel hidden). Depends only on what coverage depends on — provider, facility,
 // portal, state — not the case, so switching cases doesn't refetch.
 let coverageKey: string | null = null;
+// Epic 3d: the case id whose context the block currently shows (or has a fetch
+// in flight for). De-dupes redundant refreshCaseContext() calls and, together
+// with the generation guard, lets a stale response for a previously-selected
+// case be discarded on landing. null when no case is selected (block hidden).
+let caseContextCaseId: string | null = null;
 
 // Request-generation guard against stale async responses (fill-safety: a slow
 // response for provider A must never render A's cases or facilities under
@@ -284,6 +291,106 @@ function renderCaseNote(): void {
   body.className = "case-note-body";
   body.textContent = note.text;
   caseNote.replaceChildren(label, body);
+}
+
+// "Jul 5, 2026" for a case-context note/touch timestamp; "" for a missing or
+// unparseable value so the meta line just drops rather than showing "Invalid
+// Date".
+function fmtContextDate(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return at.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+function contextRow(label: string): { row: HTMLDivElement; labelEl: HTMLSpanElement } {
+  const row = document.createElement("div");
+  row.className = "case-context-row";
+  const labelEl = document.createElement("span");
+  labelEl.className = "case-context-label";
+  labelEl.textContent = label;
+  row.append(labelEl);
+  return { row, labelEl };
+}
+
+// Epic 3d: render the selected case's reference number(s), latest note, and
+// latest touch as a small read-only card. A null argument (no case, an error,
+// or nothing to show) hides the block. Purely informational — it never gates
+// the fill/submit flow, and nothing here is persisted beyond this render.
+function renderCaseContext(context: CaseContext | null): void {
+  caseContextBox.replaceChildren();
+  const refs = context?.referenceNumbers ?? [];
+  const note = context?.latestNote ?? null;
+  const touch = context?.latestTouch ?? null;
+  const hasContent = refs.length > 0 || note != null || touch != null;
+  caseContextBox.hidden = context == null || !hasContent;
+  if (context == null || !hasContent) return;
+
+  // Reference id(s): hidden entirely when the case carries none.
+  if (refs.length > 0) {
+    const { row } = contextRow(refs.length === 1 ? "Reference" : "References");
+    const value = document.createElement("span");
+    value.className = "case-context-ref-value";
+    value.textContent = refs.join(", ");
+    row.append(value);
+    caseContextBox.append(row);
+  }
+
+  // Latest note: the content, with a subtle author + date meta line.
+  if (note != null) {
+    const { row } = contextRow("Latest note");
+    const body = document.createElement("span");
+    body.className = "case-context-note-body";
+    body.textContent = note.content;
+    row.append(body);
+    const date = fmtContextDate(note.createdAt);
+    const metaText = [note.authorName, date].filter(Boolean).join(" · ");
+    if (metaText) {
+      const meta = document.createElement("span");
+      meta.className = "case-context-meta";
+      meta.textContent = metaText;
+      row.append(meta);
+    }
+    caseContextBox.append(row);
+  }
+
+  // Last touch (optional): a compact "outcome · date" line.
+  if (touch != null) {
+    const { row } = contextRow("Last touch");
+    const value = document.createElement("span");
+    value.className = "case-context-touch-value";
+    const date = fmtContextDate(touch.touchDate);
+    value.textContent = [touch.outcome, date].filter(Boolean).join(" · ");
+    row.append(value);
+    caseContextBox.append(row);
+  }
+}
+
+// Fetch and render the selected case's context whenever the case selection
+// changes; hide the block when no case is selected. Mirrors the coverage
+// sensor's staleness handling: it captures the case id AND the load generation
+// at request time and discards the response on landing if a different case was
+// selected (case switch — doesn't bump the generation) or a newer context
+// superseded it (provider/org switch — does). Non-critical: on error it hides
+// silently, never raising the error box.
+function refreshCaseContext(): void {
+  const caseId = selectedCaseId();
+  // Same case already shown / in flight — leave the block as-is.
+  if (caseId === caseContextCaseId) return;
+  caseContextCaseId = caseId;
+  if (caseId == null) {
+    renderCaseContext(null);
+    return;
+  }
+  // Hide while loading — the block is advisory, so no spinner/placeholder.
+  renderCaseContext(null);
+  const generation = loadGeneration;
+  void (async () => {
+    const response = await sendToBackground({ type: "GET_CASE_CONTEXT", caseId });
+    // Discard a stale response: a newer generation (provider/org switch) or a
+    // different case selected while we were in flight.
+    if (!isCurrent(generation) || caseId !== caseContextCaseId) return;
+    renderCaseContext(response.ok ? response.data : null);
+  })();
 }
 
 // Story 5: prefill the payer-reference box from the selected case's stored
@@ -579,6 +686,8 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
   renderCaseStatusPill();
+  // No valid case is selected during the load — hide any prior case's context.
+  refreshCaseContext();
   updateFillReady();
 
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
@@ -618,6 +727,9 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
   renderCaseNote();
+  // Load context for the restored case (or hide when none was restored). Runs
+  // under this generation; a superseding switch discards its response.
+  refreshCaseContext();
   await restoreFillReport(providerId, rememberedId, generation);
   updateFillReady();
 }
@@ -901,6 +1013,8 @@ signoutBtn.addEventListener("click", () => {
     facilities = [];
     facilitiesLoaded = false;
     needsFacility = false;
+    caseContextCaseId = null;
+    renderCaseContext(null);
     showSignin();
   })();
 });
@@ -961,6 +1075,7 @@ caseSelect.addEventListener("change", () => {
   }
   renderCaseStatusPill();
   renderCaseNote();
+  refreshCaseContext();
   clearFillResults();
   updateFillReady();
 });

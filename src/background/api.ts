@@ -7,6 +7,7 @@ import { API_BASE_URL } from "../shared/config";
 import type {
   ApiEnvelope,
   ApiMeta,
+  CaseContext,
   CaseListItem,
   PortalFieldMap,
   ProviderListItem,
@@ -99,6 +100,17 @@ export async function listProviders(): Promise<ProviderListItem[]> {
 export async function listCases(providerId: string): Promise<CaseListItem[]> {
   const { data } = await apiFetch<CaseListItem[]>(
     `/api/cases?providerId=${encodeURIComponent(providerId)}`,
+  );
+  return data;
+}
+
+// GET /api/cases/:id/context — the selected case's reference number(s), latest
+// note, and latest touch (Epic 3d). Org-scoped like the other case routes, so
+// requestOnce attaches x-org-id in multi-org mode (this pathname is NOT the
+// /api/me/orgs exception). Read-only and purely informational for the panel.
+export async function getCaseContext(caseId: string): Promise<CaseContext> {
+  const { data } = await apiFetch<CaseContext>(
+    `/api/cases/${encodeURIComponent(caseId)}/context`,
   );
   return data;
 }

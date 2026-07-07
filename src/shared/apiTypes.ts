@@ -120,6 +120,32 @@ export interface CaseListItem {
   lastSubmittedAt: string | null;
 }
 
+// GET /api/cases/:id/context — the selected case's reference number(s) and most
+// recent activity, fetched per-case after selection (Epic 3d). Distinct from
+// CaseListItem.latestNote (which rides the case-picker list): this is a
+// dedicated, org-scoped read that also surfaces the payer reference id(s) and
+// the latest touch. Mirrors the merged mintedpanel route's `data` shape exactly.
+export interface CaseContextNote {
+  content: string;
+  createdAt: string;
+  authorName: string | null;
+}
+
+export interface CaseContextTouch {
+  touchDate: string;
+  touchType: string;
+  outcome: string;
+  note: string | null;
+}
+
+export interface CaseContext {
+  // [] or one payer reference id — rendered as "Reference: <n>", row hidden
+  // when empty.
+  referenceNumbers: string[];
+  latestNote: CaseContextNote | null;
+  latestTouch: CaseContextTouch | null;
+}
+
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
 // are snake_case per the locked R2 contract (2026-07-05), unlike fill-events'
 // camelCase. The server sets org and the performing user from the JWT;

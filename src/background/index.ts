@@ -14,6 +14,7 @@ import type { FillReportRecord } from "../shared/fill";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import {
   ApiError,
+  getCaseContext,
   getProviderProfile,
   listCases,
   listMyOrgs,
@@ -170,6 +171,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       return listProviders();
     case "LIST_CASES":
       return listCases(request.providerId);
+    case "GET_CASE_CONTEXT":
+      // Read-only case context (Epic 3d). Org-scoped — getCaseContext goes
+      // through the same guarded, x-org-id-attaching apiFetch as the case list.
+      return getCaseContext(request.caseId);
     case "GET_PROVIDER_FACILITIES": {
       // Fetch the profile but hand the panel ONLY the facility fields and the
       // Story 4 identifiers — the PHI-dense token payload (SSN, DOB, home
