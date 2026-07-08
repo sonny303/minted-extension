@@ -699,9 +699,19 @@ function renderFillSummary(
   if (restored) fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const attempted = summary.filled + summary.skipped.length;
   // The heading carries the counts, so no pill; the rows are the filled field
-  // LABELS from the page result — values are never retained (PHI).
+  // LABELS from the page result — values are never retained (PHI). The page
+  // denominator keeps coverage honest: "24 mapped" on a ~117-field form is
+  // partial coverage, not a fully trained form.
+  const pageNote =
+    summary.pageFields != null && summary.pageFields > 0
+      ? ` The page has ~${summary.pageFields} fillable fields.`
+      : "";
   fillSummaryBox.replaceChildren(
-    bucketDetails(`Filled ${summary.filled} of ${attempted} mapped fields.`, null, summary.filledLabels),
+    bucketDetails(
+      `Filled ${summary.filled} of ${attempted} mapped fields.${pageNote}`,
+      null,
+      summary.filledLabels,
+    ),
   );
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
   fieldList(fillManualBox, "Needs manual entry or review:", summary.manual);

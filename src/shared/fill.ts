@@ -18,12 +18,18 @@ export interface FillInstruction {
 export interface ReportedField {
   label: string;
   reason: string;
+  // The portal_field_maps row this report is about — rides into the fill
+  // event's fields_skipped so the panel can flag the exact broken mapping.
+  mapId?: string;
 }
 
 // What the content script did with the instructions it was handed.
 export interface FillPageResult {
   filled: string[]; // labels
   skipped: ReportedField[]; // matched-but-unappliable or selector not found
+  // Fillable controls counted on the page — the honest denominator for how
+  // much of the form the mapped fields actually cover.
+  pageFields: number;
 }
 
 // The read-only coverage sensor shown BEFORE a fill (Epic 3a): how many mapped
@@ -54,6 +60,9 @@ export interface FillSummary {
   // event was recorded; null when logging failed — "Mark submitted" must not
   // reference a fill session the server never stored (it 404s unknown ids).
   fillSessionId: string | null;
+  // Fillable controls on the page (from FillPageResult). Optional so reports
+  // persisted before this field restore cleanly.
+  pageFields?: number;
 }
 
 // One persisted fill outcome, keyed per (provider, portal) in
