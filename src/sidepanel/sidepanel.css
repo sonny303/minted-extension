@@ -661,13 +661,19 @@ button.link:hover {
   margin-top: 0;
 }
 
+/* A field row is a <label>, so undo the global label chrome (uppercase,
+   letter-spacing, block margin); its checkbox must also escape the global
+   input rule (36px full-width shadcn text control). */
 .view-settings-field {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 7px;
+  margin: 0;
   padding: 2px 0;
   font: 500 11px/1.4 var(--mp-font);
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--mp-ink-600);
   cursor: pointer;
 }
@@ -676,9 +682,20 @@ button.link:hover {
   text-align: right;
 }
 
-.view-settings-field input {
+.view-settings-field input[type="checkbox"] {
+  flex: none;
+  width: 13px;
+  height: 13px;
   margin: 0;
+  padding: 0;
+  box-shadow: none;
   accent-color: var(--mp-primary);
+}
+
+.view-settings-field input[type="checkbox"]:focus {
+  box-shadow: none;
+  outline: 1px solid var(--mp-primary);
+  outline-offset: 1px;
 }
 
 .view-settings-actions {
