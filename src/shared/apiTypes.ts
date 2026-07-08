@@ -179,9 +179,9 @@ export interface SubmissionTouchBody {
   // Story 6: a work-in-progress note → a touchlog note entry (task-linked when
   // task_id is known).
   wip_note?: string | null;
-  // Story 7: the SOP task the human just submitted — org-validated + marked
-  // done server-side (locked decision (c)). The v1 panel has no task source,
-  // so this stays undefined and no task is closed; the plumbing is ready.
+  // Story 7 / Phase 4: the SOP task the human just submitted — org-validated +
+  // marked done server-side (locked decision (c)). Supplied by the panel when the
+  // page's portal_key matched an open task on the case; omitted otherwise.
   task_id?: string | null;
   // Story 7: the attached PDF's filename → a second system_event.
   pdf_filename?: string | null;
