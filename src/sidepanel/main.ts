@@ -48,6 +48,7 @@ const refreshBtn = el<HTMLButtonElement>("refresh");
 const providerSelect = el<HTMLSelectElement>("provider-select");
 const facilitySelect = el<HTMLSelectElement>("facility-select");
 const facilityHint = el<HTMLElement>("facility-hint");
+const facilityAddress = el<HTMLElement>("facility-address");
 const mainError = el<HTMLElement>("main-error");
 const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
@@ -231,7 +232,6 @@ function renderProviderCard(provider: ProviderListItem | null): void {
 
 // Provider detail card Section 2: the requested fields as a copy-able label/value list.
 const DETAIL_ROWS: Array<{ key: keyof ProviderCardDetails; label: string; isDate?: boolean }> = [
-  { key: "practiceAddress", label: "Practice Address" },
   { key: "licenseNumber", label: "License number" },
   { key: "licenseIssueDate", label: "License issue date", isDate: true },
   { key: "licenseExpirationDate", label: "License Expiration Date", isDate: true },
@@ -842,6 +842,25 @@ async function restoreFillReport(
   });
 }
 
+// The selected location's practice address, under the Location picker. One
+// line per part: street (+ suite), then "city, state zip". Hidden when no
+// facility is selected or the facility carries no address fields.
+function renderFacilityAddress(): void {
+  const facility = facilities.find((f) => f.id === selectedFacilityId()) ?? null;
+  const street = [facility?.street, facility?.suite].filter(Boolean).join(", ");
+  const locality = [facility?.city, [facility?.state, facility?.zip].filter(Boolean).join(" ")]
+    .filter(Boolean)
+    .join(", ");
+  const lines = [street, locality].filter(Boolean);
+  facilityAddress.hidden = lines.length === 0;
+  facilityAddress.replaceChildren();
+  for (const line of lines) {
+    const row = document.createElement("div");
+    row.textContent = line;
+    facilityAddress.append(row);
+  }
+}
+
 // The provider's facility set, from the profile response. Exactly one:
 // auto-selected read-only (the server resolves it the same way). Several:
 // the user picks, remembered per provider and re-validated silently.
@@ -851,6 +870,7 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   needsFacility = false;
   facilitySelect.disabled = true;
   facilitySelect.replaceChildren(new Option("Loading locations…", ""));
+  renderFacilityAddress();
   updateFillReady();
 
   const response = await sendToBackground({ type: "GET_PROVIDER_FACILITIES", providerId });
@@ -879,6 +899,7 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   const sole = facilities.length === 1 ? facilities[0] : undefined;
   if (sole) {
     facilitySelect.replaceChildren(new Option(sole.name || "Location", sole.id, true, true));
+    renderFacilityAddress();
     updateFillReady();
     return;
   }
@@ -898,6 +919,7 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
     facilitySelect.add(new Option(facility.name || facility.id, facility.id, false, facility.id === rememberedId));
   }
   facilitySelect.disabled = false;
+  renderFacilityAddress();
   updateFillReady();
 }
 
@@ -1142,6 +1164,7 @@ facilitySelect.addEventListener("change", () => {
       facilityId: selectedFacilityId(),
     });
   }
+  renderFacilityAddress();
   updateFillReady();
 });
 

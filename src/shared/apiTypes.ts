@@ -70,6 +70,14 @@ export interface UnresolvedToken {
 export interface ProviderProfileFacility {
   id: string;
   name: string;
+  // Address fields for the selected location's practice-address display.
+  // Optional so the panel degrades gracefully against a server that predates
+  // them (treated as no address on file).
+  street?: string | null;
+  suite?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
 }
 
 export interface ProviderProfileResponse {

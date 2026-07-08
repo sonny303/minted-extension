@@ -100,10 +100,10 @@ export interface ProviderFacilitiesInfo {
 
 // Story 4: the provider detail card fields shown on the panel. A null value
 // renders greyed ("Not on file"). The worker maps these from provider.*/
-// group.*/facility.* profile tokens.
+// group.*/license.* profile tokens. The practice address lives with the
+// Location picker (rendered from the selected facility), not here.
 export interface ProviderCardDetails {
   dateOfBirth: string | null;
-  practiceAddress: string | null;
   licenseNumber: string | null;
   licenseIssueDate: string | null;
   licenseExpirationDate: string | null;

@@ -480,6 +480,18 @@ button.link:hover {
   color: var(--mp-ink-400);
 }
 
+/* Selected location's practice address, under the Location picker. */
+.facility-address {
+  margin: 8px 0 0;
+  padding: 8px 11px;
+  background: var(--mp-cream-50);
+  border: 1px solid var(--mp-line-100);
+  border-radius: var(--mp-r-ctl);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink-600);
+}
+
 /* Portal detection banner: neutral by default, mint when a supported form is
    in the active tab (class toggled beside the existing status text). */
 .banner {

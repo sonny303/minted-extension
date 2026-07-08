@@ -89,7 +89,9 @@ function fillReportKey(providerId: string, portalKey: string): string {
 }
 
 // Provider detail card: map the requested fields from the profile's resolved
-// tokens. Empty/absent tokens render as "Not on file" in the panel.
+// tokens. Empty/absent tokens render as "Not on file" in the panel. License
+// fields come from the state_licenses-backed license.* tokens (the resolved
+// license record), falling back to the legacy provider.* license columns.
 function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
   const byToken = new Map(tokens.map((t) => [t.token, t.value]));
   const str = (token: string): string | null => {
@@ -98,17 +100,11 @@ function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
     const text = String(value).trim();
     return text === "" ? null : text;
   };
-  const street = str("facility.street");
-  const city = str("facility.city");
-  const state = str("facility.state");
-  const zip = str("facility.zip");
-  const practiceAddress = [street, city, state, zip].filter(Boolean).join(", ") || null;
   return {
     dateOfBirth: str("provider.dateOfBirth"),
-    practiceAddress,
-    licenseNumber: str("provider.licenseNumber"),
-    licenseIssueDate: str("provider.licenseIssueDate"),
-    licenseExpirationDate: str("provider.licenseExpirationDate"),
+    licenseNumber: str("license.licenseNumber") ?? str("provider.licenseNumber"),
+    licenseIssueDate: str("license.issueDate") ?? str("provider.licenseIssueDate"),
+    licenseExpirationDate: str("license.expirationDate") ?? str("provider.licenseExpirationDate"),
     npi: str("provider.npi"),
     caqh: str("provider.caqhId"),
     tin: str("group.tin"),
