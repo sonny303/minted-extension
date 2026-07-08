@@ -90,6 +90,23 @@ export async function listMyOrgs(): Promise<UserOrgMembership[]> {
   return data;
 }
 
+// GET /api/me/view-prefs — the user's saved detail-card field list; fields
+// null = nothing saved (caller falls back to the default set). User-scoped
+// like org discovery, but harmless with an x-org-id attached.
+export async function getViewPrefs(): Promise<string[] | null> {
+  const { data } = await apiFetch<{ fields: string[] | null }>("/api/me/view-prefs");
+  return data.fields;
+}
+
+// PUT /api/me/view-prefs — save the field list (bare token keys, in order).
+export async function putViewPrefs(fields: string[]): Promise<void> {
+  await apiFetch("/api/me/view-prefs", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+}
+
 export async function listProviders(): Promise<ProviderListItem[]> {
   const { data } = await apiFetch<ProviderListItem[]>(
     "/api/providers?page=1&pageSize=100&sort=last_name&order=asc",

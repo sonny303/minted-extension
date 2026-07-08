@@ -480,6 +480,18 @@ button.link:hover {
   color: var(--mp-ink-400);
 }
 
+/* Selected location's practice address, under the Location picker. */
+.facility-address {
+  margin: 8px 0 0;
+  padding: 8px 11px;
+  background: var(--mp-cream-50);
+  border: 1px solid var(--mp-line-100);
+  border-radius: var(--mp-r-ctl);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink-600);
+}
+
 /* Portal detection banner: neutral by default, mint when a supported form is
    in the active tab (class toggled beside the existing status text). */
 .banner {
@@ -575,10 +587,104 @@ button.link:hover {
   border-radius: var(--mp-r-card);
 }
 
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .provider-name {
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
+}
+
+/* The customize-view gear on the provider card header. */
+.gear-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: -2px -4px 0 0;
+  background: none;
+  border: none;
+  border-radius: var(--mp-r-ctl);
+  color: var(--mp-ink-400);
+  cursor: pointer;
+}
+
+.gear-btn:hover {
+  color: var(--mp-primary);
+  background: var(--mp-cream-50);
+}
+
+/* The gear's customize-view form, inside the provider card. */
+.view-settings {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mp-line-100);
+}
+
+.view-settings-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.view-settings-hint {
+  margin: 3px 0 8px;
+  font-size: 11.5px;
+  color: var(--mp-ink-400);
+}
+
+.view-settings-fields {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding: 2px 0;
+}
+
+.view-settings-group {
+  margin: 8px 0 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mp-ink-400);
+}
+
+.view-settings-group:first-child {
+  margin-top: 0;
+}
+
+.view-settings-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.view-settings-field input {
+  margin: 0;
+  accent-color: var(--mp-primary);
+}
+
+.view-settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.view-settings-actions button.primary {
+  width: auto;
+  margin: 0;
+  padding: 6px 14px;
 }
 
 .provider-dob {

@@ -16,11 +16,18 @@ import {
   ApiError,
   getCaseContext,
   getProviderProfile,
+  getViewPrefs,
   listCases,
   listMyOrgs,
   listProviders,
   postSubmissionTouch,
+  putViewPrefs,
 } from "./api";
+import {
+  DEFAULT_DETAIL_TOKENS,
+  availableDetailFields,
+  labelForToken,
+} from "../shared/detailFields";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { coveragePortal, fillPortal } from "./fill";
 import { buildSubmissionTouchBody } from "../shared/submission";
@@ -88,9 +95,19 @@ function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
-// Provider detail card: map the requested fields from the profile's resolved
-// tokens. Empty/absent tokens render as "Not on file" in the panel.
-function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
+// License fields fall back to the legacy provider.* license columns when the
+// state_licenses-backed license.* token is empty.
+const LEGACY_FALLBACKS: Record<string, string> = {
+  "license.licenseNumber": "provider.licenseNumber",
+  "license.issueDate": "provider.licenseIssueDate",
+  "license.expirationDate": "provider.licenseExpirationDate",
+};
+
+// Provider detail card: project the user's saved field list (or the default
+// set) from the profile's resolved tokens, plus the full customize vocabulary
+// for the gear icon's field picker. Empty/absent tokens render as "Not on
+// file" in the panel.
+function pickProviderDetails(tokens: ProfileToken[], fields: string[]): ProviderCardDetails {
   const byToken = new Map(tokens.map((t) => [t.token, t.value]));
   const str = (token: string): string | null => {
     const value = byToken.get(token);
@@ -98,22 +115,30 @@ function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
     const text = String(value).trim();
     return text === "" ? null : text;
   };
-  const street = str("facility.street");
-  const city = str("facility.city");
-  const state = str("facility.state");
-  const zip = str("facility.zip");
-  const practiceAddress = [street, city, state, zip].filter(Boolean).join(", ") || null;
   return {
     dateOfBirth: str("provider.dateOfBirth"),
-    practiceAddress,
-    licenseNumber: str("provider.licenseNumber"),
-    licenseIssueDate: str("provider.licenseIssueDate"),
-    licenseExpirationDate: str("provider.licenseExpirationDate"),
-    npi: str("provider.npi"),
-    caqh: str("provider.caqhId"),
-    tin: str("group.tin"),
-    groupNpi: str("group.npiType2"),
+    rows: fields.map((token) => {
+      const fallback = LEGACY_FALLBACKS[token];
+      return {
+        token,
+        label: labelForToken(token),
+        value: str(token) ?? (fallback != null ? str(fallback) : null),
+      };
+    }),
+    availableFields: availableDetailFields(tokens),
   };
+}
+
+// The saved view preference, or the default field set when nothing is saved
+// or the read fails — the card must render even if the prefs endpoint is
+// unreachable (it is cosmetic, never a blocker).
+async function readViewFields(): Promise<string[]> {
+  try {
+    const fields = await getViewPrefs();
+    return fields != null && fields.length > 0 ? fields : DEFAULT_DETAIL_TOKENS;
+  } catch {
+    return DEFAULT_DETAIL_TOKENS;
+  }
 }
 
 function isFillReportRecord(value: unknown): value is FillReportRecord {
@@ -188,7 +213,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // Fetch the profile and hand the panel the facility list plus the detail
       // card fields (DOB, practice address, license dates, IDs). The rest of the
       // token payload stays in the worker.
-      const { profile, meta } = await getProviderProfile(request.providerId);
+      const [{ profile, meta }, fields] = await Promise.all([
+        getProviderProfile(request.providerId),
+        readViewFields(),
+      ]);
       // The panel owns facility SELECTION (sole auto-select, or the user's
       // per-provider pick remembered in session storage), so the server's
       // resolved selected_facility_id isn't threaded through here — only the
@@ -196,7 +224,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
-        details: pickProviderDetails(profile.tokens),
+        details: pickProviderDetails(profile.tokens, fields),
       };
       return info;
     }
@@ -214,6 +242,9 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       return readSessionString(SELECTED_FACILITY_PREFIX + request.providerId);
     case "SET_SELECTED_FACILITY":
       await writeSessionString(SELECTED_FACILITY_PREFIX + request.providerId, request.facilityId);
+      return null;
+    case "SET_VIEW_PREFS":
+      await putViewPrefs(request.fields);
       return null;
     case "GET_FILL_COVERAGE":
       // Read-only preview: reuse the fill flow's own field-maps + profile fetch
