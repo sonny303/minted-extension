@@ -11,6 +11,7 @@ import type {
   UserOrgMembership,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
+import type { DetailFieldOption, ProviderDetailRow } from "./detailFields";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -36,6 +37,10 @@ export type BgRequest =
   | { type: "SET_SELECTED_CASE"; providerId: string; caseId: string | null }
   | { type: "GET_SELECTED_FACILITY"; providerId: string }
   | { type: "SET_SELECTED_FACILITY"; providerId: string; facilityId: string | null }
+  // Save the signed-in user's detail-card field list (bare token keys, in
+  // display order) to the server. The panel refetches the provider profile
+  // afterwards so the card re-projects under the new preference.
+  | { type: "SET_VIEW_PREFS"; fields: string[] }
   | {
       type: "FILL";
       tabId: number;
@@ -98,19 +103,16 @@ export interface ProviderFacilitiesInfo {
   details: ProviderCardDetails;
 }
 
-// Story 4: the provider detail card fields shown on the panel. A null value
-// renders greyed ("Not on file"). The worker maps these from provider.*/
-// group.*/license.* profile tokens. The practice address lives with the
-// Location picker (rendered from the selected facility), not here.
+// Story 4: the provider detail card shown on the panel. `rows` is the user's
+// saved field list (or the default set) projected from the profile tokens —
+// a null value renders greyed ("Not on file"). `availableFields` is the full
+// customize vocabulary (the profile's resolvable tokens), driving the gear
+// icon's field picker. The practice address lives with the Location picker
+// (rendered from the selected facility), not here.
 export interface ProviderCardDetails {
   dateOfBirth: string | null;
-  licenseNumber: string | null;
-  licenseIssueDate: string | null;
-  licenseExpirationDate: string | null;
-  npi: string | null;
-  caqh: string | null;
-  tin: string | null;
-  groupNpi: string | null;
+  rows: ProviderDetailRow[];
+  availableFields: DetailFieldOption[];
 }
 
 export type BgResponse<T> =
@@ -136,6 +138,7 @@ export interface BgResponseMap {
   SET_SELECTED_CASE: null;
   GET_SELECTED_FACILITY: string | null;
   SET_SELECTED_FACILITY: null;
+  SET_VIEW_PREFS: null;
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;

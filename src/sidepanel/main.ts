@@ -15,6 +15,7 @@ import type {
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type ProviderCardDetails } from "../shared/messages";
+import { PREFIX_LABELS, looksLikeIsoDate, tokenPrefix } from "../shared/detailFields";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 import { matchPortalTasks } from "../shared/submission";
 
@@ -54,6 +55,12 @@ const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
 const providerDob = el<HTMLElement>("provider-dob");
 const providerIds = el<HTMLElement>("provider-ids");
+const viewSettingsBtn = el<HTMLButtonElement>("view-settings-btn");
+const viewSettings = el<HTMLElement>("view-settings");
+const viewSettingsFields = el<HTMLElement>("view-settings-fields");
+const viewSettingsError = el<HTMLElement>("view-settings-error");
+const viewSettingsSave = el<HTMLButtonElement>("view-settings-save");
+const viewSettingsCancel = el<HTMLButtonElement>("view-settings-cancel");
 const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
@@ -230,18 +237,18 @@ function renderProviderCard(provider: ProviderListItem | null): void {
   ].filter(Boolean).join(", ");
 }
 
-// Provider detail card Section 2: the requested fields as a copy-able label/value list.
-const DETAIL_ROWS: Array<{ key: keyof ProviderCardDetails; label: string; isDate?: boolean }> = [
-  { key: "licenseNumber", label: "License number" },
-  { key: "licenseIssueDate", label: "License issue date", isDate: true },
-  { key: "licenseExpirationDate", label: "License Expiration Date", isDate: true },
-  { key: "npi", label: "NPI number" },
-  { key: "caqh", label: "CAQH #" },
-  { key: "tin", label: "TIN / EIN" },
-  { key: "groupNpi", label: "Group NPI" },
-];
+// Provider detail card Section 2: the user's saved field list (or the default
+// set), projected server-side/worker-side into label/value rows, rendered as a
+// copy-able list. Held so the gear icon's customize form can pre-check the
+// currently shown fields.
+let currentDetails: ProviderCardDetails | null = null;
 
 function renderProviderDetails(details: ProviderCardDetails | null): void {
+  currentDetails = details;
+  // Any details change (provider switch, refetch) closes the customize form —
+  // it must never show one provider's field list over another's card.
+  closeViewSettings();
+  viewSettingsBtn.hidden = details == null;
   providerIds.replaceChildren();
   providerIds.hidden = details == null;
   providerDob.hidden = details == null;
@@ -250,8 +257,7 @@ function renderProviderDetails(details: ProviderCardDetails | null): void {
   providerDob.textContent = details.dateOfBirth
     ? `DOB: ${fmtContextDate(details.dateOfBirth)}`
     : "DOB: Not on file";
-  for (const { key, label, isDate } of DETAIL_ROWS) {
-    const value = details[key];
+  for (const { label, value } of details.rows) {
     const dt = document.createElement("dt");
     dt.textContent = `${label}:`;
     const dd = document.createElement("dd");
@@ -261,7 +267,7 @@ function renderProviderDetails(details: ProviderCardDetails | null): void {
     } else {
       const text = document.createElement("span");
       text.className = "id-value";
-      text.textContent = isDate ? fmtContextDate(value) : value;
+      text.textContent = looksLikeIsoDate(value) ? fmtContextDate(value) : value;
       const copy = document.createElement("button");
       copy.type = "button";
       copy.className = "id-copy";
@@ -273,6 +279,87 @@ function renderProviderDetails(details: ProviderCardDetails | null): void {
     providerIds.append(dt, dd);
   }
 }
+
+function closeViewSettings(): void {
+  viewSettings.hidden = true;
+  viewSettingsFields.replaceChildren();
+  setError(viewSettingsError, null);
+  viewSettingsSave.disabled = false;
+  viewSettingsSave.textContent = "Save view";
+}
+
+// The gear icon's customize form: one checkbox per available profile field,
+// grouped by token prefix (Provider, Group, Location, …), pre-checked for the
+// fields the card currently shows. Checkbox DOM order is the saved order.
+function openViewSettings(details: ProviderCardDetails): void {
+  viewSettingsFields.replaceChildren();
+  setError(viewSettingsError, null);
+  const shown = new Set(details.rows.map((row) => row.token));
+  let group: string | null = null;
+  for (const option of details.availableFields) {
+    const prefix = tokenPrefix(option.token);
+    if (prefix !== group) {
+      group = prefix;
+      const heading = document.createElement("p");
+      heading.className = "view-settings-group";
+      heading.textContent = PREFIX_LABELS[prefix] ?? prefix;
+      viewSettingsFields.append(heading);
+    }
+    const row = document.createElement("label");
+    row.className = "view-settings-field";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = option.token;
+    checkbox.checked = shown.has(option.token);
+    const text = document.createElement("span");
+    text.textContent = option.label;
+    row.append(checkbox, text);
+    viewSettingsFields.append(row);
+  }
+  viewSettings.hidden = false;
+}
+
+viewSettingsBtn.addEventListener("click", () => {
+  const details = currentDetails;
+  if (details == null) return;
+  if (!viewSettings.hidden) {
+    closeViewSettings();
+    return;
+  }
+  openViewSettings(details);
+});
+
+viewSettingsCancel.addEventListener("click", () => closeViewSettings());
+
+// Save the checked fields to the user's account, then refetch the profile so
+// the card re-projects under the new preference (the worker reads the saved
+// prefs on every GET_PROVIDER_FACILITIES).
+viewSettingsSave.addEventListener("click", () => {
+  const providerId = selectedProviderId();
+  const fields = Array.from(
+    viewSettingsFields.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked"),
+  ).map((box) => box.value);
+  if (fields.length === 0) {
+    setError(viewSettingsError, "Pick at least one field to show.");
+    return;
+  }
+  const generation = loadGeneration;
+  void (async () => {
+    setError(viewSettingsError, null);
+    viewSettingsSave.disabled = true;
+    viewSettingsSave.textContent = "Saving…";
+    const response = await sendToBackground({ type: "SET_VIEW_PREFS", fields });
+    viewSettingsSave.disabled = false;
+    viewSettingsSave.textContent = "Save view";
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      setError(viewSettingsError, response.error);
+      return;
+    }
+    closeViewSettings();
+    if (providerId) await loadFacilities(providerId, generation);
+  })();
+});
 
 // Copy a single identifier to the clipboard, with brief "Copied" feedback.
 // Best-effort: a clipboard permission denial just leaves the label unchanged.
