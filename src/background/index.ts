@@ -6,8 +6,8 @@
 import type {
   BgRequest,
   BgResponse,
+  ProviderCardDetails,
   ProviderFacilitiesInfo,
-  ProviderIdentifiers,
 } from "../shared/messages";
 import type { ProfileToken } from "../shared/apiTypes";
 import type { FillReportRecord } from "../shared/fill";
@@ -88,10 +88,9 @@ function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
-// Story 4: map the five card identifiers from the profile's resolved tokens.
-// These are professional identifiers (safe to display), not the PHI columns
-// the profile also carries. An empty/absent token renders greyed in the panel.
-function pickIdentifiers(tokens: ProfileToken[]): ProviderIdentifiers {
+// Provider detail card: map the requested fields from the profile's resolved
+// tokens. Empty/absent tokens render as "Not on file" in the panel.
+function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
   const byToken = new Map(tokens.map((t) => [t.token, t.value]));
   const str = (token: string): string | null => {
     const value = byToken.get(token);
@@ -99,12 +98,21 @@ function pickIdentifiers(tokens: ProfileToken[]): ProviderIdentifiers {
     const text = String(value).trim();
     return text === "" ? null : text;
   };
+  const street = str("facility.street");
+  const city = str("facility.city");
+  const state = str("facility.state");
+  const zip = str("facility.zip");
+  const practiceAddress = [street, city, state, zip].filter(Boolean).join(", ") || null;
   return {
+    dateOfBirth: str("provider.dateOfBirth"),
+    practiceAddress,
+    licenseNumber: str("provider.licenseNumber"),
+    licenseIssueDate: str("provider.licenseIssueDate"),
+    licenseExpirationDate: str("provider.licenseExpirationDate"),
     npi: str("provider.npi"),
-    license: str("provider.licenseNumber"),
     caqh: str("provider.caqhId"),
     tin: str("group.tin"),
-    dea: str("provider.deaNumber"),
+    groupNpi: str("group.npiType2"),
   };
 }
 
@@ -177,9 +185,9 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // through the same guarded, x-org-id-attaching apiFetch as the case list.
       return getCaseContext(request.caseId);
     case "GET_PROVIDER_FACILITIES": {
-      // Fetch the profile but hand the panel ONLY the facility fields and the
-      // Story 4 identifiers — the PHI-dense token payload (SSN, DOB, home
-      // address) never crosses into UI state it doesn't need.
+      // Fetch the profile and hand the panel the facility list plus the detail
+      // card fields (DOB, practice address, license dates, IDs). The rest of the
+      // token payload stays in the worker.
       const { profile, meta } = await getProviderProfile(request.providerId);
       // The panel owns facility SELECTION (sole auto-select, or the user's
       // per-provider pick remembered in session storage), so the server's
@@ -188,7 +196,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
-        identifiers: pickIdentifiers(profile.tokens),
+        details: pickProviderDetails(profile.tokens),
       };
       return info;
     }
@@ -295,11 +303,11 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
 
 function toFailure(error: unknown): BgResponse<never> {
   if (error instanceof AuthRequiredError) {
-    return { ok: false, error: "Session expired — please sign in again.", code: 401 };
+    return { ok: false, error: "Session expired - please sign in again.", code: 401 };
   }
   if (error instanceof ApiError) return { ok: false, error: error.message, code: error.status };
   if (error instanceof TypeError) {
-    return { ok: false, error: "Could not reach Minted Panel — check your connection." };
+    return { ok: false, error: "Could not reach Minted Panel - check your connection." };
   }
   if (error instanceof Error) return { ok: false, error: error.message };
   return { ok: false, error: "Something went wrong." };
