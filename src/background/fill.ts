@@ -83,11 +83,15 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     const label = humanLabel(map);
 
     if (map.fieldType === "file") {
-      manual.push({ label, reason: "file upload — attach manually" });
+      manual.push({ label, reason: "file upload — attach manually", mapId: map.id });
       continue;
     }
     if (map.source === "manual") {
-      manual.push({ label, reason: map.notes ?? "not tracked in Minted Panel — enter manually" });
+      manual.push({
+        label,
+        reason: map.notes ?? "not tracked in Minted Panel — enter manually",
+        mapId: map.id,
+      });
       continue;
     }
 
@@ -97,7 +101,11 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     } else if (map.token != null) {
       raw = tokenValues.get(map.token) ?? null;
     } else {
-      manual.push({ label, reason: "not linked to a Minted Panel field — enter manually" });
+      manual.push({
+        label,
+        reason: "not linked to a Minted Panel field — enter manually",
+        mapId: map.id,
+      });
       continue;
     }
     if (raw == null || raw === "") {
@@ -109,7 +117,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
           ? "Your name isn't set. Add it in Minted Panel under Settings so forms can list you as the preparer."
           : ((map.token != null ? unresolvedReasons.get(map.token) : null) ??
             "no value in Minted Panel");
-      manual.push({ label, reason });
+      manual.push({ label, reason, mapId: map.id });
       continue;
     }
 
@@ -122,7 +130,11 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       value: applyTransform(String(raw), map.transform),
     });
     if (map.source === "manual_partial") {
-      manual.push({ label, reason: map.notes ?? "prefilled — review and complete manually" });
+      manual.push({
+        label,
+        reason: map.notes ?? "prefilled — review and complete manually",
+        mapId: map.id,
+      });
     }
   }
 
@@ -286,5 +298,6 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     // Only reference the session when the server actually stored it — the
     // touches route validates fill_session_id and 404s an unknown id.
     fillSessionId: eventRecorded ? fillSessionId : null,
+    pageFields: pageResult.pageFields,
   };
 }

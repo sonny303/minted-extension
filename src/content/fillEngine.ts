@@ -148,6 +148,14 @@ function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
   return { ok: true };
 }
 
+// The page's fillable controls — the denominator for honest coverage
+// reporting ("filled 3 of 24 mapped · ~117 fields on this page").
+function countPageFields(): number {
+  return document.querySelectorAll(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea',
+  ).length;
+}
+
 export function applyFill(instructions: FillInstruction[]): FillPageResult {
   const filled: string[] = [];
   const skipped: ReportedField[] = [];
@@ -155,21 +163,26 @@ export function applyFill(instructions: FillInstruction[]): FillPageResult {
     try {
       const target = resolveTarget(instruction);
       if (!target) {
-        skipped.push({ label: instruction.label, reason: "field not found on this page" });
+        skipped.push({
+          label: instruction.label,
+          reason: "field not found on this page",
+          mapId: instruction.mapId,
+        });
         continue;
       }
       const outcome = applyValue(target, instruction);
       if (outcome.ok) {
         filled.push(instruction.label);
       } else {
-        skipped.push({ label: instruction.label, reason: outcome.reason });
+        skipped.push({ label: instruction.label, reason: outcome.reason, mapId: instruction.mapId });
       }
     } catch (error) {
       skipped.push({
         label: instruction.label,
         reason: `error applying value: ${error instanceof Error ? error.message : String(error)}`,
+        mapId: instruction.mapId,
       });
     }
   }
-  return { filled, skipped };
+  return { filled, skipped, pageFields: countPageFields() };
 }
