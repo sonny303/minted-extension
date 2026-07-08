@@ -23,6 +23,7 @@ import {
 } from "./api";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { coveragePortal, fillPortal } from "./fill";
+import { buildSubmissionTouchBody } from "../shared/submission";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -259,24 +260,22 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         idempotencyId = crypto.randomUUID();
         await writeSessionString(idKey, idempotencyId);
       }
-      // PR C write-back (Stories 5-7): the payer reference, an optional WIP
-      // note, and a task_id when one is known ride on the same POST. Empty
-      // strings are dropped to null so a blank field is a no-op (the server
-      // treats a blank payer reference as "don't overwrite"). task_id stays
-      // undefined in v1 — the panel has no task source (locked decision (c)).
-      const clean = (value: string | null | undefined): string | null => {
-        const text = value?.trim();
-        return text ? text : null;
-      };
-      const touch = await postSubmissionTouch(request.caseId, {
-        kind: "portal_submission",
-        portal_key: request.portalKey,
-        fill_session_id: request.fillSessionId,
-        idempotency_id: idempotencyId,
-        payer_reference_id: clean(request.payerReferenceId),
-        wip_note: clean(request.wipNote),
-        task_id: request.taskId ?? null,
-      });
+      // PR C write-back (Stories 5-7) + Phase 4 close-out: the payer reference,
+      // an optional WIP note, and the SOP task the human closed ride on the same
+      // POST. buildSubmissionTouchBody drops blank fields to null (a no-op
+      // server-side) and OMITS task_id unless one was selected — never sends it
+      // as null/empty.
+      const touch = await postSubmissionTouch(
+        request.caseId,
+        buildSubmissionTouchBody({
+          portalKey: request.portalKey,
+          fillSessionId: request.fillSessionId,
+          idempotencyId,
+          payerReferenceId: request.payerReferenceId,
+          wipNote: request.wipNote,
+          taskId: request.taskId,
+        }),
+      );
       // Remember the submission on the stored report so a restored panel
       // shows "Logged to the case." instead of offering the button again.
       try {

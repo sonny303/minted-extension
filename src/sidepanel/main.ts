@@ -16,6 +16,7 @@ import type {
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type ProviderIdentifiers } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
+import { matchPortalTasks } from "../shared/submission";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -414,22 +415,22 @@ function resetSubmitInputs(): void {
 
 // Phase 4: the just-filled case's open SOP tasks whose portal_key matches the
 // portal on the current page — the tasks "Mark submitted" could close. Matched
-// against the case backing the fill (lastFill), not whatever is selected now,
-// so the offered task always belongs to what was actually filled. Keys are
-// compared case-insensitively (both sides are already normalized bare/lowercase,
-// so this is belt-and-suspenders).
+// against the case backing the fill (lastFill), not whatever is selected now, so
+// the offered task always belongs to what was actually filled. The compare is a
+// literal string match on already-normalized keys (matchPortalTasks) — the
+// extension never re-normalizes, exactly like the field-map → profile-token join.
 function matchingPortalTasks(): CasePortalTask[] {
   const context = lastFill;
   if (!context || portal == null) return [];
   const caseItem = cases.find((c) => c.id === context.caseId);
-  const key = portal.key.toLowerCase();
-  return (caseItem?.portalTasks ?? []).filter((t) => t.portalKey.toLowerCase() === key);
+  return matchPortalTasks(caseItem?.portalTasks, portal.key);
 }
 
 // Render the "close a task" affordance and set selectedTaskId. Zero matches →
 // hidden, no task closed (today's behavior). One → auto-selected, shown as
-// "Will close task: <title>". Several → a dropdown defaulting to the first, with
-// a "Don't close a task" escape. Never blocks or changes the submit itself.
+// "Will close task: <title>". Several → a dropdown preselecting NONE (the human
+// picks which), with a "Don't link a task" escape. Never blocks or changes the
+// submit itself.
 function renderTaskLink(): void {
   const matches = matchingPortalTasks();
   const first = matches[0];
@@ -452,10 +453,10 @@ function renderTaskLink(): void {
   }
 
   taskSelect.hidden = false;
-  taskSelect.add(new Option("Don't close a task", ""));
+  taskSelect.add(new Option("Don't link a task", ""));
   for (const t of matches) taskSelect.add(new Option(t.title, t.taskId));
-  taskSelect.selectedIndex = 1; // default to the first matching task
-  selectedTaskId = first.taskId;
+  taskSelect.selectedIndex = 0; // preselect none — the human chooses a task
+  selectedTaskId = null;
 }
 
 // Story 10: how long ago the selected case was last marked submitted, when
@@ -1215,6 +1216,21 @@ taskSelect.addEventListener("change", () => {
   selectedTaskId = taskSelect.value || null;
 });
 
+// Phase 4, point 6: after a submit that closed a task, refetch the provider's
+// cases so the now-completed task drops out of portalTasks and can't be
+// re-offered on a later fill of the same case. Reuses the case-picker's existing
+// GET /api/cases call — no new endpoint. Best-effort and generation-guarded: a
+// stale response (provider/org switched meanwhile) is discarded, and an error
+// leaves the last-known cases in place (never raises the error box).
+async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
+  const generation = loadGeneration;
+  const response = await sendToBackground({ type: "LIST_CASES", providerId });
+  if (!isCurrent(generation) || !response.ok) return;
+  cases = response.data;
+  renderCaseStatusPill();
+  renderCaseNote();
+}
+
 // Pressed by the human only after they submit the portal form themselves.
 // The background reuses one idempotency id per (case, fill session), so a
 // retry after a failure can never double-log the touch. On submit it also
@@ -1239,6 +1255,12 @@ markSubmittedBtn.addEventListener("click", () => {
   }
 
   const buttonLabel = dupConfirmPending ? "Log anyway" : "Mark submitted";
+  // Capture the task to close BEFORE the async work: a successful submit refetches
+  // cases (mutating matchingPortalTasks), so read the id + title now.
+  const closedTaskId = selectedTaskId;
+  const closedTaskTitle = closedTaskId
+    ? (matchingPortalTasks().find((t) => t.taskId === closedTaskId)?.title ?? null)
+    : null;
   void (async () => {
     setError(mainError, null);
     markSubmittedBtn.disabled = true;
@@ -1251,9 +1273,12 @@ markSubmittedBtn.addEventListener("click", () => {
       fillSessionId: context.fillSessionId,
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
-      taskId: selectedTaskId,
+      taskId: closedTaskId,
     });
     if (!response.ok) {
+      // A 404 here can now also mean a cross-org/invalid task_id — surface the
+      // server's message as-is and let the human retry. Never auto-retry with
+      // the task stripped.
       markSubmittedBtn.disabled = false;
       markSubmittedBtn.textContent = buttonLabel;
       setError(mainError, response.error);
@@ -1263,12 +1288,16 @@ markSubmittedBtn.addEventListener("click", () => {
     dupWarn.hidden = true;
     submitDetails.hidden = true;
     taskLink.hidden = true;
+    selectedTaskId = null;
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    submitStatus.textContent = selectedTaskId
-      ? "Logged to the case. SOP task marked done."
+    submitStatus.textContent = closedTaskTitle
+      ? `Logged to the case. Task closed: ${closedTaskTitle}`
       : "Logged to the case.";
+    // Point 6: drop the now-closed task from the case's portalTasks so a later
+    // fill of the same case won't re-offer it.
+    if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
   })();
 });
 

@@ -65,8 +65,9 @@ export type BgRequest =
   // Pressed by the human AFTER they submit the portal form themselves — the
   // extension never touches the portal's submit button. fillSessionId is the
   // fill attempt's idempotency id when the fill event was recorded, else null.
-  // PR C write-back (Stories 5-7): the payer reference the human entered, an
-  // optional WIP note, and a task_id when one is known (v1 sends none).
+  // PR C write-back (Stories 5-7): the payer reference the human entered and an
+  // optional WIP note. Phase 4: taskId is the portal-matched SOP task the human
+  // chose to close (null/omitted when none matched or the human opted out).
   | {
       type: "MARK_SUBMITTED";
       providerId: string;
