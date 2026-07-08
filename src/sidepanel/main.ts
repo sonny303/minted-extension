@@ -14,7 +14,7 @@ import type {
   UserOrgMembership,
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
-import { sendToBackground, type ProviderIdentifiers } from "../shared/messages";
+import { sendToBackground, type ProviderCardDetails } from "../shared/messages";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 import { matchPortalTasks } from "../shared/submission";
 
@@ -51,8 +51,7 @@ const facilityHint = el<HTMLElement>("facility-hint");
 const mainError = el<HTMLElement>("main-error");
 const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
-const providerNpi = el<HTMLElement>("provider-npi");
-const providerMeta = el<HTMLElement>("provider-meta");
+const providerDob = el<HTMLElement>("provider-dob");
 const providerIds = el<HTMLElement>("provider-ids");
 const fillSection = el<HTMLElement>("fill-section");
 const caseSelect = el<HTMLSelectElement>("case-select");
@@ -181,7 +180,7 @@ function orgResolved(): boolean {
 
 function providerLabel(p: ProviderListItem): string {
   const name = `${p.lastName}, ${p.firstName}`;
-  return p.npi ? `${name} — ${p.npi}` : name;
+  return p.npi ? `${name} - ${p.npi}` : name;
 }
 
 // The locked dropdown wording: "<payer> - <state> - <status>".
@@ -219,49 +218,55 @@ function renderCaseStatusPill(): void {
 function renderProviderCard(provider: ProviderListItem | null): void {
   providerCard.hidden = provider == null;
   fillSection.hidden = provider == null;
-  // Identifiers arrive with the profile (loadFacilities), a beat after the card;
-  // clear them here so a switch never shows the previous provider's ids.
-  renderIdentifiers(null);
+  // Detail fields arrive with the profile (loadFacilities), a beat after the card;
+  // clear them here so a switch never shows the previous provider's details.
+  renderProviderDetails(null);
   if (!provider) return;
-  const credentials = provider.credentials ? `, ${provider.credentials}` : "";
-  providerName.textContent = `${provider.firstName} ${provider.lastName}${credentials}`;
-  providerNpi.textContent = provider.npi ? `NPI ${provider.npi}` : "No NPI on file";
-  providerMeta.textContent = [provider.specialty, provider.status].filter(Boolean).join(" · ");
+  providerName.textContent = [
+    `${provider.firstName} ${provider.lastName}`,
+    provider.credentials,
+    provider.specialty,
+  ].filter(Boolean).join(", ");
 }
 
-// Story 4: the provider's key identifiers as a copy-able grid on the card. A
-// missing value renders greyed ("—") with no copy button. Values are never
-// logged; the copy button writes the raw value to the clipboard only.
-const IDENTIFIER_ROWS: Array<{ key: keyof ProviderIdentifiers; label: string }> = [
-  { key: "npi", label: "NPI" },
-  { key: "license", label: "License #" },
-  { key: "caqh", label: "CAQH ID" },
-  { key: "tin", label: "TIN / EIN" },
-  { key: "dea", label: "DEA" },
+// Provider detail card Section 2: the requested fields as a copy-able label/value list.
+const DETAIL_ROWS: Array<{ key: keyof ProviderCardDetails; label: string; isDate?: boolean }> = [
+  { key: "practiceAddress", label: "Practice Address" },
+  { key: "licenseNumber", label: "License number" },
+  { key: "licenseIssueDate", label: "License issue date", isDate: true },
+  { key: "licenseExpirationDate", label: "License Expiration Date", isDate: true },
+  { key: "npi", label: "NPI number" },
+  { key: "caqh", label: "CAQH #" },
+  { key: "groupNpi", label: "Group NPI" },
 ];
 
-function renderIdentifiers(ids: ProviderIdentifiers | null): void {
+function renderProviderDetails(details: ProviderCardDetails | null): void {
   providerIds.replaceChildren();
-  providerIds.hidden = ids == null;
-  if (ids == null) return;
-  for (const { key, label } of IDENTIFIER_ROWS) {
-    const value = ids[key];
+  providerIds.hidden = details == null;
+  providerDob.hidden = details == null;
+  providerDob.textContent = "";
+  if (details == null) return;
+  providerDob.textContent = details.dateOfBirth
+    ? `DOB: ${fmtContextDate(details.dateOfBirth)}`
+    : "DOB: Not on file";
+  for (const { key, label, isDate } of DETAIL_ROWS) {
+    const value = details[key];
     const dt = document.createElement("dt");
-    dt.textContent = label;
+    dt.textContent = `${label}:`;
     const dd = document.createElement("dd");
-    if (value == null) {
-      dd.textContent = "—";
+    if (value == null || value === "") {
+      dd.textContent = "Not on file";
       dd.classList.add("id-empty");
     } else {
       const text = document.createElement("span");
       text.className = "id-value";
-      text.textContent = value;
+      text.textContent = isDate ? fmtContextDate(value) : value;
       const copy = document.createElement("button");
       copy.type = "button";
       copy.className = "id-copy";
       copy.textContent = "Copy";
       copy.setAttribute("aria-label", `Copy ${label}`);
-      copy.addEventListener("click", () => void copyValue(value, copy));
+      copy.addEventListener("click", () => void copyValue(text.textContent ?? "", copy));
       dd.append(text, copy);
     }
     providerIds.append(dt, dd);
@@ -668,7 +673,7 @@ function fieldList(box: HTMLElement, heading: string, fields: ReportedField[]): 
     bucketDetails(
       heading,
       fields.length,
-      fields.map((field) => `${field.label} — ${field.reason}`),
+      fields.map((field) => `${field.label} - ${field.reason}`),
     ),
   );
 }
@@ -731,7 +736,7 @@ function renderFillSummary(
   gapFlag.hidden = gapCount === 0;
   if (gapCount > 0) {
     gapFlag.textContent =
-      `${gapCount} mapped ${gapCount === 1 ? "field has" : "fields have"} no value yet — ` +
+      `${gapCount} mapped ${gapCount === 1 ? "field has" : "fields have"} no value yet - ` +
       "review the lists above and complete them on the portal before you submit.";
   }
 
@@ -860,7 +865,7 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   needsFacility = response.data.needsFacility;
   facilitiesLoaded = true;
   // Story 4: the identifiers ride on the same profile fetch as the facilities.
-  renderIdentifiers(response.data.identifiers);
+  renderProviderDetails(response.data.details);
 
   if (facilities.length === 0) {
     // Nothing to resolve: facility tokens come back unresolved with a
@@ -1180,7 +1185,7 @@ fillBtn.addEventListener("click", () => {
     if (!clickPortal || tab?.id == null) {
       setError(
         mainError,
-        "The enrollment form is no longer the active tab — switch back to it and try again.",
+        "The enrollment form is no longer the active tab - switch back to it and try again.",
       );
       return;
     }

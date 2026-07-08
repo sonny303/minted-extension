@@ -94,21 +94,22 @@ export interface ProviderFacilitiesInfo {
   // meta.needs_facility: several facilities, none picked — the fill gate
   // stays closed until the user picks ("Pick a location first.").
   needsFacility: boolean;
-  // Story 4: the provider's key professional identifiers, projected from the
-  // profile tokens (not PHI — NPI/license/CAQH/TIN/DEA are form-fill fields).
-  // The PHI-dense token payload stays in the worker; only these five cross.
-  identifiers: ProviderIdentifiers;
+  // Provider detail card fields projected from the profile tokens.
+  details: ProviderCardDetails;
 }
 
-// Story 4: the identifiers shown on the provider card, each with a copy button.
-// A null value renders greyed ("—"). Keys are camelCase panel fields, not
-// tokens; the worker maps them from provider.*/group.* profile tokens.
-export interface ProviderIdentifiers {
+// Story 4: the provider detail card fields shown on the panel. A null value
+// renders greyed ("Not on file"). The worker maps these from provider.*/
+// group.*/facility.* profile tokens.
+export interface ProviderCardDetails {
+  dateOfBirth: string | null;
+  practiceAddress: string | null;
+  licenseNumber: string | null;
+  licenseIssueDate: string | null;
+  licenseExpirationDate: string | null;
   npi: string | null;
-  license: string | null;
   caqh: string | null;
-  tin: string | null;
-  dea: string | null;
+  groupNpi: string | null;
 }
 
 export type BgResponse<T> =

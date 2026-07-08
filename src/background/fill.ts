@@ -83,13 +83,13 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     const label = humanLabel(map);
 
     if (map.fieldType === "file") {
-      manual.push({ label, reason: "file upload — attach manually", mapId: map.id });
+      manual.push({ label, reason: "file upload - attach manually", mapId: map.id });
       continue;
     }
     if (map.source === "manual") {
       manual.push({
         label,
-        reason: map.notes ?? "not tracked in Minted Panel — enter manually",
+        reason: map.notes ?? "not tracked in Minted Panel - enter manually",
         mapId: map.id,
       });
       continue;
@@ -103,7 +103,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     } else {
       manual.push({
         label,
-        reason: "not linked to a Minted Panel field — enter manually",
+        reason: "not linked to a Minted Panel field - enter manually",
         mapId: map.id,
       });
       continue;
@@ -132,7 +132,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     if (map.source === "manual_partial") {
       manual.push({
         label,
-        reason: map.notes ?? "prefilled — review and complete manually",
+        reason: map.notes ?? "prefilled - review and complete manually",
         mapId: map.id,
       });
     }
@@ -224,7 +224,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
-      "Could not reach the enrollment form — open the BCBS KS enrollment page in the current tab and reload it.",
+      "Could not reach the enrollment form - open the BCBS KS enrollment page in the current tab and reload it.",
       { cause: error },
     );
   }
@@ -248,7 +248,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
       message.includes("Receiving end does not exist")
-        ? "Could not reach the enrollment form — open the BCBS KS enrollment page in the current tab and reload it."
+        ? "Could not reach the enrollment form - open the BCBS KS enrollment page in the current tab and reload it."
         : `Fill failed on the page: ${message}`,
       { cause: error },
     );

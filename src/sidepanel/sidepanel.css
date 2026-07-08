@@ -578,17 +578,13 @@ button.link:hover {
 .provider-name {
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.35;
 }
 
-.provider-npi {
-  margin: 3px 0 2px;
-  font: 400 12px var(--mp-mono);
+.provider-dob {
+  margin: 3px 0 10px;
+  font-size: 12px;
   color: var(--mp-ink-600);
-}
-
-.provider-meta {
-  font-size: 11px;
-  color: var(--mp-ink-400);
 }
 
 /* ---- provider identifiers (Story 4): copy-able key/value grid on the card ---- */
@@ -603,10 +599,8 @@ button.link:hover {
 
 .ids dt {
   align-self: center;
-  font: 700 9.5px/1.5 var(--mp-font);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--mp-label);
+  font: 600 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
 }
 
 .ids dd {
