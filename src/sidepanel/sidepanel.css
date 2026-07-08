@@ -664,10 +664,16 @@ button.link:hover {
 .view-settings-field {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 7px;
   padding: 2px 0;
-  font-size: 12px;
+  font: 500 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-600);
   cursor: pointer;
+}
+
+.view-settings-field span {
+  text-align: right;
 }
 
 .view-settings-field input {
