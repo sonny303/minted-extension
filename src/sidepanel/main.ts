@@ -237,6 +237,7 @@ const DETAIL_ROWS: Array<{ key: keyof ProviderCardDetails; label: string; isDate
   { key: "licenseExpirationDate", label: "License Expiration Date", isDate: true },
   { key: "npi", label: "NPI number" },
   { key: "caqh", label: "CAQH #" },
+  { key: "tin", label: "TIN / EIN" },
   { key: "groupNpi", label: "Group NPI" },
 ];
 

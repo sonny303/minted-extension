@@ -109,6 +109,7 @@ export interface ProviderCardDetails {
   licenseExpirationDate: string | null;
   npi: string | null;
   caqh: string | null;
+  tin: string | null;
   groupNpi: string | null;
 }
 

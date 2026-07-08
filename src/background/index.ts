@@ -111,6 +111,7 @@ function pickProviderDetails(tokens: ProfileToken[]): ProviderCardDetails {
     licenseExpirationDate: str("provider.licenseExpirationDate"),
     npi: str("provider.npi"),
     caqh: str("provider.caqhId"),
+    tin: str("group.tin"),
     groupNpi: str("group.npiType2"),
   };
 }
