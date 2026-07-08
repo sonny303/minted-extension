@@ -100,6 +100,18 @@ export interface CaseLatestNote {
   at: string;
 }
 
+// A portal-linked open SOP task on the case (Phase 4, SOP↔portal link). The
+// panel matches the current page's portal_key against these to close the right
+// task on submit (passing task_id on the submission touch). The extension never
+// invents a task — it only echoes one the server derived from the case's tasks.
+// portalKey arrives normalized (bare/lowercase) from the server.
+export interface CasePortalTask {
+  taskId: string;
+  title: string;
+  portalKey: string;
+  status: string;
+}
+
 // GET /api/cases?providerId=... — the case picker feed. Mirrors the merged
 // route (mintedpanel src/services/providerCases.ts): the provider's OPEN
 // cases only (open = credentialing status not in the config's 'complete'
@@ -118,6 +130,10 @@ export interface CaseListItem {
   // Story 10: the most recent submission (a touchpoint with outcome
   // 'submitted') as an ISO timestamp — drives the duplicate-submission guard.
   lastSubmittedAt: string | null;
+  // Phase 4: the case's open, portal-linked SOP tasks. Optional so the panel
+  // degrades gracefully against a server that predates this field (treated as
+  // no tasks). The extension matches the page's portal_key against these.
+  portalTasks?: CasePortalTask[];
 }
 
 // GET /api/cases/:id/context — the selected case's reference number(s) and most

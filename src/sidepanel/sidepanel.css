@@ -761,6 +761,13 @@ button.link:hover {
   color: var(--mp-ink-faint);
 }
 
+/* Phase 4: the "close a task on submit" affordance. */
+.task-link-single {
+  margin: 0;
+  font: 500 12.5px/1.4 var(--mp-font);
+  color: var(--mp-ink);
+}
+
 /* ---- coverage sensor (Epic 3a): read-only pre-fill data-gap panel ---- */
 .coverage {
   margin: 2px 0 12px;

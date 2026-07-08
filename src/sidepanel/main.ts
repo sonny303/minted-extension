@@ -8,6 +8,7 @@ import "./sidepanel.css";
 import type {
   CaseContext,
   CaseListItem,
+  CasePortalTask,
   ProviderListItem,
   ProviderProfileFacility,
   UserOrgMembership,
@@ -73,6 +74,9 @@ const gapFlag = el<HTMLElement>("gap-flag");
 const submitDetails = el<HTMLElement>("submit-details");
 const payerRefInput = el<HTMLInputElement>("payer-ref-input");
 const wipNoteInput = el<HTMLTextAreaElement>("wip-note-input");
+const taskLink = el<HTMLElement>("task-link");
+const taskLinkSingle = el<HTMLElement>("task-link-single");
+const taskSelect = el<HTMLSelectElement>("task-select");
 const submitHint = el<HTMLElement>("submit-hint");
 const dupWarn = el<HTMLElement>("dup-warn");
 const markSubmittedBtn = el<HTMLButtonElement>("mark-submitted");
@@ -103,6 +107,12 @@ let needsFacility = false;
 let portal: PortalConfig | null = null;
 let portalTabId: number | null = null;
 let lastFill: LastFill | null = null;
+// Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
+// selected case's portalTasks matched against the current page's portal. null =
+// no matching task (or the user chose "Don't close a task"). Re-derived by
+// renderTaskLink() each time the submit block renders; cleared on selection
+// change / fresh fill.
+let selectedTaskId: string | null = null;
 // Story 10: set true after the first "Mark submitted" click on a recently
 // submitted case surfaces the warning; the next click logs anyway. Reset on any
 // selection change or a fresh fill.
@@ -402,6 +412,52 @@ function resetSubmitInputs(): void {
   wipNoteInput.value = "";
 }
 
+// Phase 4: the just-filled case's open SOP tasks whose portal_key matches the
+// portal on the current page — the tasks "Mark submitted" could close. Matched
+// against the case backing the fill (lastFill), not whatever is selected now,
+// so the offered task always belongs to what was actually filled. Keys are
+// compared case-insensitively (both sides are already normalized bare/lowercase,
+// so this is belt-and-suspenders).
+function matchingPortalTasks(): CasePortalTask[] {
+  const context = lastFill;
+  if (!context || portal == null) return [];
+  const caseItem = cases.find((c) => c.id === context.caseId);
+  const key = portal.key.toLowerCase();
+  return (caseItem?.portalTasks ?? []).filter((t) => t.portalKey.toLowerCase() === key);
+}
+
+// Render the "close a task" affordance and set selectedTaskId. Zero matches →
+// hidden, no task closed (today's behavior). One → auto-selected, shown as
+// "Will close task: <title>". Several → a dropdown defaulting to the first, with
+// a "Don't close a task" escape. Never blocks or changes the submit itself.
+function renderTaskLink(): void {
+  const matches = matchingPortalTasks();
+  const first = matches[0];
+  selectedTaskId = null;
+  taskSelect.replaceChildren();
+  taskSelect.hidden = true;
+  taskLinkSingle.hidden = true;
+
+  if (!first) {
+    taskLink.hidden = true;
+    return;
+  }
+  taskLink.hidden = false;
+
+  if (matches.length === 1) {
+    selectedTaskId = first.taskId;
+    taskLinkSingle.hidden = false;
+    taskLinkSingle.textContent = `Will close task: ${first.title}`;
+    return;
+  }
+
+  taskSelect.hidden = false;
+  taskSelect.add(new Option("Don't close a task", ""));
+  for (const t of matches) taskSelect.add(new Option(t.title, t.taskId));
+  taskSelect.selectedIndex = 1; // default to the first matching task
+  selectedTaskId = first.taskId;
+}
+
 // Story 10: how long ago the selected case was last marked submitted, when
 // that is inside the duplicate window — else null (no warning).
 function recentSubmissionPhrase(caseItem: CaseListItem | undefined): string | null {
@@ -439,6 +495,8 @@ function clearFillResults(): void {
   fillEventWarn.hidden = true;
   gapFlag.hidden = true;
   submitDetails.hidden = true;
+  taskLink.hidden = true;
+  selectedTaskId = null;
   submitHint.hidden = true;
   dupWarn.hidden = true;
   dupConfirmPending = false;
@@ -670,7 +728,13 @@ function renderFillSummary(
   // Stories 5/6: the payer-reference + WIP-note boxes show while the human can
   // still act; an already-logged (restored) report hides them.
   submitDetails.hidden = submitted;
-  if (!submitted) resetSubmitInputs();
+  if (!submitted) {
+    resetSubmitInputs();
+    renderTaskLink();
+  } else {
+    taskLink.hidden = true;
+    selectedTaskId = null;
+  }
   submitHint.hidden = submitted;
   dupWarn.hidden = true;
   dupConfirmPending = false;
@@ -1146,10 +1210,16 @@ fillBtn.addEventListener("click", () => {
   })();
 });
 
+// Several matching tasks: the human picks which one (or none) to close.
+taskSelect.addEventListener("change", () => {
+  selectedTaskId = taskSelect.value || null;
+});
+
 // Pressed by the human only after they submit the portal form themselves.
 // The background reuses one idempotency id per (case, fill session), so a
 // retry after a failure can never double-log the touch. On submit it also
-// carries the payer reference (Story 5) and the WIP note (Story 6).
+// carries the payer reference (Story 5), the WIP note (Story 6), and the
+// task_id of the SOP task to close (Phase 4), when one was matched.
 markSubmittedBtn.addEventListener("click", () => {
   const context = lastFill;
   if (!context) return;
@@ -1181,6 +1251,7 @@ markSubmittedBtn.addEventListener("click", () => {
       fillSessionId: context.fillSessionId,
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
+      taskId: selectedTaskId,
     });
     if (!response.ok) {
       markSubmittedBtn.disabled = false;
@@ -1191,10 +1262,13 @@ markSubmittedBtn.addEventListener("click", () => {
     dupConfirmPending = false;
     dupWarn.hidden = true;
     submitDetails.hidden = true;
+    taskLink.hidden = true;
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    submitStatus.textContent = "Logged to the case.";
+    submitStatus.textContent = selectedTaskId
+      ? "Logged to the case. SOP task marked done."
+      : "Logged to the case.";
   })();
 });
 
