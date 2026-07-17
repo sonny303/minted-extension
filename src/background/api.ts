@@ -9,11 +9,13 @@ import type {
   ApiMeta,
   CaseContext,
   CaseListItem,
+  CaseSearchRow,
+  CaseTouchBody,
+  NextBestActionResult,
   PortalFieldMap,
   ProviderListItem,
   ProviderProfileResponse,
   SubmissionTouch,
-  SubmissionTouchBody,
   UserOrgMembership,
 } from "../shared/apiTypes";
 import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
@@ -121,6 +123,32 @@ export async function listCases(providerId: string): Promise<CaseListItem[]> {
   return data;
 }
 
+// GET /api/cases?q= — the case half of the unified standalone search (E4.3
+// TE-11): org-scoped, matching payer name / provider name / tracking id, ids +
+// display fields only. A blank query returns [] server-side.
+export async function searchCases(query: string): Promise<CaseSearchRow[]> {
+  const { data } = await apiFetch<CaseSearchRow[]>(`/api/cases?q=${encodeURIComponent(query)}`);
+  return data;
+}
+
+// GET /api/providers?search= — the provider half of the search, reusing the
+// existing guarded list route verbatim (TE-11): ilike over first/last name,
+// NPI, and email over the PHI-minimized list projection.
+export async function searchProviders(query: string): Promise<ProviderListItem[]> {
+  const { data } = await apiFetch<ProviderListItem[]>(
+    `/api/providers?search=${encodeURIComponent(query)}&page=1&pageSize=25&sort=last_name&order=asc`,
+  );
+  return data;
+}
+
+// GET /api/next-best-action — the org's queue top under its ranking config
+// (E4.3 TE-6), or { item: null } for an honest queue-clear. Read-only; the
+// extension renders the ONE item and never ranks anything itself.
+export async function getNextBestAction(): Promise<NextBestActionResult> {
+  const { data } = await apiFetch<NextBestActionResult>("/api/next-best-action");
+  return data;
+}
+
 // GET /api/cases/:id/context — the selected case's reference number(s), latest
 // note, and latest touch (Epic 3d). Org-scoped like the other case routes, so
 // requestOnce attaches x-org-id in multi-org mode (this pathname is NOT the
@@ -178,13 +206,14 @@ export async function postFillEvent(body: FillEventBody): Promise<void> {
   });
 }
 
-// POST /api/cases/:id/touches — the "Mark submitted" business log: one
-// append-only touch on the case (never a status change). Idempotent on
-// idempotency_id — a replay returns the stored touch (200) instead of
-// appending (201).
+// POST /api/cases/:id/touches — both touch kinds ride the same append-only
+// route: kind 'portal_submission' (the "Mark submitted" business log) and
+// kind 'structured_touch' (the E4.3 log-and-advance typed touch). Never a
+// status change. Idempotent on idempotency_id — a replay returns the stored
+// touch (200) instead of appending (201).
 export async function postSubmissionTouch(
   caseId: string,
-  body: SubmissionTouchBody,
+  body: CaseTouchBody,
 ): Promise<SubmissionTouch> {
   const { data } = await apiFetch<SubmissionTouch>(
     `/api/cases/${encodeURIComponent(caseId)}/touches`,

@@ -29,12 +29,16 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 | Route | Use |
 | --- | --- |
 | `GET /api/me/orgs` | org picker (the caller's own memberships; user-scoped, needs no org context) |
-| `GET /api/providers` | provider picker (PHI-safe list projection) |
-| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill; the worker also projects the five card identifiers (NPI, license, CAQH, TIN/EIN, DEA) from its tokens; carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
+| `GET /api/me/view-prefs` / `PUT` | the user's saved quick-card layout (`{ fields: string[] \| null }`, closed-catalog keys, server-validated; user-scoped) |
+| `GET /api/providers` | provider picker (PHI-safe list projection); `?search=` is the provider half of the unified search |
+| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill AND the quick-card projection (one audited read); carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
 | `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
-| `GET /api/cases?providerId=…` | case picker (the provider's OPEN cases); each row also carries `payerReferenceId` (prefill), `latestNote` (card), and `lastSubmittedAt` (duplicate-submission guard) |
+| `GET /api/cases?providerId=…` | case picker + active-cases list (the provider's OPEN cases); each row also carries `payerReferenceId` (prefill), `latestNote` (card), `lastSubmittedAt` (duplicate-submission guard), and `portalTasks` (close-out) |
+| `GET /api/cases?q=…` | the case half of the unified standalone search (E4.3; ids + display fields only) |
+| `GET /api/cases/:id/context` | the case workbench read: identity header (provider/payer/state), `selectedFacility`, `openTasks` with E4.2 execution types, `payerPipelineState`, tracking ID, latest note/touch |
+| `GET /api/next-best-action` | the org's server-ranked queue top (`{ item }` or `{ item: null }`) after a log — no ranking logic in the extension |
 | `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
-| `POST /api/cases/:id/touches` | "Mark submitted" business log (snake_case body per the locked R2 contract); optional write-back on the same POST — `payer_reference_id`, `wip_note`, `task_id`, `pdf_filename` |
+| `POST /api/cases/:id/touches` | two kinds on one route (snake_case body per the locked R2 contract): `portal_submission` ("Mark submitted", with optional `payer_reference_id`, `wip_note`, `task_id`, `pdf_filename` write-back) and `structured_touch` (E4.3 typed touch: required `touch_type`, optional `outcome`/recipient/`next_follow_up_date`/`payer_reference_id`) |
 
 Org context: a single-org user sends no `x-org-id` header — the server
 resolves their sole membership (unchanged v0 behavior) and the panel shows
@@ -78,6 +82,72 @@ already marked submitted shows "Logged to the case." instead of the button.
 Org-scoped state clears on org switch; everything clears on sign-out and
 whenever a different identity signs in, and dies with the browser session
 either way.
+
+## E4.3 Workbench handoff (platform → extension) and standalone mode
+
+Built against the reviewed epic `docs/redesign/E4.3-extension-workbench-handoff.md`
+(mintedpanel, `redesign` branch). The extension stays read-only: the only
+writes are the existing manual touch POST and the user-scoped layout PUT.
+
+- **Handoff receipt (F4.3.1/TE-1):** the webapp's "Work in portal" sends the
+  locked `SET_ACTIVE_CASE` message (`{ type, caseId, providerId, orgId,
+  portalUrl }` — identifiers + URL ONLY) through Chrome external messaging.
+  `externally_connectable.matches` is restricted to the approved app origin
+  and the worker re-checks `sender.origin` (defense in depth) and
+  strict-parses the shape, dropping unknown fields. The worker stores ONE
+  active-case record (last launch wins), binds the next tab opened on the
+  portal origin, and expires the context on bound-tab close or 60 minutes
+  idle. The panel applies the context only after org validation: signed out →
+  the sign-in view says a case is waiting; not a member of the handoff's org →
+  the context is DISCARDED with an explicit notice; a member on a different
+  org → an explicit switch prompt. Expired context closes the fill gate and
+  offers re-launch or the picker — the worker also refuses a FILL against an
+  expired record. In-panel selections (search, active-cases row, NBA
+  handback, manual picker) enter the SAME active-case state (TE-17).
+- **Identity guard:** the strip under the header always names the org the
+  panel operates as, plus provider · payer/state · facility once a case is
+  active (fed by `GET /api/cases/:id/context`).
+- **Case workbench:** pipeline state, tracking ID, and the case's open SOP
+  tasks with their E4.2 execution types render read-only; `extension_fill`
+  tasks are what the Fill button serves; task completion stays in the webapp.
+- **Fix-it tie-in (F4.3.3/TE-4):** every coverage/report gap is classified —
+  `no_mapping` routes to the platform train flow
+  (`/portals/<key>/train?field=…`, new tab), `no_value` routes to the
+  provider record. "I fixed a mapping — refresh and re-check" refetches maps
+  + profile so the fix improves the live session. The extension never writes
+  mappings.
+- **Log-and-advance (F4.3.4/TE-5/TE-6):** the "Log a touch" form posts
+  `kind: structured_touch` (type required; `other` requires the one-line
+  context). A failed write preserves every entered value and reuses the same
+  idempotency id on retry, so retrying can never double-log. After any
+  successful log (structured touch or Mark submitted) the panel fetches
+  `GET /api/next-best-action` and renders the ONE server-ranked item — or an
+  honest "Queue clear" — with a Work-this-case handback and a webapp deep
+  link.
+- **Standalone search & quick cards (F4.3.5):** with no active case the panel
+  is a search-first ad-hoc tool: one input queries cases and providers
+  concurrently (each half degrades independently). A provider opens the
+  read-only Type 1 / Type 2 quick cards — name + DOB header; monospace,
+  hover-copy IDs (defaults: NPI, CAQH, License # / group NPI, TIN); license
+  and malpractice rows with amber <30-day expiry badges (red when lapsed);
+  honest em-dash empties carrying the profile's unresolved reason. "Open in
+  Minted Panel ↗" deep-links `/providers/:id` in a NEW tab (portal session
+  preserved). Edit Layout swaps defaults / adds up to 3 fields from the
+  server-owned closed catalog only (`src/shared/quickCards.ts` mirrors it;
+  `provider.ssnLast4` and vault fields are structurally absent) and persists
+  via `PUT /api/me/view-prefs`; a missing/invalid stored layout degrades to
+  the default. The provider's active cases list under the cards.
+- **PHI discipline (TE-3/TE-14):** card values, tokens, and context live in
+  memory only — never `chrome.storage`, IndexedDB, logs, or HTTP cache — and
+  clear on org/case change, sign-out, tab close, and context expiry. The
+  active-case record persists identifiers + URL only.
+
+**Mock harness (TE-10):** `scripts/mock-panel-api.mjs` mirrors the panel
+contract in-repo (the panel repo's `scripts/mock-api-server.mjs` pattern);
+`src/harness/workbench.test.ts` drives the real background modules through it
+for TS-80–TS-83 and TS-100–TS-103 plus the TE-3 latency budgets (context ≤1s,
+fill-ready ≤2s, proven concurrent via injected per-request latency). CI never
+touches a real payer portal or the real panel.
 
 ## Touchlog write-back (workbench Stories 4–11)
 
@@ -141,12 +211,15 @@ is the active tab:
 ## Repo layout
 
 ```
-public/manifest.json        Manifest V3 (copied verbatim into dist/)
+public/manifest.json        Manifest V3 (copied verbatim into dist/); externally_connectable
 sidepanel.html              side panel entry (Vite html input)
 src/sidepanel/              workbench side panel UI (vanilla TS, no framework)
-src/background/             service worker: auth.ts, api.ts, index.ts (router)
+src/background/             service worker: auth.ts, api.ts, fill.ts, activeCase.ts, index.ts (router)
 src/content/                content script (IIFE build, messaging only)
-src/shared/                 message protocol, API types, deploy constants
+src/shared/                 message protocol, API type mirrors, pure E4.3 modules
+                            (handoff, quickCards, structuredTouch, fixit), deploy constants
+src/harness/                chrome stub + the TE-10 mock-harness scenario tests
+scripts/mock-panel-api.mjs  in-repo mock of the panel /api contract (harness server)
 vite.config.ts              side panel + background build
 vite.content.config.ts      content script build (content scripts can't be ESM)
 ```

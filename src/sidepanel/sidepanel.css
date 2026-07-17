@@ -1102,3 +1102,443 @@ button.link:hover {
   border-radius: 50%;
   background: var(--mp-red-600);
 }
+
+/* ===========================================================================
+   E4.3 Extension Workbench — identity guard, handoff, search, quick cards,
+   case workbench, structured touch, next best action. Dense Linear/Vercel-
+   style utility: compact type, 1px structural borders, monospace IDs.
+   =========================================================================== */
+
+.mono {
+  font-family: var(--mp-mono);
+}
+
+/* ---- identity guard strip (F4.3.1): who/what the panel operates as ---- */
+.identity-guard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 6px 16px;
+  font: 500 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-600);
+  background: var(--mp-cream-100);
+  border-bottom: 1px solid var(--mp-line-200);
+}
+
+.identity-org {
+  font-weight: 700;
+  color: var(--mp-green-900);
+}
+
+.identity-part {
+  color: var(--mp-ink-900);
+}
+
+.identity-sep {
+  color: var(--mp-ink-400);
+}
+
+/* ---- handoff banner (F4.3.1): applied / expired / org-mismatch states ---- */
+.handoff-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  font: 500 12px/1.5 var(--mp-font);
+  color: var(--mp-green-900);
+  background: var(--mp-mint-200);
+  border: 1px solid var(--mp-mint-300);
+  border-radius: var(--mp-radius-control);
+}
+
+.handoff-banner.banner-warn {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fde68a;
+}
+
+.banner-action {
+  width: auto;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.handoff-hint {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  font: 500 12px/1.5 var(--mp-font);
+  color: var(--mp-green-900);
+  background: var(--mp-mint-200);
+  border: 1px solid var(--mp-mint-300);
+  border-radius: var(--mp-radius-control);
+}
+
+/* ---- unified search (F4.3.5): the no-context empty state ---- */
+.search-results {
+  margin-top: 6px;
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-radius-control);
+  background: var(--mp-card);
+  overflow: hidden;
+}
+
+.search-group {
+  margin: 0;
+  padding: 6px 10px 4px;
+  font: 700 10px/1.4 var(--mp-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mp-ink-400);
+  border-top: 1px solid var(--mp-line-100);
+}
+
+.search-group:first-child {
+  border-top: none;
+}
+
+.search-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font: 500 12px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.search-row:hover {
+  background: var(--mp-cream-100);
+}
+
+.search-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-row-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--mp-ink-600);
+}
+
+.search-empty {
+  margin: 0;
+  padding: 6px 10px 8px;
+  font: 500 11px/1.5 var(--mp-font);
+  color: var(--mp-ink-400);
+}
+
+/* ---- quick cards (F4.3.5): dense ID grids + structural rows ---- */
+.card-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.open-link {
+  font: 600 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-600);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.open-link:hover {
+  color: var(--mp-green-900);
+  text-decoration: underline;
+}
+
+/* Hover-copy: the copy affordance appears on row hover (or keyboard focus),
+   keeping the grid quiet until needed. */
+.qc .id-copy {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.qc dd:hover .id-copy,
+.qc .id-copy:focus-visible,
+.qc .id-copy.copied {
+  opacity: 1;
+}
+
+.qc-struct {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mp-line-100);
+}
+
+.qc-struct-label {
+  font: 600 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.qc-struct-value {
+  font: 500 12px var(--mp-mono);
+  color: var(--mp-ink-900);
+}
+
+.qc-type2 {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 2px solid var(--mp-line-200);
+}
+
+.qc-group-name {
+  font: 700 13px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.qc-group-name.id-empty {
+  font: 500 12px var(--mp-mono);
+  color: var(--mp-ink-400);
+}
+
+/* Expiry badges: amber < 30 days out, red past due. */
+.badge {
+  flex: none;
+  padding: 2px 7px;
+  font: 700 10px/1.4 var(--mp-font);
+  border-radius: var(--mp-radius-control);
+  white-space: nowrap;
+}
+
+.badge-expiring {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+}
+
+.badge-expired {
+  color: var(--mp-red-600);
+  background: var(--mp-red-100);
+  border: 1px solid color-mix(in srgb, var(--mp-red-600) 30%, white);
+}
+
+/* ---- active cases beneath the quick cards (F4.3.5) ---- */
+.section-title {
+  margin: 0 0 6px;
+  font: 700 10px/1.4 var(--mp-font);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mp-ink-400);
+}
+
+.active-cases {
+  margin: 12px 0;
+}
+
+.case-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font: 500 12px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+  text-align: left;
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-radius-control);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.case-row + .case-row {
+  margin-top: 4px;
+}
+
+.case-row:hover {
+  border-color: var(--mp-mint-300);
+  background: var(--mp-cream-50);
+}
+
+.case-row-selected {
+  border-color: var(--mp-green-700);
+  background: var(--mp-mint-200);
+}
+
+.case-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- case workbench extras: pipeline pill, task chips ---- */
+.pill-pipeline {
+  background: var(--mp-indigo-100);
+  color: var(--mp-indigo-700);
+}
+
+.case-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.case-task-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.case-task-title {
+  font: 500 12px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.exec-chip {
+  flex: none;
+  padding: 1px 6px;
+  font: 600 10px/1.5 var(--mp-font);
+  color: var(--mp-ink-600);
+  background: var(--mp-cream-100);
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-radius-control);
+  white-space: nowrap;
+}
+
+.exec-chip-fill {
+  color: var(--mp-green-900);
+  background: var(--mp-mint-200);
+  border-color: var(--mp-mint-300);
+}
+
+.case-task-due {
+  font: 500 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-600);
+}
+
+/* ---- fix-it tie-in (F4.3.3): gap actions + the refetch button ---- */
+.gap-action {
+  flex: none;
+  font: 600 11px/1.4 var(--mp-font);
+  color: var(--mp-green-700);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.gap-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.refresh-maps {
+  width: auto;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+/* ---- structured touch form (F4.3.4) ---- */
+.touch-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mp-line-200);
+}
+
+.touch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
+
+.touch-more {
+  margin: 0 0 12px;
+}
+
+.touch-more summary {
+  font: 600 11px/1.6 var(--mp-font);
+  color: var(--mp-ink-600);
+  cursor: pointer;
+}
+
+.touch-more[open] summary {
+  margin-bottom: 8px;
+}
+
+/* ---- next best action (F4.3.4/TE-6) ---- */
+.nba {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mp-line-200);
+}
+
+.nba-clear {
+  margin: 0;
+  font: 500 12px/1.5 var(--mp-font);
+  color: var(--mp-ink-600);
+}
+
+.nba-card {
+  padding: 10px 12px;
+  background: var(--mp-card);
+  border: 1px solid var(--mp-line-200);
+  border-radius: var(--mp-radius-control);
+}
+
+.nba-title {
+  margin: 0 0 2px;
+  font: 700 12.5px/1.4 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.nba-action {
+  margin: 0;
+  font: 500 12px/1.5 var(--mp-font);
+  color: var(--mp-ink-900);
+}
+
+.nba-reason {
+  margin: 2px 0 0;
+  font: 500 11px/1.5 var(--mp-font);
+  color: var(--mp-ink-600);
+}
+
+.nba-deadline {
+  margin: 4px 0 0;
+  font: 600 11px/1.4 var(--mp-font);
+  color: var(--mp-ink-600);
+}
+
+.nba-deadline.overdue {
+  color: var(--mp-red-600);
+}
+
+.nba-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.nba-work {
+  width: auto;
+  padding: 6px 12px;
+}
+
+.nba-link {
+  width: auto;
+  font-size: 11.5px;
+}

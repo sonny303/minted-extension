@@ -15,12 +15,20 @@ export interface FillInstruction {
   value: string;
 }
 
+// Why a mapped field wasn't (fully) filled — machine-readable so the fix-it
+// tie-in (F4.3.3) can route each gap to the RIGHT fix without string-matching
+// reasons: `no_mapping` → the mapping flow (train), `no_value` → the data fix
+// (provider record); the rest are informational. Optional so records persisted
+// before this field restore cleanly.
+export type ReportedFieldKind = "no_mapping" | "no_value" | "file" | "manual" | "review";
+
 export interface ReportedField {
   label: string;
   reason: string;
   // The portal_field_maps row this report is about — rides into the fill
   // event's fields_skipped so the panel can flag the exact broken mapping.
   mapId?: string;
+  kind?: ReportedFieldKind;
 }
 
 // What the content script did with the instructions it was handed.

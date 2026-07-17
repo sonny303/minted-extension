@@ -20,7 +20,8 @@ unpacked); first target portal is BCBS Kansas network enrollment.
    the panel API at `https://mintedpanel.vercel.app` (`src/shared/config.ts`).
 2. **The background service worker owns every API call** (`src/background/`:
    `api.ts` fetch layer, `auth.ts` session, `fill.ts` fill orchestration,
-   `orgState.ts`, `index.ts` message router). The side panel
+   `orgState.ts`, `activeCase.ts` E4.3 handoff receipt + active-case record,
+   `index.ts` message router). The side panel
    (`src/sidepanel/main.ts`, vanilla TS, no framework) is UI-only and talks to
    the worker over `chrome.runtime` messaging (`src/shared/messages.ts` —
    typed `BgRequest`/response union). It never holds tokens. The content
@@ -35,13 +36,16 @@ An eslint rule enforces the boundary: only `src/background/` may import
 `@supabase/supabase-js`. Builds: `vite.config.ts` (panel + background) and
 `vite.content.config.ts` (content script — content scripts can't be ESM).
 
-## Commands (all verified passing 2026-07-16, clean clone + `npm ci`)
+## Commands (all verified passing 2026-07-17, clean clone + `npm ci`)
 
 - `npm run build` — panel/background then content builds; `dist/` = loadable
   unpacked extension
 - `npm run typecheck` — `tsc --noEmit`, clean
 - `npm run lint` — `eslint .`, clean
-- `npm run test` — vitest; 1 file, 15 tests, all pass
+- `npm run test` — vitest; 6 files, 78 tests, all pass (includes the TE-10
+  mock harness: `src/harness/workbench.test.ts` drives the real background
+  modules against `scripts/mock-panel-api.mjs`, an in-repo mirror of the
+  panel /api contract — CI never touches a real portal or the real panel)
 - `npm run watch` — rebuild panel/background on change
 
 ## Locked wire contracts with the panel (do not change unilaterally)
@@ -102,18 +106,70 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   catalog — `orgId: null` rows are global portal truths, org rows are
   overrides. The extension fills `proposed` AND `approved` maps (only
   `retired` is skipped). (Panel `src/services/portalFieldMaps.ts`.)
+- **SET_ACTIVE_CASE handoff (E4.3 TE-1):** the webapp sends
+  `{ type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl }` through
+  `externally_connectable` — IDENTIFIERS + URL ONLY, never a profile/token
+  value. `parseSetActiveCase` (`src/shared/handoff.ts`) strict-parses and
+  drops unknown fields; the worker (`src/background/activeCase.ts`) stores
+  ONE record (last launch wins), binds the next portal-origin tab, expires on
+  tab close or 60 min idle. (Panel `src/lib/extensionHandoff.ts`.)
+- **Case context (E4.3 TE-2):** `GET /api/cases/:id/context` returns
+  `referenceNumbers`, `payerPipelineState`, `provider`/`payer` (`{id, name}`),
+  `state`, `selectedFacility`, `openTasks` (with E4.2 `executionType` —
+  `extension_fill` tasks are the fillable ones), `latestNote`, `latestTouch`.
+  The new keys are camelCase per that contract; the extension types them
+  OPTIONAL so a server that predates them degrades to hidden rows. (Panel
+  `src/services/caseContext.ts`.)
+- **Structured touch (E4.3 TE-5):** the same `POST /api/cases/:id/touches`
+  takes `kind: "structured_touch"` — `touch_type` REQUIRED (one of the seven
+  E4.1 canonical types), optional `note`/`outcome`/`recipient_name`/
+  `recipient_contact`/`next_follow_up_date`/`clears_follow_up`/
+  `payer_reference_id`; the portal_submission-only fields are a loud 422 on
+  this kind. Type + disposition sets are mirrored in
+  `src/shared/structuredTouch.ts`. (Panel `src/services/submissionTouches.ts`
+  `recordStructuredTouch`.)
+- **Next best action (E4.3 TE-6):** `GET /api/next-best-action` returns
+  `{ item }` or `{ item: null }` (honest queue-clear); item carries case/
+  provider pointers, display fields, `deadline {date, source, overdue}`, and
+  a webapp `deepLink` path. No ranking logic in the extension, nothing
+  persisted. (Panel `src/services/nextBestAction.ts`.)
+- **Case search (E4.3 TE-11):** `GET /api/cases?q=` returns `CaseSearchRow`s
+  (ids + display fields only); `GET /api/providers?search=` is the provider
+  half, the PHI-minimized list projection. (Panel
+  `src/services/providerCases.ts` `searchOrgCases`, `src/services/providers.ts`.)
+- **View prefs = quick-card layout (E4.3 TE-15/TE-16):**
+  `GET/PUT /api/me/view-prefs` (user-scoped) stores `{ fields: string[] }` of
+  CLOSED-catalog keys (≤32, deduped, ordered; excluded keys like
+  `provider.ssnLast4` are a 422 — they are structurally absent from the
+  catalog). `src/shared/quickCards.ts` mirrors the catalog verbatim (panel
+  `src/lib/quickCardCatalog.ts`) and degrades any invalid stored layout to
+  the default — never a broken card.
 
 ## Locked product rules
 
 - **The extension never submits portal forms. Unchanged, forever.** The human
   submits; the extension logs. Never a case status change from here (v1).
-- **Case selection is REQUIRED before fill** (locked decision) — the case
-  dropdown is fed by `GET /api/cases?providerId=…`.
+- **Case selection is REQUIRED before fill** (locked decision) — via the
+  E4.3 handoff, the unified search, the active-cases list, the NBA handback,
+  or the manual picker; all funnel into the same active-case state.
+- **R6 read-only boundary (E4.3):** the ONLY writes are the manual touch POST
+  (both kinds) and the user-scoped layout PUT. No task-state writes, no
+  mapping writes (fix-it hands off to the platform flows), no auto-submit,
+  no auto-touch.
+- **Never fill from expired context:** the active-case record expires on
+  bound-tab close or 60 minutes idle; the panel closes the gate AND the
+  worker refuses the FILL. Expiry/absence/mismatch are explicit UX states,
+  never silent.
 - Tokens never touch page context; field values never persist in
-  `chrome.storage` (fill reports store labels/counts/reasons only).
+  `chrome.storage` (fill reports store labels/counts/reasons only; the
+  active-case record stores identifiers + URL only). Quick-card values (incl.
+  DOB) are in-memory only — cleared on org/case change, sign-out, tab close,
+  expiry (TE-14).
 - `API_CORS_ORIGINS` on the panel's Vercel project must include
   `chrome-extension://<id>` (owner-managed; id changes when the unpacked path
-  changes or on packing).
+  changes or on packing). The handoff needs no CORS — it rides
+  `externally_connectable` (allowlisted to the app origin in the manifest AND
+  re-checked in the worker).
 
 ## Before you change anything
 
