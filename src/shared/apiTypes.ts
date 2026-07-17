@@ -162,12 +162,32 @@ export interface CaseContextTouch {
   note: string | null;
 }
 
+// E4.3 selected-facility parity: the practice address of the facility the CASE
+// selects, resolved server-side from the case's explicit facility relationship
+// only — never from the provider's facility set and never a fallback-to-first
+// guess. Address fields are nullable; `null` for the whole object means the
+// case has no facility link (an explicit gap the panel must not fill by
+// guessing). (Panel `src/services/caseContext.ts`.)
+export interface CaseContextFacility {
+  id: string;
+  name: string;
+  street: string | null;
+  suite: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+}
+
 export interface CaseContext {
   // [] or one payer reference id — rendered as "Reference: <n>", row hidden
   // when empty.
   referenceNumbers: string[];
   latestNote: CaseContextNote | null;
   latestTouch: CaseContextTouch | null;
+  // Optional so the panel degrades gracefully against a server that predates
+  // this field (the portalTasks precedent): absent and null both mean "no
+  // case-selected facility to show".
+  selectedFacility?: CaseContextFacility | null;
 }
 
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
