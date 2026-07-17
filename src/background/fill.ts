@@ -83,7 +83,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     const label = humanLabel(map);
 
     if (map.fieldType === "file") {
-      manual.push({ label, reason: "file upload - attach manually", mapId: map.id });
+      manual.push({ label, reason: "file upload - attach manually", mapId: map.id, kind: "file" });
       continue;
     }
     if (map.source === "manual") {
@@ -91,6 +91,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
         label,
         reason: map.notes ?? "not tracked in Minted Panel - enter manually",
         mapId: map.id,
+        kind: "manual",
       });
       continue;
     }
@@ -101,10 +102,13 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     } else if (map.token != null) {
       raw = tokenValues.get(map.token) ?? null;
     } else {
+      // A MAPPING gap (F4.3.3): the row exists but links to no Minted Panel
+      // field — the fix-it tie-in routes this to the train flow.
       manual.push({
         label,
         reason: "not linked to a Minted Panel field - enter manually",
         mapId: map.id,
+        kind: "no_mapping",
       });
       continue;
     }
@@ -117,7 +121,9 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
           ? "Your name isn't set. Add it in Minted Panel under Settings so forms can list you as the preparer."
           : ((map.token != null ? unresolvedReasons.get(map.token) : null) ??
             "no value in Minted Panel");
-      manual.push({ label, reason, mapId: map.id });
+      // A DATA gap: mapped, but the value is missing on the provider/case —
+      // routes to the provider record, not the mapping flow (F4.3.3).
+      manual.push({ label, reason, mapId: map.id, kind: "no_value" });
       continue;
     }
 
@@ -134,6 +140,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
         label,
         reason: map.notes ?? "prefilled - review and complete manually",
         mapId: map.id,
+        kind: "review",
       });
     }
   }

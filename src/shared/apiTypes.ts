@@ -155,10 +155,12 @@ export interface CaseContextNote {
   authorName: string | null;
 }
 
+// touch_type/outcome/touch_date are nullable on the merged panel service (only
+// touchpoint rows carry them, and older rows may predate the columns).
 export interface CaseContextTouch {
-  touchDate: string;
-  touchType: string;
-  outcome: string;
+  touchDate: string | null;
+  touchType: string | null;
+  outcome: string | null;
   note: string | null;
 }
 
@@ -178,9 +180,29 @@ export interface CaseContextFacility {
   zip: string | null;
 }
 
+// E4.3 TE-2 — the case's provider/payer identity for the panel header
+// (F4.3.1 identity guard). Display fields only (id + name), never a row
+// payload. (Panel `src/services/caseContext.ts`.)
+export interface CaseContextParty {
+  id: string;
+  name: string;
+}
+
+// E4.3 TE-2 — one open SOP task with its E4.2 execution type. `extension_fill`
+// tasks are the ones the panel offers the fill action on; the rest render as
+// read-only checklist context. Task-state writes stay in the webapp (R6).
+export interface CaseContextTask {
+  id: string;
+  title: string;
+  status: string;
+  executionType: string;
+  sortOrder: number;
+  dueDate: string | null;
+}
+
 export interface CaseContext {
   // [] or one payer reference id — rendered as "Reference: <n>", row hidden
-  // when empty.
+  // when empty. This is the case's tracking ID (latest-wins column).
   referenceNumbers: string[];
   latestNote: CaseContextNote | null;
   latestTouch: CaseContextTouch | null;
@@ -188,6 +210,61 @@ export interface CaseContext {
   // this field (the portalTasks precedent): absent and null both mean "no
   // case-selected facility to show".
   selectedFacility?: CaseContextFacility | null;
+  // --- E4.3 TE-2 additions (all optional: the production server may predate
+  // the redesign contract; absent fields degrade to hidden rows, never a
+  // crash). camelCase keys per the panel's context contract (the
+  // payerPipelineState precedent), unlike the profile's snake_case pair. ---
+  // E4.0 TE-7 — the external payer-pipeline state, e.g. "not_started".
+  payerPipelineState?: string;
+  provider?: CaseContextParty | null;
+  payer?: CaseContextParty | null;
+  state?: string;
+  openTasks?: CaseContextTask[];
+}
+
+// GET /api/cases?q= — one case-search result row (E4.3 TE-11, the case half of
+// the unified standalone search). Ids + display fields only, org-scoped
+// server-side. Mirrors panel `src/services/providerCases.ts` CaseSearchRow.
+export interface CaseSearchRow {
+  id: string;
+  providerId: string;
+  providerName: string;
+  payerName: string | null;
+  state: string;
+  status: string | null;
+  payerReferenceId: string | null;
+  payerPipelineState: string;
+}
+
+// GET /api/next-best-action — the queue top under the org's ranking config
+// (E4.3 TE-6), or { item: null } for an honest "queue clear". The extension
+// renders exactly this — no ranking logic lives here. Mirrors panel
+// `src/services/nextBestAction.ts`.
+export interface NextBestActionDeadline {
+  date: string;
+  source: string;
+  overdue: boolean;
+}
+
+export interface NextBestActionItem {
+  caseId: string;
+  providerId: string;
+  providerName: string;
+  payerName: string;
+  groupName: string;
+  state: string;
+  actionKind: string;
+  action: string;
+  reason: string;
+  deadline: NextBestActionDeadline | null;
+  payerPipelineState?: string;
+  // Webapp route path (e.g. "/cases/<id>"); the extension prepends the
+  // configured webapp origin.
+  deepLink: string;
+}
+
+export interface NextBestActionResult {
+  item: NextBestActionItem | null;
 }
 
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
@@ -215,14 +292,40 @@ export interface SubmissionTouchBody {
   pdf_filename?: string | null;
 }
 
+// POST /api/cases/:id/touches with kind 'structured_touch' — E4.3 TE-5 /
+// F4.3.4: ONE E4.1 structured touchpoint appended from the extension.
+// snake_case per this endpoint's locked idiom. touch_type is REQUIRED (one of
+// the seven canonical E4.1 types); outcome 'other' requires the one-line
+// context in note; the optional payer_reference_id is the audited latest-wins
+// tracking-ID write-back. portal_key / fill_session_id / task_id / wip_note /
+// pdf_filename are portal_submission-only — the server 422s them loudly on
+// this kind. (Panel `src/services/submissionTouches.ts` recordStructuredTouch.)
+export interface StructuredTouchBody {
+  kind: "structured_touch";
+  idempotency_id: string;
+  touch_type: string;
+  note?: string | null;
+  outcome?: string | null;
+  recipient_name?: string | null;
+  recipient_contact?: string | null;
+  next_follow_up_date?: string | null;
+  clears_follow_up?: boolean;
+  payer_reference_id?: string | null;
+}
+
+// Either kind on the same POST — the two bodies never mix fields.
+export type CaseTouchBody = SubmissionTouchBody | StructuredTouchBody;
+
 // The created touch, camelCased like every row in the envelope contract
-// (mintedpanel src/services/submissionTouches.ts).
+// (mintedpanel src/services/submissionTouches.ts). touchType/outcome are
+// nullable on the wire for non-touchpoint entries; the touches this extension
+// creates always carry a touchType.
 export interface SubmissionTouch {
   id: string;
   caseId: string;
   touchDate: string;
-  touchType: string;
-  outcome: string;
+  touchType: string | null;
+  outcome: string | null;
   notes: string | null;
   source: string;
 }

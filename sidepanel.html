@@ -33,12 +33,16 @@
       <p id="account-email" class="account"></p>
       <button id="signout" class="link header-link" hidden>Sign out</button>
     </header>
+    <div id="identity-guard" class="identity-guard" hidden></div>
     <main>
       <section id="view-loading" class="centered"><p class="hint">Loading…</p></section>
 
       <section id="view-signin" hidden>
         <h1>Sign in</h1>
         <p class="hint">Use your Minted Panel account.</p>
+        <p id="signin-handoff-hint" class="handoff-hint" hidden>
+          A case was handed off from Minted Panel — sign in to open it.
+        </p>
         <form id="signin-form">
           <div class="field">
             <label for="email">Email</label>
@@ -58,45 +62,77 @@
           <label for="org-select">Organization</label>
           <select id="org-select"></select>
         </div>
+        <div id="handoff-banner" class="handoff-banner" hidden></div>
+        <div id="search-section" class="field" hidden>
+          <label for="search-input">Find a case or provider</label>
+          <input
+            id="search-input"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Provider, payer, or tracking ID…"
+          />
+          <div id="search-results" class="search-results" hidden></div>
+        </div>
         <div id="provider-section" hidden>
           <div class="field">
             <div class="label-row">
-              <label for="provider-select">Provider</label>
+              <label for="provider-select">Browse providers</label>
               <button id="refresh" class="link" type="button">Refresh</button>
             </div>
             <select id="provider-select"></select>
           </div>
         </div>
         <div id="main-error" class="error" hidden></div>
-        <div id="provider-card" class="card" hidden>
+        <div id="provider-card" class="card qc" hidden>
           <div class="card-head">
-            <div id="provider-name" class="provider-name"></div>
-            <button
-              id="view-settings-btn"
-              class="gear-btn"
-              type="button"
-              aria-label="Customize view"
-              title="Customize view"
-              hidden
-            >
+            <div>
+              <div id="provider-name" class="provider-name"></div>
+              <div id="provider-dob" class="provider-dob" hidden></div>
+            </div>
+            <div class="card-head-actions">
+              <a id="open-in-panel" class="open-link" target="_blank" rel="noreferrer" hidden
+                >Open in Minted Panel ↗</a
+              >
+              <button
+                id="view-settings-btn"
+                class="gear-btn"
+                type="button"
+                aria-label="Edit layout"
+                title="Edit layout"
+                hidden
+              >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-              </svg>
-            </button>
+                </svg>
+              </button>
+            </div>
           </div>
-          <div id="provider-dob" class="provider-dob" hidden></div>
-          <dl id="provider-ids" class="ids" hidden></dl>
+          <dl id="provider-ids" class="ids qc-grid" hidden></dl>
+          <div id="license-row" class="qc-struct" hidden></div>
+          <div id="group-card" class="qc-type2" hidden>
+            <div id="group-name" class="qc-group-name"></div>
+            <dl id="group-ids" class="ids qc-grid" hidden></dl>
+            <div id="malpractice-row" class="qc-struct" hidden></div>
+          </div>
           <div id="view-settings" class="view-settings" hidden>
-            <p class="view-settings-title">Customize view</p>
-            <p class="view-settings-hint">Pick the fields to show on this card. Saved to your account.</p>
+            <p class="view-settings-title">Edit layout</p>
+            <p class="view-settings-hint">
+              Pick the ID fields to show on the cards — swap the defaults or add up to 3 more.
+              Saved to your account.
+            </p>
             <div id="view-settings-fields" class="view-settings-fields"></div>
             <div id="view-settings-error" class="error" hidden></div>
             <div class="view-settings-actions">
-              <button id="view-settings-save" class="primary" type="button">Save view</button>
+              <button id="view-settings-save" class="primary" type="button">Save layout</button>
               <button id="view-settings-cancel" class="link" type="button">Cancel</button>
             </div>
           </div>
+        </div>
+        <div id="active-cases" class="active-cases" hidden>
+          <p class="section-title">Active cases</p>
+          <div id="active-cases-list"></div>
         </div>
 
         <div id="fill-section" hidden>
@@ -123,6 +159,9 @@
           <div id="coverage-panel" class="coverage" hidden>
             <p id="coverage-count" class="coverage-count"></p>
             <ul id="coverage-gaps" class="coverage-gaps"></ul>
+            <button id="refresh-maps-btn" class="link refresh-maps" type="button" hidden>
+              I fixed a mapping — refresh and re-check
+            </button>
           </div>
 
           <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
@@ -168,6 +207,59 @@
             <button id="mark-submitted" class="secondary" type="button" hidden>Mark submitted</button>
             <div id="submit-status" class="logged" hidden></div>
           </div>
+
+          <div id="touch-section" class="touch-section" hidden>
+            <p class="section-title">Log a touch</p>
+            <div class="field">
+              <label for="touch-type">Type</label>
+              <select id="touch-type"></select>
+            </div>
+            <div class="field">
+              <label for="touch-note">Context</label>
+              <input
+                id="touch-note"
+                type="text"
+                autocomplete="off"
+                maxlength="300"
+                placeholder="One line — what happened?"
+              />
+            </div>
+            <div class="touch-grid">
+              <div class="field">
+                <label for="touch-outcome">Outcome</label>
+                <select id="touch-outcome"></select>
+              </div>
+              <div class="field">
+                <label for="touch-followup">Follow-up</label>
+                <input id="touch-followup" type="date" />
+              </div>
+            </div>
+            <details id="touch-more" class="touch-more">
+              <summary>Recipient &amp; tracking ID</summary>
+              <div class="field">
+                <label for="touch-recipient-name">Recipient name</label>
+                <input id="touch-recipient-name" type="text" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="touch-recipient-contact">Recipient contact</label>
+                <input id="touch-recipient-contact" type="text" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="touch-tracking">Tracking ID</label>
+                <input
+                  id="touch-tracking"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Payer reference / submission ID"
+                />
+              </div>
+            </details>
+            <div id="touch-error" class="error" hidden></div>
+            <button id="touch-save" class="secondary" type="button">Log touch</button>
+            <div id="touch-status" class="logged" hidden></div>
+          </div>
+
+          <div id="nba-section" class="nba" hidden></div>
         </div>
       </section>
     </main>
