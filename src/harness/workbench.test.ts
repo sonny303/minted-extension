@@ -60,9 +60,9 @@ vi.mock("../background/auth", () => {
     forceRefresh: async () => {
       throw new AuthRequiredError();
     },
-    getAuthState: async () => ({ signedIn: true, email: "testkansas@minted.com" }),
+    getAuthState: async () => ({ signedIn: true, email: "testkansas@minted.com", name: "Test Kansas" }),
     currentUserId: async () => "user-kansas",
-    signIn: async () => ({ signedIn: true, email: "testkansas@minted.com" }),
+    signIn: async () => ({ signedIn: true, email: "testkansas@minted.com", name: "Test Kansas" }),
     signOut: async () => {},
   };
 });

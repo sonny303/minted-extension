@@ -47,18 +47,34 @@ export class AuthRequiredError extends Error {
   }
 }
 
+// The auth user's display name, from the same metadata the panel's
+// {{user.name}} token reads (`mintedpanel/src/server/userTokens.ts`):
+// full_name, else name. Absent for users who never set one.
+function displayName(metadata: Record<string, unknown> | undefined): string | null {
+  for (const key of ["full_name", "name"]) {
+    const value = metadata?.[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return null;
+}
+
 export async function getAuthState(): Promise<AuthState> {
   const { data } = await supabase.auth.getSession();
   return {
     signedIn: data.session != null,
     email: data.session?.user.email ?? null,
+    name: displayName(data.session?.user.user_metadata),
   };
 }
 
 export async function signIn(email: string, password: string): Promise<AuthState> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
-  return { signedIn: true, email: data.user?.email ?? email };
+  return {
+    signedIn: true,
+    email: data.user?.email ?? email,
+    name: displayName(data.user?.user_metadata),
+  };
 }
 
 // The signed-in user's id — the router scopes persisted workbench state to

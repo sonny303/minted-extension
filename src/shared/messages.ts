@@ -117,6 +117,9 @@ export interface ActiveCaseUpdatedEvent {
 export interface AuthState {
   signedIn: boolean;
   email: string | null;
+  /** Auth metadata display name — the header greeting's source, null when the
+   *  user has none (the panel falls back to the email). */
+  name: string | null;
 }
 
 // The location-picker feed + the Quick Cards projection, both derived from
