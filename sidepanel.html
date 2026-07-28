@@ -5,34 +5,28 @@
     <title>Minted Panel Workbench</title>
   </head>
   <body>
-    <header class="header">
-      <span class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 24 24">
-            <g transform="rotate(14 12 12)" fill="#1B4D3E">
-              <g>
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-              <g transform="rotate(60 12 12)">
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-              <g transform="rotate(-60 12 12)">
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-            </g>
-          </svg>
-        </span>
-        Minted Panel Workbench
-      </span>
-      <p id="account-email" class="account"></p>
-      <button id="signout" class="link header-link" hidden>Sign out</button>
-    </header>
+    <!-- S1.4: the panel's own green bar is GONE — brand reads via Chrome's
+         header + the S1.1 toolbar/panel icon. Content starts at the account
+         row (S1.5): avatar menu with the email + Sign out. -->
+    <div class="account-row" id="account-row" hidden>
+      <span id="org-context" class="org-context"></span>
+      <div class="avatar-wrap">
+        <button
+          id="avatar-btn"
+          class="avatar"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded="false"
+          aria-label="Account menu"
+        ></button>
+        <div id="avatar-menu" class="avatar-menu" role="menu" hidden>
+          <p id="account-email" class="avatar-menu-email"></p>
+          <button id="signout" class="avatar-menu-item" role="menuitem" type="button">
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
     <div id="identity-guard" class="identity-guard" hidden></div>
     <main>
       <section id="view-loading" class="centered"><p class="hint">Loading…</p></section>
@@ -63,6 +57,9 @@
           <select id="org-select"></select>
         </div>
         <div id="handoff-banner" class="handoff-banner" hidden></div>
+        <!-- S3.3: the pickup queue — the panel's landing state when nothing
+             is in hand. Order and reason lines are server-derived. -->
+        <div id="queue-section" class="queue" hidden></div>
         <div id="search-section" class="field" hidden>
           <label for="search-input">Find a case or provider</label>
           <input
@@ -109,15 +106,22 @@
               </button>
             </div>
           </div>
-          <dl id="provider-ids" class="ids qc-grid" hidden></dl>
+          <div id="provider-ids" class="detail-sections" hidden></div>
           <div id="license-row" class="qc-struct" hidden></div>
           <div id="group-card" class="qc-type2" hidden>
             <div id="group-name" class="qc-group-name"></div>
-            <dl id="group-ids" class="ids qc-grid" hidden></dl>
+            <div id="group-ids" class="detail-sections" hidden></div>
             <div id="malpractice-row" class="qc-struct" hidden></div>
           </div>
           <div id="view-settings" class="view-settings" hidden>
             <p class="view-settings-title">Edit layout</p>
+            <input
+              id="view-settings-search"
+              class="view-settings-search"
+              type="search"
+              placeholder="Search fields"
+              aria-label="Search fields"
+            />
             <p class="view-settings-hint">
               Pick the ID fields to show on the cards — swap the defaults or add up to 3 more.
               Saved to your account.
@@ -131,7 +135,7 @@
           </div>
         </div>
         <div id="active-cases" class="active-cases" hidden>
-          <p class="section-title">Active cases</p>
+          <p class="section-title active-cases-heading">Open cases</p>
           <div id="active-cases-list"></div>
         </div>
 
@@ -156,8 +160,19 @@
 
           <p id="portal-status" class="banner"></p>
 
-          <div id="coverage-panel" class="coverage" hidden>
-            <p id="coverage-count" class="coverage-count"></p>
+          <!-- S4.2: the duplicate-work guard fires on PICKUP, above the offer
+               — never blocking, dismissible, with a link into the touchlog. -->
+          <div id="dup-pickup" class="dup-pickup" hidden></div>
+
+          <!-- S4.1: the fill offer card. Dark surface; count + skip reasons
+               are stated BEFORE the run. -->
+          <div id="coverage-panel" class="coverage offer-card" hidden>
+            <div class="offer-head">
+              <p id="coverage-count" class="coverage-count"></p>
+              <span id="proven-chip" class="pill proven-chip" hidden>PROVEN</span>
+            </div>
+            <div id="drift-strip" class="drift-strip" hidden></div>
+            <p id="unproven-note" class="offer-note" hidden></p>
             <ul id="coverage-gaps" class="coverage-gaps"></ul>
             <button id="refresh-maps-btn" class="link refresh-maps" type="button" hidden>
               I fixed a mapping — refresh and re-check
@@ -165,6 +180,34 @@
           </div>
 
           <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
+
+          <!-- S6.2/S6.3: CAQH — push our data out, and pull the exceptions. -->
+          <div id="caqh-section" class="caqh" hidden>
+            <div class="caqh-head">
+              <p id="caqh-headline" class="caqh-headline"></p>
+              <span id="caqh-attested" class="caqh-attested"></span>
+            </div>
+            <div id="caqh-gaps" class="caqh-gaps" hidden></div>
+            <div class="caqh-actions">
+              <button id="caqh-attest" class="secondary" type="button">Record attestation</button>
+            </div>
+            <p id="caqh-status" class="caqh-status" hidden></p>
+          </div>
+
+          <!-- S5.4: capture — turn a form we don't know into one we do. -->
+          <div id="capture-section" class="capture" hidden>
+            <div class="capture-head">
+              <p id="capture-summary" class="capture-summary"></p>
+              <button id="capture-start" class="link" type="button">Capture this form</button>
+            </div>
+            <p id="capture-restored" class="capture-restored" hidden></p>
+            <div id="capture-rows" class="capture-rows"></div>
+            <div id="capture-actions" class="capture-actions" hidden>
+              <button id="capture-send" class="secondary" type="button">Send for approval</button>
+              <button id="capture-clear" class="link" type="button">Discard</button>
+            </div>
+            <p id="capture-sent" class="capture-sent" hidden></p>
+          </div>
           <p id="fill-note" class="btn-note" hidden>Keep this tab open while filling.</p>
 
           <div id="fill-results" hidden>
@@ -195,7 +238,7 @@
                 ></textarea>
               </div>
               <div id="task-link" class="field submit-field" hidden>
-                <label for="task-select">SOP task</label>
+                <label for="task-select">Checklist task</label>
                 <p id="task-link-single" class="task-link-single" hidden></p>
                 <select id="task-select" hidden></select>
               </div>

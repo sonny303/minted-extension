@@ -9,7 +9,8 @@
 //   source "hardcoded"     fill with hardcoded_value
 //   source "token"         fill with the profile value; null/empty = listed
 //   source "manual_partial" fill the token value AND flag for manual review
-//   status "retired"       ignored; "proposed"/"approved" both fill in v0
+//   status                 ONLY "approved" fills (S5.1, 2026-07-28); proposed
+//                          rows are unreviewed observations and never fill
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
 import type {
   FillCoverage,
@@ -79,7 +80,13 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
   const manual: ReportedField[] = [];
 
   for (const map of maps) {
-    if (map.mapType !== "web" || map.status === "retired") continue;
+    // S5.1 invariant (2026-07-28, supersedes the v0 posture): ONLY approved
+    // maps fill. A proposed row is an observation awaiting a human decision in
+    // the panel's trainer — filling from it would let an unreviewed mapping
+    // (incl. the extension's own propose-only writes, and trainer undos that
+    // set a tokened row back to proposed) redirect what lands in a payer
+    // form. Proposed rows still count in coverage surfaces as gaps, not fills.
+    if (map.mapType !== "web" || map.status !== "approved") continue;
     const label = humanLabel(map);
 
     if (map.fieldType === "file") {
@@ -231,7 +238,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
-      "Could not reach the enrollment form - open the BCBS KS enrollment page in the current tab and reload it.",
+      "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
       { cause: error },
     );
   }

@@ -29,7 +29,7 @@ API surface consumed (all responses use the `{ data, error, meta }` envelope):
 | Route | Use |
 | --- | --- |
 | `GET /api/me/orgs` | org picker (the caller's own memberships; user-scoped, needs no org context) |
-| `GET /api/me/view-prefs` / `PUT` | the user's saved quick-card layout (`{ fields: string[] \| null }`, closed-catalog keys, server-validated; user-scoped) |
+| `GET /api/me/view-prefs` / `PUT` | the user's saved quick-card layout PLUS the schema-derived field catalog (`{ fields: string[] \| null, catalog: QuickCardCatalogField[] }`, 117 fields served; PUT validated against the same set; user-scoped) |
 | `GET /api/providers` | provider picker (PHI-safe list projection); `?search=` is the provider half of the unified search |
 | `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill AND the quick-card projection (one audited read); carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
 | `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
@@ -132,9 +132,10 @@ writes are the existing manual touch POST and the user-scoped layout PUT.
   and malpractice rows with amber <30-day expiry badges (red when lapsed);
   honest em-dash empties carrying the profile's unresolved reason. "Open in
   Minted Panel ↗" deep-links `/providers/:id` in a NEW tab (portal session
-  preserved). Edit Layout swaps defaults / adds up to 3 fields from the
-  server-owned closed catalog only (`src/shared/quickCards.ts` mirrors it;
-  `provider.ssnLast4` and vault fields are structurally absent) and persists
+  preserved). Edit Layout picks any fields from the
+  SERVED schema-derived catalog (117 fields riding `GET /api/me/view-prefs` —
+  no local mirror, no field cap; `provider.ssnLast4` is offered as of
+  2026-07-28, the full SSN has no token to name) and persists
   via `PUT /api/me/view-prefs`; a missing/invalid stored layout degrades to
   the default. The provider's active cases list under the cards.
 - **PHI discipline (TE-3/TE-14):** card values, tokens, and context live in

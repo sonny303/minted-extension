@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 // deliberately outside the typechecked tree (it mirrors the panel repo's own
 // scripts/mock-api-server.mjs pattern).
 import { createMockPanelApi, FIXTURES } from "../../scripts/mock-panel-api.mjs";
+import { buildSubmissionTouchBody } from "../shared/submission";
 import {
   ApiError,
   getCaseContext,
@@ -20,6 +21,8 @@ import {
   putViewPrefs,
   searchCases,
   searchProviders,
+  completeTaskStep,
+  proposeFieldMap,
 } from "../background/api";
 import { coveragePortal } from "../background/fill";
 import {
@@ -74,6 +77,10 @@ interface MockApi {
     touches: Map<string, unknown>;
     viewPrefs: Map<string, string[]>;
     failTouches: number;
+    // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
+    completedSteps: Set<string>;
+    // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
+    proposedMaps: Map<string, { status: string; token: string | null }>;
   };
   close(): Promise<void>;
 }
@@ -266,10 +273,10 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
   it("logs one structured touch; a same-id retry replays instead of double-logging", async () => {
     const id = crypto.randomUUID();
     const body = buildStructuredTouchBody(draft, id);
-    const created = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: created } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(created.touchType).toBe("portal");
     expect(created.outcome).toBe("successful");
-    const replayed = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: replayed } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(replayed.id).toBe(created.id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -282,7 +289,7 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     await expect(postSubmissionTouch(FIXTURES.CASE_ID, body)).rejects.toThrow(ApiError);
     expect(mock.state.touches.size).toBe(0);
     // The retry reuses the same idempotency id (the panel preserves the draft).
-    const retried = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: retried } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(retried.id).toBe(id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -354,22 +361,185 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
   });
 });
 
+describe("S5.1/S5.3 — capture proposes, and learns", () => {
+  it("writes a PROPOSED row with no token, whatever we ask for", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#npi",
+      field_label: "NPI",
+    });
+    // Approving is a human act in the webapp; the panel can only propose.
+    expect(result.map.status).toBe("proposed");
+    expect(result.map.token).toBeNull();
+    expect(mock.state.proposedMaps.get("humana_enroll:#npi")?.status).toBe("proposed");
+  });
+
+  it("returns the learned suggestion with its payer-count evidence", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#npi2",
+      field_label: "NPI",
+    });
+    expect(result.suggestion?.token).toBe("provider.npi");
+    expect(result.suggestion?.portalCount).toBe(3);
+  });
+
+  it("returns no suggestion for a label nothing backs — an honest blank", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#mystery",
+      field_label: "Mystery box",
+    });
+    expect(result.suggestion).toBeNull();
+  });
+
+  it("is idempotent on (portal_key, selector)", async () => {
+    const a = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
+    const b = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
+    expect(a.map.id).toBe(b.map.id);
+  });
+});
+
+describe("S4.4 — the opt-in status bump", () => {
+  const submissionBody = (idempotencyId: string, bump: boolean) =>
+    buildSubmissionTouchBody({
+      portalKey: "bcbs_ks_enrollment",
+      fillSessionId: null,
+      idempotencyId,
+      bumpStatus: bump,
+    });
+
+  it("OMITS bump_status unless asked — a server predating S4.4 sees the old body", () => {
+    const body = submissionBody(crypto.randomUUID(), false);
+    expect("bump_status" in body).toBe(false);
+  });
+
+  it("reports an applied bump beside the touch", async () => {
+    // CASE2 is In Progress — the legal source for the bump.
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE2_ID,
+      submissionBody(crypto.randomUUID(), true),
+    );
+    expect(result.touch.outcome).toBe("submitted");
+    expect(result.statusBump).toEqual({ applied: true, reason: null });
+  });
+
+  it("reports a SKIPPED bump without failing the touch", async () => {
+    // CASE_ID is already Submitted, so the transition is illegal — but the
+    // touch itself must still land. A rejected bump is never a failed touch.
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE_ID,
+      submissionBody(crypto.randomUUID(), true),
+    );
+    expect(result.touch.id).toBeTruthy();
+    expect(result.statusBump?.applied).toBe(false);
+    expect(result.statusBump?.reason).toMatch(/status that can move to Submitted/);
+  });
+
+  it("carries no bump meta when none was requested", async () => {
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE2_ID,
+      submissionBody(crypto.randomUUID(), false),
+    );
+    expect(result.statusBump).toBeNull();
+  });
+});
+
+describe("S4.3 — the step tick writes, and never falsely succeeds", () => {
+  it("ticks a step through the server", async () => {
+    const result = await completeTaskStep("task-1", "step-1");
+    expect(result.allDone).toBe(false);
+    expect(mock.state.completedSteps.has("task-1:step-1")).toBe(true);
+  });
+
+  it("surfaces the server's ordering rejection instead of inventing one", async () => {
+    // The ordering rule lives server-side (shared pure module with the
+    // webapp). The panel must render the 409's message, not re-derive it.
+    await expect(completeTaskStep("task-1", "blocked-step")).rejects.toThrow(
+      /Complete "Upload W-9" first/,
+    );
+    // Nothing was recorded — a rejected tick must not look done.
+    expect(mock.state.completedSteps.has("task-1:blocked-step")).toBe(false);
+  });
+});
+
+describe("S4.1 — the fill report is a snapshot", () => {
+  it("persists the run's own counts, so a later data change can't rewrite history", async () => {
+    // The record carries the fill's OWN summary + completedAt. Nothing in the
+    // restore path recomputes coverage — a field fixed after the run must not
+    // retroactively change what the run reported.
+    // @ts-expect-error — node builtin, untyped in this browser-typed project
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const restore = source.slice(
+      source.indexOf("async function restoreFillReport"),
+      source.indexOf("function renderFacilityAddress"),
+    );
+    // It renders record.summary verbatim and never asks for fresh coverage.
+    expect(restore).toContain("renderFillSummary(record.summary");
+    expect(restore).not.toContain("GET_FILL_COVERAGE");
+    expect(restore).not.toContain("refreshCoverage(");
+  });
+});
+
+describe("S3.3 — the pickup queue is server-ranked", () => {
+  it("returns a ranked list whose first entry IS the single-item top", async () => {
+    const result = await getNextBestAction();
+    const items = result.items ?? [];
+    expect(items.length).toBeGreaterThan(1);
+    const first = items[0];
+    if (!first) throw new Error("expected a ranked first entry");
+    // The extension must never re-rank: items[0] and item are the same case,
+    // and the reason line is the server's text rendered verbatim.
+    expect(result.item?.caseId).toBe(first.caseId);
+    expect(first.reason).toBeTruthy();
+  });
+
+  it("honors ?limit= so a large org's queue is bounded", async () => {
+    const one = await getNextBestAction(1);
+    const items = one.items ?? [];
+    expect(items).toHaveLength(1);
+    const first = items[0];
+    if (!first) throw new Error("expected a ranked first entry");
+    expect(one.item?.caseId).toBe(first.caseId);
+  });
+});
+
 describe("TS-102 — layout persists server-side across a worker restart", () => {
   it("saves, then reads the same layout back with no client-side cache", async () => {
-    const layout = ["provider.npi", "group.tin", "provider.deaNumber"];
+    // Keys must be in the SERVED catalog now (schema-derived, 2026-07-28).
+    const layout = ["provider.npi", "group.tin", "provider.caqhId"];
     await putViewPrefs(layout);
     // A worker restart holds NO state — the next read IS the restart path.
-    expect(await getViewPrefs()).toEqual(layout);
+    const prefs = await getViewPrefs();
+    expect(prefs.fields).toEqual(layout);
     expect(mock.state.viewPrefs.get("user-kansas")).toEqual(layout);
   });
 
-  it("the server 422s an excluded key (ssnLast4 is structurally absent)", async () => {
-    await expect(putViewPrefs(["provider.ssnLast4"])).rejects.toThrow(ApiError);
+  it("GET serves the schema-derived catalog beside the layout (one round trip)", async () => {
+    const prefs = await getViewPrefs();
+    expect(prefs.catalog.length).toBeGreaterThan(0);
+    const keys = prefs.catalog.map((f) => f.key);
+    // ssnLast4 is OFFERED as of 2026-07-28 (product decision) — the profile
+    // already returns it and payer forms ask for it. The FULL SSN has no
+    // token to name (the vault is outside get_sop_field_tokens' sweep).
+    expect(keys).toContain("provider.ssnLast4");
+    expect(prefs.catalog.every((f) => f.label && f.groupLabel)).toBe(true);
+  });
+
+  it("a PUT naming ssnLast4 now validates; a non-catalog key still 422s", async () => {
+    await putViewPrefs(["provider.ssnLast4", "provider.npi"]);
+    expect(mock.state.viewPrefs.get("user-kansas")).toEqual([
+      "provider.ssnLast4",
+      "provider.npi",
+    ]);
+    await expect(putViewPrefs(["provider.notARealColumn"])).rejects.toThrow(ApiError);
   });
 
   it("an invalid stored layout degrades to the default, never a broken card", () => {
-    expect(resolveLayout(["provider.npi", "bogus.key"]).source).toBe("default");
-    expect(resolveLayout(null).source).toBe("default");
+    const served = new Set(["provider.npi"]);
+    expect(resolveLayout(["provider.npi", "bogus.key"], served).source).toBe("default");
+    expect(resolveLayout(null, served).source).toBe("default");
   });
 });
 

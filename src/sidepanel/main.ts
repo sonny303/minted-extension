@@ -16,19 +16,32 @@ import type {
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
-import { PREFIX_LABELS, labelForToken, looksLikeIsoDate, tokenPrefix } from "../shared/detailFields";
-import { matchPortal, type PortalConfig } from "../shared/portals";
+import { looksLikeIsoDate } from "../shared/detailFields";
+import { matchPortalByUrl, type MatchedPortal } from "../shared/portals";
+import type {
+  CaseContextTaskStep,
+  NextBestActionItem,
+  PortalRegistryRow,
+} from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
+import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
+import type { QuickCardCatalogField } from "../shared/apiTypes";
+import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
 import {
-  MAX_LAYOUT_FIELDS,
-  QUICK_CARD_FIELD_CATALOG,
-  providerWebappPath,
-  type QuickCardField,
-  type QuickCards,
-} from "../shared/quickCards";
-import { partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
+  attestationLine,
+  attestedOnFor,
+  buildCaqhPushOffer,
+  type CaqhGap,
+} from "../shared/caqh";
+import {
+  canSendCapture,
+  captureCounts,
+  recognitionSummary,
+  restoredSummary,
+  type CaptureSession,
+} from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -56,6 +69,10 @@ const views = {
   main: el<HTMLElement>("view-main"),
 };
 const signoutBtn = el<HTMLButtonElement>("signout");
+const accountRow = el<HTMLElement>("account-row");
+const avatarBtn = el<HTMLButtonElement>("avatar-btn");
+const avatarMenu = el<HTMLElement>("avatar-menu");
+const orgContext = el<HTMLElement>("org-context");
 const signinForm = el<HTMLFormElement>("signin-form");
 const emailInput = el<HTMLInputElement>("email");
 const passwordInput = el<HTMLInputElement>("password");
@@ -101,6 +118,25 @@ const caseNote = el<HTMLElement>("case-note");
 const caseContextBox = el<HTMLElement>("case-context");
 const portalStatus = el<HTMLElement>("portal-status");
 const coveragePanel = el<HTMLElement>("coverage-panel");
+const provenChip = el<HTMLElement>("proven-chip");
+const driftStrip = el<HTMLElement>("drift-strip");
+const unprovenNote = el<HTMLElement>("unproven-note");
+const dupPickup = el<HTMLElement>("dup-pickup");
+const caqhSection = el<HTMLElement>("caqh-section");
+const caqhHeadline = el<HTMLElement>("caqh-headline");
+const caqhAttested = el<HTMLElement>("caqh-attested");
+const caqhGaps = el<HTMLElement>("caqh-gaps");
+const caqhAttest = el<HTMLButtonElement>("caqh-attest");
+const caqhStatus = el<HTMLElement>("caqh-status");
+const captureSection = el<HTMLElement>("capture-section");
+const captureSummary = el<HTMLElement>("capture-summary");
+const captureStart = el<HTMLButtonElement>("capture-start");
+const captureRestored = el<HTMLElement>("capture-restored");
+const captureRows = el<HTMLElement>("capture-rows");
+const captureActions = el<HTMLElement>("capture-actions");
+const captureSend = el<HTMLButtonElement>("capture-send");
+const captureClear = el<HTMLButtonElement>("capture-clear");
+const captureSent = el<HTMLElement>("capture-sent");
 const coverageCount = el<HTMLElement>("coverage-count");
 const coverageGaps = el<HTMLUListElement>("coverage-gaps");
 const refreshMapsBtn = el<HTMLButtonElement>("refresh-maps-btn");
@@ -135,6 +171,7 @@ const touchError = el<HTMLElement>("touch-error");
 const touchSaveBtn = el<HTMLButtonElement>("touch-save");
 const touchStatus = el<HTMLElement>("touch-status");
 const nbaSection = el<HTMLElement>("nba-section");
+const queueSection = el<HTMLElement>("queue-section");
 
 // The last successful fill, held so "Mark submitted" can log the touch
 // against the right case and fill session. Cleared whenever the selection
@@ -158,8 +195,12 @@ let facilitiesLoaded = false;
 // meta.needs_facility from the profile: several locations, server won't
 // guess — the fill gate stays closed until the user picks one.
 let needsFacility = false;
-let portal: PortalConfig | null = null;
+let portal: MatchedPortal | null = null;
 let portalTabId: number | null = null;
+// The DB-driven portal registry (S3.2): fetched per org, held in memory only.
+// Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
+// which is the correct signed-out/org-less posture.
+let portalRows: PortalRegistryRow[] = [];
 let lastFill: LastFill | null = null;
 // Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
 // selected case's portalTasks matched against the current page's portal. null =
@@ -224,7 +265,8 @@ function showView(name: keyof typeof views): void {
   for (const [key, section] of Object.entries(views)) {
     section.hidden = key !== name;
   }
-  signoutBtn.hidden = name !== "main";
+  accountRow.hidden = name !== "main";
+  if (name !== "main") closeAvatarMenu();
 }
 
 function setError(box: HTMLElement, message: string | null): void {
@@ -311,6 +353,13 @@ function renderProviderCard(provider: ProviderListItem | null): void {
 // audited profile read. Held so the Edit Layout form can pre-check the fields
 // the cards currently show. Values are in-memory only.
 let currentCards: QuickCards | null = null;
+// The served picker catalog (rides GET_PROVIDER_FACILITIES). Empty = the
+// catalog read failed — the picker renders an honest failure note instead of
+// a stale local list.
+let currentCatalog: QuickCardCatalogField[] = [];
+// S4.1: dead-selector count from the last REAL fill on the current portal —
+// drives the drift strip. 0 = no known drift (also the pre-fill default).
+let lastReportBrokenCount = 0;
 
 // One ID-grid entry: monospace value with 1-click hover-copy, or an honest
 // empty (muted em-dash, plus the profile's unresolved reason as its tooltip).
@@ -318,23 +367,87 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
   const dt = document.createElement("dt");
   dt.textContent = field.label;
   const dd = document.createElement("dd");
+  dd.classList.add("detail-row");
   if (field.value == null || field.value === "") {
-    dd.textContent = "—";
-    dd.classList.add("id-empty");
-    if (field.reason) dd.title = field.reason;
+    // S2.3: absent values read "Not on file" with an amber icon and are not
+    // clickable; the profile's unresolved reason rides the tooltip.
+    const empty = document.createElement("span");
+    empty.className = "id-empty not-on-file";
+    empty.textContent = "⚠ Not on file";
+    if (field.reason) empty.title = field.reason;
+    dd.append(empty);
   } else {
     const text = document.createElement("span");
-    text.className = "id-value mono";
+    // Wrap, never truncate (S2.3) — long values break to the next line.
+    text.className = "id-value mono wrap";
     text.textContent = looksLikeIsoDate(field.value) ? fmtContextDate(field.value) : field.value;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "id-copy";
     copy.textContent = "Copy";
     copy.setAttribute("aria-label", `Copy ${field.label}`);
-    copy.addEventListener("click", () => void copyValue(field.value ?? "", copy));
+    copy.addEventListener("click", () => void copyValue(field.value ?? "", copy, field.key, text));
+    if (copiedKeys.has(field.key)) dd.classList.add("copied-row");
     dd.append(text, copy);
   }
   return [dt, dd];
+}
+
+// S2.3: one section per catalog group inside the details area — heading, the
+// picked fields of that group, and (when any field is absent) ONE fix
+// footnote deep-linking the provider's webapp page. Groups render in served-
+// catalog order; a group with no picked fields renders nothing.
+function renderGroupedDetails(
+  container: HTMLElement,
+  fields: QuickCardField[],
+  providerId: string | null,
+): void {
+  container.replaceChildren();
+  container.hidden = fields.length === 0;
+  if (fields.length === 0) return;
+
+  const groupOf = new Map<string, { label: string; order: number }>();
+  currentCatalog.forEach((f, i) => {
+    if (!groupOf.has(f.group)) groupOf.set(f.group, { label: f.groupLabel, order: i });
+  });
+
+  interface Section {
+    group: string;
+    label: string;
+    order: number;
+    fields: QuickCardField[];
+  }
+  const sections = new Map<string, Section>();
+  for (const field of fields) {
+    const prefix = field.key.split(".")[0] ?? "";
+    const meta = groupOf.get(prefix) ?? { label: prefix, order: Number.MAX_SAFE_INTEGER };
+    let section = sections.get(prefix);
+    if (!section) {
+      section = { group: prefix, label: meta.label, order: meta.order, fields: [] };
+      sections.set(prefix, section);
+    }
+    section.fields.push(field);
+  }
+
+  for (const section of [...sections.values()].sort((a, b) => a.order - b.order)) {
+    const heading = document.createElement("p");
+    heading.className = "detail-section-heading";
+    heading.textContent = section.label;
+    container.append(heading);
+    const grid = document.createElement("dl");
+    grid.className = "ids qc-grid";
+    for (const field of section.fields) grid.append(...idGridEntry(field));
+    container.append(grid);
+    if (section.fields.some((f) => f.value == null || f.value === "") && providerId) {
+      const note = document.createElement("a");
+      note.className = "detail-fix-note";
+      note.href = `${API_BASE_URL}${providerWebappPath(providerId)}`;
+      note.target = "_blank";
+      note.rel = "noreferrer";
+      note.textContent = "Add missing details in Minted Panel ↗";
+      container.append(note);
+    }
+  }
 }
 
 // A structural row (license / malpractice): label: value triplet line with an
@@ -372,6 +485,9 @@ function structuralRow(
 }
 
 function renderQuickCards(cards: QuickCards | null): void {
+  // A provider switch/sign-out clears the session copy marks — they are
+  // per-provider (a copied NPI for Kay is not "copied" for Eric).
+  if (cards == null || cards !== currentCards) copiedKeys.clear();
   currentCards = cards;
   // Any cards change (provider switch, refetch) closes the layout form — it
   // must never show one provider's layout over another's card.
@@ -394,7 +510,7 @@ function renderQuickCards(cards: QuickCards | null): void {
     ? `DOB ${fmtContextDate(cards.dateOfBirth)}`
     : "DOB —";
 
-  for (const field of cards.type1Fields) providerIds.append(...idGridEntry(field));
+  renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
   structuralRow(
     licenseRow,
     "License",
@@ -406,9 +522,7 @@ function renderQuickCards(cards: QuickCards | null): void {
   groupCard.hidden = false;
   groupName.textContent = cards.groupName ?? "No group on file";
   groupName.classList.toggle("id-empty", cards.groupName == null);
-  groupIds.replaceChildren();
-  groupIds.hidden = cards.type2Fields.length === 0;
-  for (const field of cards.type2Fields) groupIds.append(...idGridEntry(field));
+  renderGroupedDetails(groupIds, cards.type2Fields, selectedProviderId());
   structuralRow(
     malpracticeRow,
     "Malpractice",
@@ -425,38 +539,127 @@ function closeViewSettings(): void {
   viewSettingsSave.textContent = "Save layout";
 }
 
-// The Edit Layout form (F4.3.5 3.3): one checkbox per CLOSED-CATALOG field
-// (TE-16 — the picker offers nothing the server wouldn't accept; sensitive/
-// vault fields are structurally absent from the catalog), grouped by token
-// prefix, pre-checked for the current layout. Checkbox DOM order is the saved
-// order; the cap is defaults + up to 3 custom (MAX_LAYOUT_FIELDS).
-function openViewSettings(cards: QuickCards): void {
-  viewSettingsFields.replaceChildren();
-  setError(viewSettingsError, null);
-  const shown = new Set(cards.layout);
-  let group: string | null = null;
-  for (const key of QUICK_CARD_FIELD_CATALOG) {
-    const prefix = tokenPrefix(key);
-    if (prefix !== group) {
-      group = prefix;
-      const heading = document.createElement("p");
-      heading.className = "view-settings-group";
-      heading.textContent = PREFIX_LABELS[prefix] ?? prefix;
-      viewSettingsFields.append(heading);
-    }
-    const row = document.createElement("label");
-    row.className = "view-settings-field";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = key;
-    checkbox.checked = shown.has(key);
-    const text = document.createElement("span");
-    text.textContent = labelForToken(key);
-    row.append(checkbox, text);
-    viewSettingsFields.append(row);
-  }
-  viewSettings.hidden = false;
+// The Edit Layout form (S2.2): search over collapsible groups rendered from
+// the SERVED catalog (GET /api/me/view-prefs `catalog` — schema-derived
+// server-side, so the picker offers exactly what a PUT will accept; no local
+// allowlist survives). Checkbox DOM order within the render is the saved
+// order source; there is no layout-length cap (S2.1) — the closed served key
+// set bounds what a layout can contain.
+const viewSettingsSearch = el<HTMLInputElement>("view-settings-search");
+
+interface PickerGroup {
+  group: string;
+  groupLabel: string;
+  fields: QuickCardCatalogField[];
 }
+
+function groupCatalog(catalog: QuickCardCatalogField[]): PickerGroup[] {
+  const groups: PickerGroup[] = [];
+  const byKey = new Map<string, PickerGroup>();
+  for (const field of catalog) {
+    let group = byKey.get(field.group);
+    if (!group) {
+      group = { group: field.group, groupLabel: field.groupLabel, fields: [] };
+      byKey.set(field.group, group);
+      groups.push(group);
+    }
+    group.fields.push(field);
+  }
+  return groups;
+}
+
+// The picker's selection state, seeded from the current layout on open and
+// mutated by checkbox clicks. Kept OUTSIDE the DOM so a search re-render
+// never loses picks made on rows the filter currently hides.
+let pickerSelection = new Set<string>();
+
+function renderPickerRows(query: string): void {
+  viewSettingsFields.replaceChildren();
+  const q = query.trim().toLowerCase();
+  const groups = groupCatalog(currentCatalog);
+  let anyShown = false;
+
+  for (const group of groups) {
+    const matching = q
+      ? group.fields.filter(
+          (f) =>
+            f.label.toLowerCase().includes(q) ||
+            f.key.toLowerCase().includes(q) ||
+            group.groupLabel.toLowerCase().includes(q),
+        )
+      : group.fields;
+    // Empty groups hide (S2.2) — under a query AND when a group is empty.
+    if (matching.length === 0) continue;
+    anyShown = true;
+
+    const details = document.createElement("details");
+    details.className = "view-settings-groupbox";
+    // Matching groups auto-expand under a query; with no query, groups with
+    // any picked field open, the rest start collapsed.
+    const pickedCount = group.fields.filter((f) => pickerSelection.has(f.key)).length;
+    details.open = q !== "" || pickedCount > 0;
+
+    const summary = document.createElement("summary");
+    summary.className = "view-settings-group";
+    const name = document.createElement("span");
+    name.textContent = group.groupLabel;
+    const count = document.createElement("span");
+    // "3 of 45" in primary when any picked, else "of 45" subtle (S2.2).
+    count.className = pickedCount > 0 ? "view-settings-count picked" : "view-settings-count";
+    count.textContent = pickedCount > 0 ? `${pickedCount} of ${group.fields.length}` : `of ${group.fields.length}`;
+    summary.append(name, count);
+    details.append(summary);
+
+    for (const field of matching) {
+      const row = document.createElement("label");
+      row.className = "view-settings-field";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = field.key;
+      checkbox.checked = pickerSelection.has(field.key);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) pickerSelection.add(field.key);
+        else pickerSelection.delete(field.key);
+        // Refresh the group counts without a full re-render churn.
+        const picked = group.fields.filter((f) => pickerSelection.has(f.key)).length;
+        count.className = picked > 0 ? "view-settings-count picked" : "view-settings-count";
+        count.textContent = picked > 0 ? `${picked} of ${group.fields.length}` : `of ${group.fields.length}`;
+      });
+      const text = document.createElement("span");
+      text.textContent = field.label;
+      row.append(checkbox, text);
+      details.append(row);
+    }
+    viewSettingsFields.append(details);
+  }
+
+  if (!anyShown) {
+    const empty = document.createElement("p");
+    empty.className = "view-settings-empty";
+    // The no-results state renders the query back (S2.2).
+    empty.textContent = q
+      ? `No fields match "${query.trim()}".`
+      : "The field list couldn't be loaded — close and reopen the panel to retry.";
+    viewSettingsFields.append(empty);
+  }
+}
+
+function openViewSettings(cards: QuickCards): void {
+  setError(viewSettingsError, null);
+  viewSettingsSearch.value = "";
+  // Seed the selection from the current layout, keeping ONLY keys the served
+  // catalog still offers (a key the server no longer serves can't be re-saved
+  // anyway — the PUT would 422).
+  const served = new Set(currentCatalog.map((f) => f.key));
+  pickerSelection = new Set(cards.layout.filter((key) => served.has(key)));
+  renderPickerRows("");
+  viewSettings.hidden = false;
+  viewSettingsSearch.focus();
+}
+
+viewSettingsSearch.addEventListener("input", () => {
+  if (!viewSettings.hidden) renderPickerRows(viewSettingsSearch.value);
+});
 
 viewSettingsBtn.addEventListener("click", () => {
   const cards = currentCards;
@@ -470,23 +673,22 @@ viewSettingsBtn.addEventListener("click", () => {
 
 viewSettingsCancel.addEventListener("click", () => closeViewSettings());
 
-// Save the checked fields as the layout (PUT /api/me/view-prefs — server-side,
+// Save the picked fields as the layout (PUT /api/me/view-prefs — server-side,
 // so it persists across machines and worker restarts, TS-102), then refetch
-// the profile so the cards re-project under the new layout.
+// the profile so the cards re-project under the new layout. Order: the served
+// catalog's listing order for newly-picked fields, with the previously saved
+// relative order preserved for fields that were already in the layout.
 viewSettingsSave.addEventListener("click", () => {
   const providerId = selectedProviderId();
-  const fields = Array.from(
-    viewSettingsFields.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked"),
-  ).map((box) => box.value);
+  const cards = currentCards;
+  const kept = (cards?.layout ?? []).filter((key) => pickerSelection.has(key));
+  const keptSet = new Set(kept);
+  const added = currentCatalog
+    .map((f) => f.key)
+    .filter((key) => pickerSelection.has(key) && !keptSet.has(key));
+  const fields = [...kept, ...added];
   if (fields.length === 0) {
     setError(viewSettingsError, "Pick at least one field to show.");
-    return;
-  }
-  if (fields.length > MAX_LAYOUT_FIELDS) {
-    setError(
-      viewSettingsError,
-      `That's too many fields — the cards show at most ${MAX_LAYOUT_FIELDS} (the defaults plus up to 3 more).`,
-    );
     return;
   }
   const generation = loadGeneration;
@@ -507,24 +709,92 @@ viewSettingsSave.addEventListener("click", () => {
   })();
 });
 
-// Copy a single identifier to the clipboard, with brief "Copied" feedback.
-// Best-effort: a clipboard permission denial just leaves the label unchanged.
-async function copyValue(value: string, button: HTMLButtonElement): Promise<void> {
+// Copy a single identifier to the clipboard. Copied rows stay marked for the
+// session (S2.3) — the mark set clears on provider switch/sign-out via
+// renderQuickCards(null). When the clipboard API is blocked, the fallback
+// SELECTS the value text and says so, instead of failing silently.
+const copiedKeys = new Set<string>();
+
+async function copyValue(
+  value: string,
+  button: HTMLButtonElement,
+  key?: string,
+  valueNode?: HTMLElement,
+): Promise<void> {
   try {
     await navigator.clipboard.writeText(value);
     button.textContent = "Copied";
     button.classList.add("copied");
+    if (key) {
+      copiedKeys.add(key);
+      button.closest(".detail-row")?.classList.add("copied-row");
+    }
     window.setTimeout(() => {
       button.textContent = "Copy";
       button.classList.remove("copied");
     }, 1200);
   } catch {
-    // clipboard blocked — leave the button as-is
+    // Clipboard blocked (permission policy, headless contexts): select the
+    // text so a manual Ctrl/Cmd+C works, and say what happened.
+    if (valueNode) {
+      const range = document.createRange();
+      range.selectNodeContents(valueNode);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    button.textContent = "Copy blocked — press Ctrl+C";
+    window.setTimeout(() => {
+      button.textContent = "Copy";
+    }, 2500);
   }
 }
 
 // Story 11: the selected case's latest touchlog note, shown under the case
 // picker. Hidden when no case is selected or the case has no note.
+// S4.2 — the duplicate-work guard, fired ON PICKUP (not at submit, where it
+// arrives too late to save the work). Never blocks: "Continue anyway"
+// dismisses it for this pickup, and "See the touchlog" opens the case in the
+// webapp. Re-evaluated on every case change, so it survives a case switch.
+const dismissedDupCaseIds = new Set<string>();
+
+function renderDuplicateGuard(): void {
+  const caseId = selectedCaseId();
+  const caseItem = cases.find((c) => c.id === caseId);
+  const phrase = caseId && !dismissedDupCaseIds.has(caseId)
+    ? recentSubmissionPhrase(caseItem)
+    : null;
+  dupPickup.hidden = phrase == null;
+  dupPickup.replaceChildren();
+  if (phrase == null || caseId == null) return;
+
+  const text = document.createElement("p");
+  text.className = "dup-pickup-text";
+  text.textContent = `This case was marked submitted ${phrase}. Someone may already have done this work.`;
+  dupPickup.append(text);
+
+  const actions = document.createElement("div");
+  actions.className = "dup-pickup-actions";
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "link";
+  dismiss.textContent = "Continue anyway";
+  dismiss.addEventListener("click", () => {
+    dismissedDupCaseIds.add(caseId);
+    renderDuplicateGuard();
+  });
+  actions.append(dismiss);
+
+  const link = document.createElement("a");
+  link.className = "link";
+  link.href = `${API_BASE_URL}/cases/${caseId}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = "See the touchlog ↗";
+  actions.append(link);
+  dupPickup.append(actions);
+}
+
 function renderCaseNote(): void {
   const id = selectedCaseId();
   const note = cases.find((c) => c.id === id)?.latestNote ?? null;
@@ -574,7 +844,7 @@ function humanizeStateKey(value: string): string {
 // checklist context).
 const EXECUTION_TYPE_LABELS: Record<string, string> = {
   manual: "Manual",
-  extension_fill: "Extension fill",
+  extension_fill: "Auto-fill",
   auto_verify: "Auto verify",
   document_attach: "Document attach",
 };
@@ -639,6 +909,74 @@ function maybeApplyCaseFacility(): void {
 // argument (no case, an error, or nothing to show) hides the block. Purely
 // informational — it never gates the fill/submit flow, and nothing here is
 // persisted beyond this render.
+// S4.3 — one task's SOP steps. The step for the page in hand carries a THIS
+// PAGE chip and a row tint. Ticking writes through the server, which owns the
+// ordering rule; a rejection renders verbatim beneath the step and the
+// checkbox reverts — never a false success (the cross-cutting gate).
+function stepList(taskId: string, steps: readonly CaseContextTaskStep[]): HTMLElement {
+  const list = document.createElement("ul");
+  list.className = "step-list";
+  for (const step of steps) {
+    const li = document.createElement("li");
+    li.className = "step-row";
+    const onThisPage = portal != null && step.portalKey === portal.key;
+    if (onThisPage) li.classList.add("step-row-here");
+
+    const label = document.createElement("label");
+    label.className = "step-label";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = step.isCompleted;
+    // A completed step is terminal here: un-ticking is a webapp correction,
+    // not something the panel should offer mid-fill.
+    box.disabled = step.isCompleted;
+    const text = document.createElement("span");
+    text.textContent = step.label;
+    label.append(box, text);
+    li.append(label);
+
+    if (onThisPage) {
+      const chip = document.createElement("span");
+      chip.className = "pill this-page-chip";
+      chip.textContent = "THIS PAGE";
+      li.append(chip);
+    }
+
+    const error = document.createElement("p");
+    error.className = "step-error";
+    error.hidden = true;
+    li.append(error);
+
+    box.addEventListener("change", () => {
+      if (!box.checked) return;
+      const caseId = selectedCaseId();
+      box.disabled = true;
+      error.hidden = true;
+      void (async () => {
+        const response = await sendToBackground({
+          type: "COMPLETE_TASK_STEP",
+          taskId,
+          stepId: step.id,
+        });
+        if (!response.ok) {
+          // Explicit failure: revert the box and say why (the server's own
+          // message, e.g. 'Complete "Upload W-9" first').
+          box.checked = false;
+          box.disabled = false;
+          error.hidden = false;
+          error.textContent = response.error;
+          return;
+        }
+        // Re-read the context so the whole checklist reflects the server's
+        // state (including a task that just rolled up to completed).
+        if (caseId) refreshCaseContext();
+      })();
+    });
+    list.append(li);
+  }
+  return list;
+}
+
 function renderCaseContext(context: CaseContext | null): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
@@ -674,13 +1012,21 @@ function renderCaseContext(context: CaseContext | null): void {
     caseContextBox.append(row);
   }
 
-  // Open SOP tasks with execution types (E4.2 tee-up). Read-only in R6 —
-  // marking a task done stays in the webapp.
+  // S4.3 — Progress: the case's open tasks and their SOP steps, scoped to the
+  // portal in hand when one is recognized. Ticking a step WRITES
+  // (PATCH /api/tasks/:id/steps); the server owns the ordering rule and a
+  // rejection is shown verbatim — never a false success.
   if (tasks.length > 0) {
-    const { row } = contextRow(`Open tasks (${tasks.length})`);
+    // Scope to the portal in hand: a task counts when any of its steps names
+    // the detected portal. Off a recognized page, all open tasks show.
+    const scoped = portal
+      ? tasks.filter((t) => (t.steps ?? []).some((st) => st.portalKey === portal?.key))
+      : [];
+    const shown = scoped.length > 0 ? scoped : tasks;
+    const { row } = contextRow(`Progress (${shown.length})`);
     const list = document.createElement("ul");
     list.className = "case-task-list";
-    for (const task of tasks) {
+    for (const task of shown) {
       const item = document.createElement("li");
       const title = document.createElement("span");
       title.className = "case-task-title";
@@ -696,6 +1042,8 @@ function renderCaseContext(context: CaseContext | null): void {
         due.textContent = `due ${fmtContextDate(task.dueDate)}`;
         item.append(due);
       }
+      const steps = task.steps ?? [];
+      if (steps.length > 0) item.append(stepList(task.id, steps));
       list.append(item);
     }
     row.append(list);
@@ -891,6 +1239,7 @@ function isFillReady(): boolean {
 }
 
 function updateFillReady(): void {
+  syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
@@ -912,11 +1261,22 @@ function updateFillReady(): void {
 // portal's field maps — NOT the case — but only shows for a fill-ready
 // selection, so a case must be picked for the key to be non-null. null = not
 // fill-ready = panel hidden.
+// The enrollment state comes from the selected CASE (S3.2): the registry row
+// carries no state — a national portal serves many — while every fill
+// requires a case and every case names its state.
+function selectedCaseState(): string {
+  const caseItem = cases.find((c) => c.id === selectedCaseId());
+  return caseItem?.state ?? "";
+}
+
 function coverageSelectionKey(): string | null {
   if (!isFillReady()) return null;
-  return [selectedProviderId(), selectedFacilityId() ?? "none", portal?.key ?? "", portal?.state ?? ""].join(
-    "|",
-  );
+  return [
+    selectedProviderId(),
+    selectedFacilityId() ?? "none",
+    portal?.key ?? "",
+    selectedCaseState(),
+  ].join("|");
 }
 
 // Request coverage when the fill-ready selection changes, and render it above
@@ -951,7 +1311,7 @@ function refreshCoverage(): void {
       providerId,
       caseId,
       portalKey: activePortal.key,
-      state: activePortal.state,
+      state: selectedCaseState(),
       facilityId,
     });
     // Discard a stale response: a newer generation superseded this selection,
@@ -1016,6 +1376,28 @@ function renderCoverage(coverage: FillCoverage | null): void {
   }
   const noun = coverage.total === 1 ? "field" : "fields";
   coverageCount.textContent = `Can fill ${coverage.available} of ${coverage.total} mapped ${noun}.`;
+
+  // S4.1 — PROVEN only when a dry run actually proved this form. An unproven
+  // form still fills; it just says so and the button drops to secondary.
+  const proven = portal?.proven === true;
+  provenChip.hidden = !proven;
+  unprovenNote.hidden = proven;
+  unprovenNote.textContent = proven
+    ? ""
+    : "This form hasn't been proven by a dry run — check the result before you submit.";
+  fillBtn.classList.toggle("secondary", !proven);
+  fillBtn.classList.toggle("primary", proven);
+
+  // S4.1 — drift: dead selectors from the LAST REAL fill on this portal mean
+  // the form changed. Stated before the run, with the count, so a partial
+  // fill is never a surprise.
+  const broken = lastReportBrokenCount;
+  driftStrip.hidden = broken === 0;
+  driftStrip.textContent =
+    broken === 0
+      ? ""
+      : `${broken} mapped ${broken === 1 ? "field" : "fields"} went missing on the last fill — this form may have changed.`;
+
   coverageGaps.replaceChildren();
   const portalKey = portal?.key ?? null;
   const providerId = selectedProviderId();
@@ -1244,6 +1626,7 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
   renderCaseNote();
+  renderDuplicateGuard();
   renderActiveCases();
   // Load context for the restored case (or hide when none was restored). Runs
   // under this generation; a superseding switch discards its response.
@@ -1261,12 +1644,17 @@ async function restoreFillReport(
   selectedCase: string | null,
   generation: number,
 ): Promise<void> {
+  lastReportBrokenCount = 0;
   if (selectedCase == null) return;
   const response = await sendToBackground({ type: "GET_FILL_REPORT", providerId });
   if (!isCurrent(generation)) return;
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
   if (record.caseId !== selectedCase) return;
+  // S4.1 drift signal: dead selectors from this portal's last REAL fill.
+  if (record.portalKey === portal?.key) {
+    lastReportBrokenCount = countBrokenSelectors(record.summary.skipped ?? []);
+  }
   lastFill = {
     providerId,
     caseId: record.caseId,
@@ -1322,8 +1710,9 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   facilities = response.data.facilities;
   needsFacility = response.data.needsFacility;
   facilitiesLoaded = true;
-  // The quick cards ride on the same (single, audited) profile fetch as the
-  // facility set.
+  // The quick cards AND the served picker catalog ride on the same (single,
+  // audited) profile fetch as the facility set.
+  currentCatalog = response.data.catalog;
   renderQuickCards(response.data.cards);
 
   if (facilities.length === 0) {
@@ -1405,6 +1794,15 @@ async function loadProviders(generation: number): Promise<void> {
     ]);
 }
 
+// S1.5: the account row shows the active org's name beside the avatar —
+// ellipsized by CSS at narrow widths, never dropped entirely (the 320px
+// criterion). Empty until an org resolves.
+function renderOrgContext(): void {
+  const active = orgs.find((o) => o.orgId === activeOrgId);
+  orgContext.textContent = active ? active.orgName : "";
+  orgContext.title = active ? active.orgName : "";
+}
+
 function orgLabel(org: UserOrgMembership): string {
   return org.orgName || org.orgId;
 }
@@ -1417,6 +1815,7 @@ async function loadOrgs(generation: number): Promise<void> {
   setError(mainError, null);
   orgs = [];
   activeOrgId = null;
+  renderOrgContext();
   orgSelect.disabled = true;
   orgSelect.replaceChildren(new Option("Loading organizations…", ""));
   providerSection.hidden = true;
@@ -1458,6 +1857,7 @@ async function loadOrgs(generation: number): Promise<void> {
     searchSection.hidden = false;
     renderIdentityGuard();
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
     return;
   }
 
@@ -1471,6 +1871,7 @@ async function loadOrgs(generation: number): Promise<void> {
     if (!isCurrent(generation)) return;
   }
   activeOrgId = storedId;
+  renderOrgContext();
   orgSelect.replaceChildren();
   const placeholder = new Option("Select an organization…", "", true, storedId == null);
   placeholder.disabled = true;
@@ -1484,6 +1885,7 @@ async function loadOrgs(generation: number): Promise<void> {
     providerSection.hidden = false;
     searchSection.hidden = false;
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
   } else {
     updateFillReady();
   }
@@ -1501,11 +1903,39 @@ async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   }
 }
 
+// S3.2: fetch the portal registry for the resolved org, then re-run portal
+// detection — a page that wasn't recognized before the rows arrived becomes
+// recognized the moment they do. Failure degrades to an empty registry
+// (nothing recognized), never an error state: recognition is an enhancement,
+// the fill gate reports its own errors.
+async function loadPortalRegistry(generation: number): Promise<void> {
+  const response = await sendToBackground({ type: "LIST_PORTALS" });
+  if (!isCurrent(generation)) return;
+  portalRows = response.ok ? response.data : [];
+  void detectPortal();
+}
+
 async function detectPortal(): Promise<void> {
   const tab = await queryActiveTab();
-  portal = matchPortal(tab?.url);
+  portal = matchPortalByUrl(tab?.url, portalRows);
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
+  // The active-cases heading + THIS PAGE chips reflect the detected page.
+  renderActiveCases();
+  renderCapture();
+  renderCaqh();
+}
+
+// The queue is the landing state: visible only while NOTHING is in hand
+// (no provider/case selected in the panel). Selecting a case hides it;
+// releasing shows it again — no confirmation either way.
+function syncQueueVisibility(): void {
+  const inHand = selectedProviderId() != null || selectedCaseId() != null;
+  if (inHand) {
+    queueSection.hidden = true;
+    return;
+  }
+  if (queueSection.hidden && orgResolved()) void loadQueue(loadGeneration);
 }
 
 // The panel reflects the ACTIVE tab: re-detect on tab switch and on
@@ -1519,14 +1949,48 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 });
 
 function showMain(auth: AuthState): void {
-  accountEmail.textContent = accountGreeting(auth.name, auth.email);
+  renderAccountRow(auth.name, auth.email);
   showView("main");
   // Fresh context: this restore load (and every loader it chains into) runs
   // under one generation so it populates uninterrupted. The handoff check
   // runs AFTER orgs load — the org validation needs the membership list.
   void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
   void detectPortal();
+  void restoreCapture();
 }
+
+// S1.5 — the account row: a 26px forest avatar circle with the user's white
+// initial; the menu holds the email and Sign out. The initial comes from the
+// same name source as the greeting (auth user_metadata, else the email's
+// first letter).
+function renderAccountRow(name: string | null, email: string | null): void {
+  const greeting = accountGreeting(name, email);
+  const source = (name ?? "").trim() || (email ?? "").trim();
+  avatarBtn.textContent = (source.charAt(0) || "?").toUpperCase();
+  avatarBtn.title = greeting;
+  accountEmail.textContent = email ?? greeting;
+}
+
+function closeAvatarMenu(): void {
+  avatarMenu.hidden = true;
+  avatarBtn.setAttribute("aria-expanded", "false");
+}
+
+avatarBtn.addEventListener("click", () => {
+  const open = avatarMenu.hidden;
+  avatarMenu.hidden = !open;
+  avatarBtn.setAttribute("aria-expanded", String(open));
+});
+
+// Click-away + Escape close the menu (it must never trap the panel).
+document.addEventListener("click", (event) => {
+  if (avatarMenu.hidden) return;
+  const target = event.target as Node;
+  if (!avatarMenu.contains(target) && !avatarBtn.contains(target)) closeAvatarMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeAvatarMenu();
+});
 
 function showSignin(): void {
   signinForm.reset();
@@ -1576,6 +2040,7 @@ signoutBtn.addEventListener("click", () => {
     await sendToBackground({ type: "SIGN_OUT" });
     orgs = [];
     activeOrgId = null;
+    renderOrgContext();
     providers = [];
     cases = [];
     facilities = [];
@@ -1599,7 +2064,11 @@ signoutBtn.addEventListener("click", () => {
   })();
 });
 
-refreshBtn.addEventListener("click", () => void loadProviders(bumpGeneration()));
+refreshBtn.addEventListener("click", () => {
+  const generation = bumpGeneration();
+  void loadProviders(generation);
+  void loadPortalRegistry(generation);
+});
 
 orgSelect.addEventListener("change", () => {
   const orgId = orgSelect.value || null;
@@ -1609,6 +2078,7 @@ orgSelect.addEventListener("change", () => {
   const generation = bumpGeneration();
   void (async () => {
     activeOrgId = orgId;
+    renderOrgContext();
     // The worker wipes provider/case/facility/report state — including any
     // active-case context — before storing the new org; every call from here
     // on carries x-org-id.
@@ -1620,6 +2090,7 @@ orgSelect.addEventListener("change", () => {
     searchSection.hidden = false;
     renderIdentityGuard();
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
     // A handoff pending for THIS org can now apply (the switch prompt's path).
     await refreshActiveCase();
   })();
@@ -1673,6 +2144,7 @@ function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
   }
   renderCaseStatusPill();
   renderCaseNote();
+  renderDuplicateGuard();
   renderActiveCases();
   refreshCaseContext();
   clearFillResults();
@@ -1702,7 +2174,7 @@ fillBtn.addEventListener("click", () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
     const tab = await queryActiveTab();
-    const clickPortal = matchPortal(tab?.url);
+    const clickPortal = matchPortalByUrl(tab?.url, portalRows);
     portal = clickPortal;
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
     updateFillReady();
@@ -1725,7 +2197,7 @@ fillBtn.addEventListener("click", () => {
       providerId,
       caseId,
       portalKey: clickPortal.key,
-      state: clickPortal.state,
+      state: selectedCaseState(),
       facilityId,
     });
     fillBtn.textContent = "Fill this page";
@@ -1784,7 +2256,10 @@ markSubmittedBtn.addEventListener("click", () => {
   if (!dupConfirmPending) {
     const caseItem = cases.find((c) => c.id === context.caseId);
     const phrase = recentSubmissionPhrase(caseItem);
-    if (phrase != null) {
+    // S4.2 moved the duplicate WARNING to pickup, where it can still save the
+    // work. Submitting stays a one-click confirm rather than a second warning:
+    // by here the human has already seen the pickup notice and done the fill.
+    if (phrase != null && !dismissedDupCaseIds.has(caseItem?.id ?? "")) {
       dupConfirmPending = true;
       dupWarn.hidden = false;
       dupWarn.textContent = `This case was marked submitted ${phrase}. Log another submission?`;
@@ -1792,8 +2267,6 @@ markSubmittedBtn.addEventListener("click", () => {
       return;
     }
   }
-
-  const buttonLabel = dupConfirmPending ? "Log anyway" : "Mark submitted";
   // Capture the task to close BEFORE the async work: a successful submit refetches
   // cases (mutating matchingPortalTasks), so read the id + title now.
   const closedTaskId = selectedTaskId;
@@ -1813,27 +2286,51 @@ markSubmittedBtn.addEventListener("click", () => {
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
       taskId: closedTaskId,
+      // S4.4: request the In Progress -> Submitted bump alongside the touch.
+      // Explicit and per-request — the R2 rule that the extension never
+      // changes status IMPLICITLY still holds.
+      bumpStatus: true,
     });
     if (!response.ok) {
       // A 404 here can now also mean a cross-org/invalid task_id — surface the
       // server's message as-is and let the human retry. Never auto-retry with
       // the task stripped.
+      //
+      // S4.4 offline/failure contract: the typed values stay on screen, the
+      // state says UNSENT in as many words, and the button becomes an explicit
+      // retry. The worker reuses the same idempotency id across retries, so a
+      // retry after a network drop replays the anchor rather than double-
+      // logging — the safe thing to do is press it again.
       markSubmittedBtn.disabled = false;
-      markSubmittedBtn.textContent = buttonLabel;
+      markSubmittedBtn.textContent = "Retry — mark submitted";
+      submitStatus.hidden = false;
+      submitStatus.classList.add("partial");
+      submitStatus.textContent = navigator.onLine
+        ? "Not logged yet — nothing was recorded on the case. Your entries are kept; press retry."
+        : "You're offline — nothing was recorded on the case. Your entries are kept; retry when you reconnect.";
       setError(mainError, response.error);
       return;
     }
     dupConfirmPending = false;
     dupWarn.hidden = true;
+    submitStatus.classList.remove("partial");
     submitDetails.hidden = true;
     taskLink.hidden = true;
     selectedTaskId = null;
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    submitStatus.textContent = closedTaskTitle
-      ? `Logged to the case. Task closed: ${closedTaskTitle}`
-      : "Logged to the case.";
+    // S4.4 — report the touch AND the bump, separately and honestly. A
+    // skipped bump is not a failed touch: the submission IS recorded, and the
+    // reason (illegal edge, role, concurrency) comes from the server.
+    const bump = response.data.statusBump;
+    const lines = [closedTaskTitle ? `Logged to the case. Task closed: ${closedTaskTitle}` : "Logged to the case."];
+    if (bump?.applied) lines.push("Case moved to Submitted.");
+    else if (bump && !bump.applied) {
+      lines.push(`Status unchanged — ${bump.reason ?? "the case couldn't be moved to Submitted."}`);
+    }
+    submitStatus.textContent = lines.join(" ");
+    submitStatus.classList.toggle("partial", bump != null && !bump.applied);
     // Point 6: drop the now-closed task from the case's portalTasks so a later
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
@@ -1848,6 +2345,14 @@ markSubmittedBtn.addEventListener("click", () => {
 // a handoff and lands in the fill loop.
 // ---------------------------------------------------------------------------
 
+// S3.4: does this case USE the recognized page? True when any of its open
+// portal-linked tasks names the detected portal's key (already-normalized
+// literal match, the portalTasks contract).
+function caseUsesDetectedPortal(c: CaseListItem): boolean {
+  if (portal == null) return false;
+  return (c.portalTasks ?? []).some((t) => t.portalKey === portal?.key);
+}
+
 function renderActiveCases(): void {
   const providerId = selectedProviderId();
   const show = providerId != null && cases.length > 0;
@@ -1855,7 +2360,19 @@ function renderActiveCases(): void {
   activeCasesList.replaceChildren();
   if (!show) return;
   const selected = selectedCaseId();
-  for (const c of cases) {
+
+  // S3.4: on a recognized payer form the heading flips to "Cases that use
+  // this page" and matching cases sort FIRST, each carrying a THIS PAGE chip.
+  // Off a recognized page the list renders in server order under the default
+  // heading. Stable within each half (no invented priority).
+  const heading = activeCasesBox.querySelector<HTMLElement>(".active-cases-heading");
+  const anyMatch = portal != null && cases.some((c) => caseUsesDetectedPortal(c));
+  if (heading) heading.textContent = anyMatch ? "Cases that use this page" : "Open cases";
+  const ordered = anyMatch
+    ? [...cases.filter(caseUsesDetectedPortal), ...cases.filter((c) => !caseUsesDetectedPortal(c))]
+    : cases;
+
+  for (const c of ordered) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = c.id === selected ? "case-row case-row-selected" : "case-row";
@@ -1863,6 +2380,12 @@ function renderActiveCases(): void {
     title.className = "case-row-title";
     title.textContent = `${c.payerName ?? "Unknown payer"} · ${c.state}`;
     row.append(title);
+    if (anyMatch && caseUsesDetectedPortal(c)) {
+      const chip = document.createElement("span");
+      chip.className = "pill this-page-chip";
+      chip.textContent = "THIS PAGE";
+      row.append(chip);
+    }
     if (c.status) {
       const pill = document.createElement("span");
       pill.className = `pill ${pillClassFor(c.status)}`.trim();
@@ -1923,12 +2446,24 @@ async function selectCaseInPanel(
   providerId: string,
   caseId: string,
   recordEntry: boolean,
+  // S3.5: the case's location from the C1 payload. Recorded BEFORE facilities
+  // load so the picker opens already resolved — "zero dropdowns". Ignored when
+  // the provider isn't actually assigned to it (loadFacilities validates the
+  // stored pick against the real set).
+  preferredFacilityId?: string | null,
 ): Promise<void> {
   const generation = bumpGeneration();
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId });
   await sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
   if (recordEntry) {
     await sendToBackground({ type: "ENTER_ACTIVE_CASE", caseId, providerId, orgId: activeOrgId });
+  }
+  if (preferredFacilityId) {
+    await sendToBackground({
+      type: "SET_SELECTED_FACILITY",
+      providerId,
+      facilityId: preferredFacilityId,
+    });
   }
   if (!isCurrent(generation)) return;
   resetTouchForm();
@@ -2136,6 +2671,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   appliedHandoffKey = handoffKey(record);
   const generation = bumpGeneration();
   activeOrgId = target;
+  renderOrgContext();
   orgSelect.value = target;
   await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: target });
   if (!isCurrent(generation)) return;
@@ -2144,7 +2680,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   providerSection.hidden = false;
   searchSection.hidden = false;
   renderIdentityGuard();
-  await selectCaseInPanel(record.providerId, record.caseId, true);
+  await selectCaseInPanel(record.providerId, record.caseId, true, record.facilityId);
   renderHandoffBanner();
 }
 
@@ -2340,6 +2876,94 @@ function nbaLink(label: string, href: string): HTMLAnchorElement {
   return link;
 }
 
+// ---------------------------------------------------------------------------
+// S3.3 — the case pickup queue. The panel opens to it when nothing is in hand
+// (no active case selected): ORDER AND THE REASON LINE COME FROM THE SERVER —
+// the extension never ranks (the cross-cutting "no invented priority" gate).
+// Release returns here without a confirmation.
+// ---------------------------------------------------------------------------
+
+// How many queue rows to render before the "and N more" line. Server-bounded
+// too (?limit=), this is the display cap.
+const QUEUE_PAGE_SIZE = 8;
+
+function queueRow(item: NextBestActionItem): HTMLElement {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "case-row queue-row";
+
+  const main = document.createElement("span");
+  main.className = "queue-row-main";
+  const title = document.createElement("span");
+  title.className = "case-row-title";
+  title.textContent = `${item.providerName} — ${item.payerName} · ${item.state}`;
+  main.append(title);
+  const reason = document.createElement("span");
+  reason.className = "queue-row-reason";
+  // The server's reason line, rendered verbatim.
+  reason.textContent = item.reason || item.action;
+  main.append(reason);
+  row.append(main);
+
+  if (item.deadline != null) {
+    const due = document.createElement("span");
+    due.className = item.deadline.overdue ? "pill pill-red" : "pill";
+    due.textContent = `${item.deadline.overdue ? "Overdue" : "Due"} ${fmtContextDate(item.deadline.date)}`;
+    row.append(due);
+  }
+
+  row.addEventListener("click", () => {
+    queueSection.hidden = true;
+    void selectCaseInPanel(item.providerId, item.caseId, true);
+  });
+  return row;
+}
+
+function renderQueue(items: NextBestActionItem[]): void {
+  queueSection.replaceChildren();
+  const heading = document.createElement("p");
+  heading.className = "section-title";
+  heading.textContent = "Pick up where you left off";
+  queueSection.append(heading);
+
+  if (items.length === 0) {
+    const clear = document.createElement("p");
+    clear.className = "nba-clear";
+    clear.textContent = "Queue clear — nothing needs action right now.";
+    queueSection.append(clear);
+    return;
+  }
+  for (const item of items.slice(0, QUEUE_PAGE_SIZE)) queueSection.append(queueRow(item));
+  if (items.length > QUEUE_PAGE_SIZE) {
+    const more = document.createElement("p");
+    more.className = "queue-more";
+    more.textContent = `and ${items.length - QUEUE_PAGE_SIZE} more in Minted Panel`;
+    queueSection.append(more);
+  }
+}
+
+// Load the queue for the no-context empty state. Loading / empty / failed are
+// all explicit (doc 04 §4.4); a failure never blanks the panel — search and
+// the manual picker stay available beneath it.
+async function loadQueue(generation: number): Promise<void> {
+  if (!orgResolved()) {
+    queueSection.hidden = true;
+    return;
+  }
+  queueSection.hidden = false;
+  queueSection.replaceChildren(searchEmptyLine("Loading your queue…"));
+  const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
+  if (!isCurrent(generation)) return;
+  if (!response.ok) {
+    queueSection.replaceChildren(searchEmptyLine(`Queue unavailable: ${response.error}`));
+    return;
+  }
+  // A server predating S3.3 sends only `item`; degrade to that single entry
+  // rather than showing an empty queue.
+  const items = response.data.items ?? (response.data.item ? [response.data.item] : []);
+  renderQueue(items);
+}
+
 function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   nbaSection.replaceChildren();
   nbaSection.hidden = false;
@@ -2398,6 +3022,265 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   actions.append(nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`));
   card.append(actions);
   nbaSection.append(card);
+}
+
+// ---------------------------------------------------------------------------
+// S6.2/S6.3 — CAQH. PUSH ONLY: we fill CAQH from Minted Panel and record the
+// attestation. The exception strip (S6.3) is the single narrow pull — a field
+// CAQH holds where we are blank — and appears ONLY when such a gap exists.
+// There is no reconciliation of disagreements anywhere: Minted Panel is the
+// source of truth.
+// ---------------------------------------------------------------------------
+
+// Whether the tab in hand is a CAQH portal. Registry-driven like every other
+// portal check (S3.2) — no hardcoded host.
+function isCaqhPortal(): boolean {
+  return portal != null && /caqh/i.test(`${portal.key} ${portal.label}`);
+}
+
+let caqhOffer: ReturnType<typeof buildCaqhPushOffer> | null = null;
+
+function renderCaqh(): void {
+  const cards = currentCards;
+  caqhSection.hidden = !isCaqhPortal() || cards == null;
+  if (caqhSection.hidden || cards == null) return;
+
+  // The offer counts fields we actually hold — see buildCaqhPushOffer.
+  const tokens = [...cards.type1Fields, ...cards.type2Fields]
+    .filter((f) => f.value != null)
+    .map((f) => ({ token: f.key, value: f.value }));
+  // The date comes from the roster row (see attestedOnFor) — never a module
+  // variable, which is what made this read "Never attested" for everyone.
+  caqhOffer = buildCaqhPushOffer(
+    tokens,
+    attestedOnFor(selectedProviderId(), providers),
+    localToday(),
+  );
+  caqhHeadline.textContent = caqhOffer.headline;
+  caqhAttested.textContent = attestationLine(caqhOffer);
+  // S6.2: a recently-attested profile de-emphasizes rather than nags.
+  caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
+
+  // S6.3: the strip is OMITTED ENTIRELY when there are no gaps.
+  caqhGaps.replaceChildren();
+  caqhGaps.hidden = caqhGapRows.length === 0;
+  for (const gap of caqhGapRows) {
+    const row = document.createElement("div");
+    row.className = "caqh-gap";
+    const label = document.createElement("span");
+    label.className = "caqh-gap-label";
+    label.textContent = `${gap.label}: ${gap.portalValue}`;
+    const pull = document.createElement("button");
+    pull.type = "button";
+    pull.className = "link";
+    pull.textContent = "Add to Minted Panel";
+    pull.addEventListener("click", () => {
+      const providerId = selectedProviderId();
+      if (!providerId) return;
+      pull.disabled = true;
+      void (async () => {
+        const response = await sendToBackground({
+          type: "PULL_CAQH_FIELD",
+          providerId,
+          token: gap.token,
+          value: gap.portalValue,
+        });
+        if (!response.ok) {
+          pull.disabled = false;
+          setError(mainError, response.error);
+          return;
+        }
+        // The gap is closed — drop it and refetch so the card and the next
+        // fill count both reflect the new value immediately (S6.3).
+        caqhGapRows = caqhGapRows.filter((g) => g.token !== gap.token);
+        renderCaqh();
+        void loadFacilities(providerId, loadGeneration);
+      })();
+    });
+    row.append(label, pull);
+    caqhGaps.append(row);
+  }
+}
+
+caqhAttest.addEventListener("click", () => {
+  const providerId = selectedProviderId();
+  const offer = caqhOffer;
+  if (!providerId || offer == null) return;
+  const generation = loadGeneration;
+  caqhAttest.disabled = true;
+  caqhAttest.textContent = "Recording…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "RECORD_CAQH_ATTESTATION",
+      providerId,
+      verifiedFields: offer.fieldKeys,
+    });
+    caqhAttest.disabled = false;
+    caqhAttest.textContent = "Record attestation";
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      setError(mainError, response.error);
+      return;
+    }
+    // Write the server-authoritative date back onto the roster row, which is
+    // what renderCaqh reads. Keeping it here rather than in a side variable is
+    // why a provider switch cannot show another provider's attestation.
+    const row = providers.find((p) => p.id === providerId);
+    if (row) row.caqhLastAttestedDate = response.data.caqhLastAttestedDate;
+    caqhStatus.hidden = false;
+    caqhStatus.textContent = `Attestation recorded. ${response.data.verifiedFields} ${
+      response.data.verifiedFields === 1 ? "field" : "fields"
+    } stamped as verified.`;
+    renderCaqh();
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// S5.4 — capture: "we recognise N of M" with per-row evidence, gaps that are
+// actionable but never blocking, and a send that works even when we
+// recognised nothing (a form we understand none of is the one worth
+// capturing). Approving stays in the webapp: this only proposes.
+// ---------------------------------------------------------------------------
+
+let captureSession: CaptureSession | null = null;
+
+// S6.3 — the CAQH EXCEPTION strip: fields CAQH holds where Minted Panel is
+// blank. The rendering, the pure `findCaqhGaps` reducer and the PULL_CAQH_FIELD
+// round trip are all built and unit-tested, but nothing populates this array,
+// so the strip never appears.
+//
+// It is UNFINISHED, not broken, and the missing half is deliberate: populating
+// it means reading VALUES off the CAQH page, which is a different capability
+// from the S5.2 capture scan (that reads form SHAPE only — labels and
+// selectors, never values — and that boundary is load-bearing for PHI). Wiring
+// it needs a value-reading content script and a real CAQH account to verify
+// against; shipping a guess would be worse than shipping nothing.
+//
+// Tracked so this reads as a known gap rather than a mystery. The push half of
+// S6.2 (offer + attestation) IS live.
+let caqhGapRows: CaqhGap[] = [];
+
+// Date-only today for the pure CAQH module (it never reads a clock itself).
+function localToday(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+function renderCapture(): void {
+  // Capture is offered whenever a recognized portal page is in the active tab.
+  captureSection.hidden = portal == null || portalTabId == null;
+  if (captureSection.hidden) return;
+
+  const counts = captureCounts(captureSession);
+  captureSummary.textContent = captureSession
+    ? recognitionSummary(counts)
+    : "Not captured yet — read this form's fields into Minted Panel.";
+  captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+
+  captureRows.replaceChildren();
+  captureActions.hidden = !canSendCapture(captureSession);
+  captureSend.disabled = false;
+  captureSent.hidden = counts.sent === 0;
+  if (counts.sent > 0) {
+    captureSent.textContent = `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
+  }
+  if (captureSession == null) return;
+
+  for (const row of captureSession.rows) {
+    const item = document.createElement("div");
+    item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
+
+    const label = document.createElement("span");
+    label.className = "capture-row-label";
+    label.textContent = row.label || row.selector;
+    item.append(label);
+
+    const value = document.createElement("span");
+    value.className = "capture-row-token mono";
+    value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
+    item.append(value);
+
+    if (row.evidence) {
+      const evidence = document.createElement("span");
+      evidence.className = "capture-row-evidence";
+      evidence.textContent = row.evidence;
+      item.append(evidence);
+    }
+
+    if (row.sent) {
+      const chip = document.createElement("span");
+      chip.className = "pill";
+      chip.textContent = "Sent";
+      item.append(chip);
+    }
+    captureRows.append(item);
+  }
+}
+
+captureStart.addEventListener("click", () => {
+  const tabId = portalTabId;
+  const activePortal = portal;
+  if (tabId == null || activePortal == null) return;
+  const generation = loadGeneration;
+  captureStart.disabled = true;
+  captureStart.textContent = "Reading the form…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "START_CAPTURE",
+      tabId,
+      portalKey: activePortal.key,
+    });
+    captureStart.disabled = false;
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      captureStart.textContent = "Capture this form";
+      setError(mainError, response.error);
+      return;
+    }
+    captureSession = response.data;
+    captureRestored.hidden = true;
+    renderCapture();
+  })();
+});
+
+captureSend.addEventListener("click", () => {
+  const generation = loadGeneration;
+  captureSend.disabled = true;
+  captureSend.textContent = "Sending…";
+  void (async () => {
+    const response = await sendToBackground({ type: "SEND_CAPTURE" });
+    captureSend.textContent = "Send for approval";
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      captureSend.disabled = false;
+      setError(mainError, response.error);
+      return;
+    }
+    captureSession = response.data;
+    renderCapture();
+  })();
+});
+
+captureClear.addEventListener("click", () => {
+  void (async () => {
+    await sendToBackground({ type: "CLEAR_CAPTURE" });
+    captureSession = null;
+    captureRestored.hidden = true;
+    renderCapture();
+  })();
+});
+
+// S5.2 — restore an in-flight capture after a worker restart / panel reopen,
+// and SAY what came back (labels and counts; there are no values to restore).
+async function restoreCapture(): Promise<void> {
+  const response = await sendToBackground({ type: "GET_CAPTURE" });
+  captureSession = response.ok ? response.data : null;
+  if (captureSession) {
+    captureRestored.hidden = false;
+    captureRestored.textContent = restoredSummary(captureSession);
+  }
+  renderCapture();
 }
 
 void (async () => {

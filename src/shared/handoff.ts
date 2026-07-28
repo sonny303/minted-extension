@@ -7,10 +7,15 @@
 //
 // The locked TE-1 shape (panel `src/lib/extensionHandoff.ts` — panel-first,
 // mirrored here; never change unilaterally):
-//   { type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl }
+//   { type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl,
+//     portalKey?, facilityId? }
 // IDENTIFIERS + URL ONLY — the message never carries profile or token values,
 // and parseSetActiveCase deliberately drops every unknown field so nothing
-// beyond the contract can ride along into storage.
+// beyond the contract can ride along into storage. The last two are the S3.5
+// (doc 06 C1) additions and are OPTIONAL in both directions: an older webapp
+// omits them, and a malformed one is dropped rather than rejecting the whole
+// handoff — losing the location is a picker prompt, losing the case is a
+// broken launch.
 
 /** The locked SET_ACTIVE_CASE message (TE-1). Identifiers + portal URL only. */
 export interface SetActiveCaseMessage {
@@ -19,6 +24,9 @@ export interface SetActiveCaseMessage {
   providerId: string;
   orgId: string;
   portalUrl: string;
+  // S3.5: the launched portal's registry key, and the case's location.
+  portalKey?: string;
+  facilityId?: string;
 }
 
 // Web origins allowed to hand off a case. Defense in depth: the manifest's
@@ -55,13 +63,20 @@ export function parseSetActiveCase(message: unknown): SetActiveCaseMessage | nul
     return null;
   }
   if (portalUrl.protocol !== "https:") return null;
-  return {
+  const parsed: SetActiveCaseMessage = {
     type: "SET_ACTIVE_CASE",
     caseId: m.caseId,
     providerId: m.providerId,
     orgId: m.orgId,
     portalUrl: m.portalUrl,
   };
+  // S3.5 optional extras. A malformed value is DROPPED, not fatal: the launch
+  // still lands on the right case and the panel falls back to asking.
+  if (nonEmptyString(m.portalKey)) parsed.portalKey = m.portalKey.trim().toLowerCase();
+  if (nonEmptyString(m.facilityId) && UUID_RE.test(m.facilityId)) {
+    parsed.facilityId = m.facilityId;
+  }
+  return parsed;
 }
 
 /** Context expires after 60 minutes idle (TE-1) — or immediately when its
@@ -83,6 +98,11 @@ export interface ActiveCaseRecord {
   // binds the next tab on this origin. null for in-panel selections until a
   // fill binds one.
   portalUrl: string | null;
+  // S3.5: the launched portal's registry key and the case's location, when the
+  // handoff carried them. Both nullable — an in-panel selection has neither,
+  // and a case without a facility legitimately has no location.
+  portalKey: string | null;
+  facilityId: string | null;
   source: "handoff" | "panel";
   // The bound portal tab; closing it expires the context (TE-1).
   boundTabId: number | null;

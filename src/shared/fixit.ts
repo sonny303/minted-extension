@@ -46,3 +46,17 @@ export function trainFlowPath(portalKey: string, fieldLabel?: string): string {
 export function providerFixPath(providerId: string): string {
   return `/providers/${encodeURIComponent(providerId)}`;
 }
+
+// S4.1 — the drift signal shown on the offer card. The content script reports
+// a dead selector with this exact reason (src/content/fillEngine.ts); a
+// mapped field that "wasn't found on this page" means the FORM changed, not
+// that our data is missing. Kept here beside the other gap classifiers so the
+// literal lives in one place on this side of the wire.
+export const FIELD_NOT_FOUND_REASON = "field not found on this page";
+
+/** How many of a fill's skipped fields are dead selectors (drift), not data
+ * gaps. Defensive: a report persisted before `kind` existed still classifies,
+ * because the reason string is the signal. */
+export function countBrokenSelectors(skipped: readonly ReportedField[]): number {
+  return skipped.filter((f) => f.reason === FIELD_NOT_FOUND_REASON).length;
+}

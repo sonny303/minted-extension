@@ -17,6 +17,10 @@ import type {
   ProviderProfileResponse,
   SubmissionTouch,
   UserOrgMembership,
+  PortalRegistryRow,
+  QuickCardCatalogField,
+  ViewPrefsResponse,
+  StatusBumpMeta,
 } from "../shared/apiTypes";
 import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
@@ -92,12 +96,26 @@ export async function listMyOrgs(): Promise<UserOrgMembership[]> {
   return data;
 }
 
-// GET /api/me/view-prefs — the user's saved detail-card field list; fields
-// null = nothing saved (caller falls back to the default set). User-scoped
-// like org discovery, but harmless with an x-org-id attached.
-export async function getViewPrefs(): Promise<string[] | null> {
-  const { data } = await apiFetch<{ fields: string[] | null }>("/api/me/view-prefs");
-  return data.fields;
+// GET /api/portals — the DB-driven portal registry (own-org + global rows).
+// Org-scoped; the panel refetches per org and keeps rows in memory only.
+export async function listPortals(): Promise<PortalRegistryRow[]> {
+  const { data } = await apiFetch<PortalRegistryRow[]>("/api/portals");
+  return data;
+}
+
+// GET /api/me/view-prefs — the user's saved detail-card field list PLUS the
+// server-derived catalog of selectable fields (one round trip; the offered set
+// is guaranteed to match what a PUT validates against). fields null = nothing
+// saved (caller falls back to the default set). User-scoped like org
+// discovery, but harmless with an x-org-id attached. A server that predates
+// the catalog (no `catalog` key) degrades to an empty catalog — callers fall
+// back to shape-only layout validation, never a broken card.
+export async function getViewPrefs(): Promise<ViewPrefsResponse> {
+  const { data } = await apiFetch<{
+    fields: string[] | null;
+    catalog?: QuickCardCatalogField[];
+  }>("/api/me/view-prefs");
+  return { fields: data.fields, catalog: Array.isArray(data.catalog) ? data.catalog : [] };
 }
 
 // PUT /api/me/view-prefs — save the field list (bare token keys, in order).
@@ -141,11 +159,107 @@ export async function searchProviders(query: string): Promise<ProviderListItem[]
   return data;
 }
 
-// GET /api/next-best-action — the org's queue top under its ranking config
-// (E4.3 TE-6), or { item: null } for an honest queue-clear. Read-only; the
-// extension renders the ONE item and never ranks anything itself.
-export async function getNextBestAction(): Promise<NextBestActionResult> {
-  const { data } = await apiFetch<NextBestActionResult>("/api/next-best-action");
+// GET /api/next-best-action — the org's RANKED queue (S3.3) plus its top
+// item, or { item: null } for an honest queue-clear. Read-only; ordering and
+// the per-case reason line come from the SERVER — the extension never ranks
+// anything itself (the cross-cutting "no invented priority" gate).
+export async function getNextBestAction(limit?: number): Promise<NextBestActionResult> {
+  const qs = limit != null ? `?limit=${encodeURIComponent(String(limit))}` : "";
+  const { data } = await apiFetch<NextBestActionResult>(`/api/next-best-action${qs}`);
+  return data;
+}
+
+// PATCH /api/tasks/:id/steps — tick one SOP step complete (S4.3). The ONE
+// task-state write the extension makes; the server owns the ordering rule and
+// returns a 409 naming the blocker when a step isn't next.
+export async function completeTaskStep(
+  taskId: string,
+  stepId: string,
+): Promise<{ task: unknown; allDone: boolean }> {
+  const { data } = await apiFetch<{ task: unknown; allDone: boolean }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/steps`,
+    { method: "PATCH", body: JSON.stringify({ stepId }) },
+  );
+  return data;
+}
+
+// POST /api/portal-field-maps — PROPOSE a field the fill engine met that
+// nothing maps (S5.1). The server forces status 'proposed' / source 'manual' /
+// token null regardless of what we send: approving is a human act in the
+// webapp trainer. The response carries the org's learned suggestion for the
+// label (S5.3) with the evidence behind it.
+export interface ProposeFieldResponse {
+  map: PortalFieldMap;
+  suggestion: { token: string; portalCount: number; fromDictionary: boolean } | null;
+}
+
+export async function proposeFieldMap(input: {
+  portal_key: string;
+  selector: string;
+  field_label?: string | null;
+  form_section?: string | null;
+  field_type?: string | null;
+}): Promise<ProposeFieldResponse> {
+  const { data } = await apiFetch<ProposeFieldResponse>("/api/portal-field-maps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return data;
+}
+
+// PATCH /api/providers/:id — write ONE field (S6.3 gap pull). Deliberately
+// narrow: the token key maps to the provider column the profile resolved it
+// from, and only the gap fields the exception strip can offer are accepted, so
+// this can never become a general provider-editing surface in the panel.
+const PULLABLE_FIELDS: Readonly<Record<string, string>> = {
+  "provider.deaNumber": "deaNumber",
+  "provider.caqhId": "caqhId",
+  "provider.taxonomyCode": "taxonomyCode",
+  "provider.suffix": "suffix",
+  "provider.middleInitial": "middleInitial",
+  "provider.specialty": "specialty",
+  "provider.subSpecialty": "subSpecialty",
+};
+
+export function isPullableField(token: string): boolean {
+  return Object.hasOwn(PULLABLE_FIELDS, token);
+}
+
+export async function patchProviderField(
+  providerId: string,
+  token: string,
+  value: string,
+): Promise<void> {
+  const column = PULLABLE_FIELDS[token];
+  if (!column) throw new Error("That field can't be pulled from CAQH.");
+  await apiFetch(`/api/providers/${encodeURIComponent(providerId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ [column]: value }),
+  });
+}
+
+// POST /api/providers/:id/caqh-attestation — record a CAQH re-attestation
+// (S6.2/C6). `verifiedFields` are the token keys the fill carried; the server
+// stamps each so the Details card can show per-field freshness (S6.1).
+// PUSH ONLY: this never reads anything back into Minted Panel.
+export async function recordCaqhAttestation(
+  providerId: string,
+  input: { attestedOn?: string | null; verifiedFields?: string[] } = {},
+): Promise<{ caqhLastAttestedDate: string | null; currentThroughDays: number; verifiedFields: number }> {
+  const { data } = await apiFetch<{
+    caqhLastAttestedDate: string | null;
+    currentThroughDays: number;
+    verifiedFields: number;
+  }>(`/api/providers/${encodeURIComponent(providerId)}/caqh-attestation`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      ...(input.attestedOn ? { attested_on: input.attestedOn } : {}),
+      ...(input.verifiedFields?.length ? { verified_fields: input.verifiedFields } : {}),
+    }),
+  });
   return data;
 }
 
@@ -214,8 +328,8 @@ export async function postFillEvent(body: FillEventBody): Promise<void> {
 export async function postSubmissionTouch(
   caseId: string,
   body: CaseTouchBody,
-): Promise<SubmissionTouch> {
-  const { data } = await apiFetch<SubmissionTouch>(
+): Promise<{ touch: SubmissionTouch; statusBump: StatusBumpMeta | null }> {
+  const { data, meta } = await apiFetch<SubmissionTouch>(
     `/api/cases/${encodeURIComponent(caseId)}/touches`,
     {
       method: "POST",
@@ -223,5 +337,12 @@ export async function postSubmissionTouch(
       body: JSON.stringify(body),
     },
   );
-  return data;
+  // S4.4: the bump outcome rides meta, never the touch. A skipped bump is not
+  // a failed touch — the panel reports both honestly.
+  const bump = (meta as { status_bump?: string; status_bump_reason?: string } | null) ?? null;
+  const statusBump =
+    bump?.status_bump === "applied" || bump?.status_bump === "skipped"
+      ? { applied: bump.status_bump === "applied", reason: bump.status_bump_reason ?? null }
+      : null;
+  return { touch: data, statusBump };
 }

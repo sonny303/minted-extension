@@ -5,15 +5,21 @@
 // or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse, ProviderFacilitiesInfo, SearchResults } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
+import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import {
   ApiError,
+  completeTaskStep,
   getCaseContext,
+  patchProviderField,
+  proposeFieldMap,
+  recordCaqhAttestation,
   getNextBestAction,
   getProviderProfile,
   getViewPrefs,
   listCases,
   listMyOrgs,
+  listPortals,
   listProviders,
   postSubmissionTouch,
   putViewPrefs,
@@ -36,6 +42,13 @@ import {
   touchActiveCaseActivity,
 } from "./activeCase";
 import { resolveActiveCaseState } from "../shared/handoff";
+import {
+  diffCapture,
+  parseCaptureSession,
+  type CaptureRow,
+  type CaptureSession,
+} from "../shared/capture";
+import type { CapturedField } from "../content/captureScan";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -102,18 +115,55 @@ async function clearWorkbenchState(): Promise<void> {
   await chrome.storage.session.remove(WORKBENCH_OWNER_KEY);
 }
 
+// S5.2 — the capture session lives in chrome.storage.session (dies with the
+// browser) and holds labels/selectors/decisions only. There is no value in it
+// to protect: captureScan never reads one.
+const CAPTURE_KEY = "capture.session";
+
+async function readCaptureSession(): Promise<CaptureSession | null> {
+  try {
+    const entry = await chrome.storage.session.get(CAPTURE_KEY);
+    return parseCaptureSession(entry[CAPTURE_KEY]);
+  } catch {
+    return null;
+  }
+}
+
+async function writeCaptureSession(session: CaptureSession): Promise<void> {
+  await chrome.storage.session.set({ [CAPTURE_KEY]: session });
+}
+
+// The evidence wording is shared with the panel repo's labelLearning module;
+// mirrored here so the two products word it identically.
+function suggestionEvidenceText(s: {
+  portalCount: number;
+  fromDictionary: boolean;
+}): string | null {
+  if (s.portalCount > 0) {
+    return `Mapped this way on ${s.portalCount} other ${s.portalCount === 1 ? "payer" : "payers"}`;
+  }
+  return s.fromDictionary ? "Your organization mapped this label before" : null;
+}
+
 function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
-// The saved quick-card layout, degraded to the default on anything invalid,
-// missing, or unreachable (TE-15: never a broken card — the prefs read is
-// cosmetic, never a blocker).
-async function readCardLayout(): Promise<{ fields: string[]; source: "saved" | "default" }> {
+// The saved quick-card layout + the served field catalog, degraded on
+// anything invalid, missing, or unreachable (TE-15: never a broken card — the
+// prefs read is cosmetic, never a blocker). The layout is validated against
+// the SERVED key set when the catalog came back; on a failed read the catalog
+// is empty and resolveLayout falls back to shape-only validation.
+async function readCardLayout(): Promise<{
+  layout: { fields: string[]; source: "saved" | "default" };
+  catalog: QuickCardCatalogField[];
+}> {
   try {
-    return resolveLayout(await getViewPrefs());
+    const prefs = await getViewPrefs();
+    const allowed = new Set(prefs.catalog.map((f) => f.key));
+    return { layout: resolveLayout(prefs.fields, allowed), catalog: prefs.catalog };
   } catch {
-    return resolveLayout(null);
+    return { layout: resolveLayout(null), catalog: [] };
   }
 }
 
@@ -183,6 +233,8 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       await writeActiveOrgId(request.orgId);
       return null;
     }
+    case "LIST_PORTALS":
+      return listPortals();
     case "LIST_PROVIDERS":
       return listProviders();
     case "LIST_CASES":
@@ -233,8 +285,116 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "CLEAR_ACTIVE_CASE":
       await clearActiveCase();
       return null;
+    case "COMPLETE_TASK_STEP": {
+      const result = await completeTaskStep(request.taskId, request.stepId);
+      return { allDone: result.allDone };
+    }
+    // ---- S5.2/S5.4 capture ----
+    case "GET_CAPTURE":
+      return readCaptureSession();
+    case "START_CAPTURE": {
+      // Read the form's SHAPE from the bound tab (labels/selectors/types —
+      // never a value), then ask the server what this org already knows about
+      // each label so the review opens with suggestions, not a blank grid.
+      const scanned = (await chrome.tabs.sendMessage(request.tabId, { type: "SCAN_FIELDS" })) as
+        | { ok?: boolean; data?: CapturedField[]; error?: string }
+        | undefined;
+      if (!scanned?.ok || !scanned.data) {
+        throw new Error(scanned?.error ?? "Could not read this form — reload the page and retry.");
+      }
+      const previous = await readCaptureSession();
+      const rows: CaptureRow[] = scanned.data.map((f) => ({
+        label: f.label,
+        selector: f.selector,
+        fieldType: f.fieldType,
+        formSection: f.formSection,
+        suggestedToken: null,
+        evidence: null,
+        chosenToken: null,
+        sent: false,
+      }));
+      // Re-capturing the same portal is DRIFT REPAIR: carry prior decisions
+      // for selectors that are still there (diffCapture), so the human
+      // re-decides only what actually changed.
+      const merged =
+        previous?.portalKey === request.portalKey
+          ? (() => {
+              const diff = diffCapture(previous.rows, rows);
+              return [...diff.unchanged, ...diff.added];
+            })()
+          : rows;
+      const session: CaptureSession = {
+        portalKey: request.portalKey,
+        templateStepId: request.templateStepId ?? null,
+        startedAt: new Date().toISOString(),
+        rows: merged,
+      };
+      await writeCaptureSession(session);
+      return session;
+    }
+    case "SET_CAPTURE_CHOICE": {
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("No capture in progress");
+      const next: CaptureSession = {
+        ...current,
+        rows: current.rows.map((r) =>
+          r.selector === request.selector ? { ...r, chosenToken: request.token } : r,
+        ),
+      };
+      await writeCaptureSession(next);
+      return next;
+    }
+    case "SEND_CAPTURE": {
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("No capture in progress");
+      // Propose every not-yet-sent row. Each response carries the server's
+      // learned suggestion (S5.3), which we fold back onto the row so the
+      // review shows it with its evidence. Nothing is approved here.
+      const rows: CaptureRow[] = [];
+      for (const row of current.rows) {
+        if (row.sent) {
+          rows.push(row);
+          continue;
+        }
+        const result = await proposeFieldMap({
+          portal_key: current.portalKey,
+          selector: row.selector,
+          field_label: row.label,
+          form_section: row.formSection,
+          field_type: row.fieldType,
+        });
+        rows.push({
+          ...row,
+          sent: true,
+          suggestedToken: result.suggestion?.token ?? row.suggestedToken,
+          evidence: result.suggestion ? suggestionEvidenceText(result.suggestion) : row.evidence,
+        });
+      }
+      const next: CaptureSession = { ...current, rows };
+      await writeCaptureSession(next);
+      return next;
+    }
+    case "CLEAR_CAPTURE":
+      await chrome.storage.session.remove(CAPTURE_KEY);
+      return null;
+    case "RECORD_CAQH_ATTESTATION": {
+      const result = await recordCaqhAttestation(request.providerId, {
+        verifiedFields: request.verifiedFields,
+      });
+      return {
+        caqhLastAttestedDate: result.caqhLastAttestedDate,
+        verifiedFields: result.verifiedFields,
+      };
+    }
+    case "PULL_CAQH_FIELD": {
+      // S6.3: write ONE field the portal holds and we don't, stamping it
+      // verified in the same breath (it was just read off the source). Uses
+      // the existing provider PATCH — no new write surface.
+      await patchProviderField(request.providerId, request.token, request.value);
+      return null;
+    }
     case "GET_NEXT_BEST_ACTION":
-      return getNextBestAction();
+      return getNextBestAction(request.limit);
     case "LOG_STRUCTURED_TOUCH": {
       // E4.3 F4.3.4/TE-5: validate locally (mirrors the server's 422 rules),
       // then append ONE structured touch. The panel-generated idempotency id
@@ -242,7 +402,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // network failure replays instead of double-logging.
       const validation = validateStructuredTouch(request.draft);
       if (!validation.ok) throw new Error(validation.message);
-      const touch = await postSubmissionTouch(
+      const { touch } = await postSubmissionTouch(
         request.caseId,
         buildStructuredTouchBody(request.draft, request.idempotencyId),
       );
@@ -255,10 +415,11 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // existing profile endpoint, never a second route). The raw token
       // payload stays in the worker; the panel receives display values only,
       // held in memory (TE-14).
-      const [{ profile, meta }, layout] = await Promise.all([
+      const [{ profile, meta }, { layout, catalog }] = await Promise.all([
         getProviderProfile(request.providerId),
         readCardLayout(),
       ]);
+      const servedLabels = new Map(catalog.map((f) => [f.key, f.label]));
       // The panel owns facility SELECTION (sole auto-select, or the user's
       // per-provider pick remembered in session storage), so the server's
       // resolved selected_facility_id isn't threaded through here — only the
@@ -266,7 +427,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
-        cards: projectQuickCards(profile.tokens, profile.unresolved, layout, todayIso()),
+        cards: projectQuickCards(profile.tokens, profile.unresolved, layout, todayIso(), servedLabels),
+        // The served picker catalog rides along so the Edit Layout form offers
+        // exactly what the server will accept — no mirrored allowlist.
+        catalog,
       };
       return info;
     }
@@ -364,7 +528,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // POST. buildSubmissionTouchBody drops blank fields to null (a no-op
       // server-side) and OMITS task_id unless one was selected — never sends it
       // as null/empty.
-      const touch = await postSubmissionTouch(
+      const { touch, statusBump } = await postSubmissionTouch(
         request.caseId,
         buildSubmissionTouchBody({
           portalKey: request.portalKey,
@@ -373,6 +537,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
           payerReferenceId: request.payerReferenceId,
           wipNote: request.wipNote,
           taskId: request.taskId,
+          bumpStatus: request.bumpStatus,
         }),
       );
       // Logging the submission is user activity on the case — reset the
@@ -390,7 +555,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       } catch {
         // best-effort — the touch itself was logged
       }
-      return touch;
+      return { touch, statusBump };
     }
   }
 }

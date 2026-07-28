@@ -1,110 +1,22 @@
 // E4.3 F4.3.5 — Provider (Type 1) and Group (Type 2) Quick Cards: the pure
 // projection from the profile endpoint's resolved tokens into the read-only
-// card model, the CLOSED field catalog mirror, the saved-layout validation,
-// and the <30-day expiry-badge math. No fetches, no Chrome, no clocks — the
-// worker passes `today` in, so every rule here is unit-testable.
+// card model, the saved-layout validation, and the <30-day expiry-badge math.
+// No fetches, no Chrome, no clocks — the worker passes `today` in, so every
+// rule here is unit-testable.
 //
-// The catalog is a VERBATIM mirror of the panel's server-owned allowlist
-// (mintedpanel `src/lib/quickCardCatalog.ts`, TE-16) — the server enforces it
-// at PUT /api/me/view-prefs (422 on any excluded key, e.g. provider.ssnLast4
-// or any vault field, which are structurally ABSENT from the list); this
-// mirror only keeps the picker honest so a save can't 422 on a key the server
-// never allowed. Never add a key here that the panel catalog lacks.
+// THE CATALOG IS SERVED, NOT MIRRORED (2026-07-28, supersedes the verbatim
+// allowlist this file used to carry). GET /api/me/view-prefs now returns
+// `{ fields, catalog }` — the catalog is derived server-side from the SAME
+// get_sop_field_tokens() the profile endpoint resolves values from, so the
+// picker can never offer a field the fill wouldn't resolve, and a new panel
+// field reaches the picker with no extension release. The server enforces
+// membership at PUT (422 on any non-catalog key); `resolveLayout` here only
+// keeps the panel honest between fetches. provider.ssnLast4 is a legitimate
+// catalog field as of 2026-07-28 (product decision); the FULL SSN remains
+// structurally unreachable — it lives in the panel's vault, which the token
+// catalog does not sweep, so no key can name it.
 import { labelForToken, tokenPrefix } from "./detailFields";
 import type { ProfileToken, UnresolvedToken } from "./apiTypes";
-
-/** Mirror of the panel's QUICK_CARD_FIELD_CATALOG (TE-16). Keys are bare
- * catalog token keys, camelCase `family.field` — the profile-token join is a
- * literal string match. */
-export const QUICK_CARD_FIELD_CATALOG: readonly string[] = [
-  // provider (Type 1 identity, credentials, demographics) — ssnLast4 excluded
-  "provider.firstName",
-  "provider.lastName",
-  "provider.middleInitial",
-  "provider.suffix",
-  "provider.credentials",
-  "provider.npi",
-  "provider.caqhId",
-  "provider.caqhLastAttestedDate",
-  "provider.taxonomyCode",
-  "provider.specialty",
-  "provider.subSpecialty",
-  "provider.deaNumber",
-  "provider.deaExpirationDate",
-  "provider.dateOfBirth",
-  "provider.email",
-  "provider.phone",
-  "provider.gender",
-  "provider.ethnicity",
-  "provider.startDate",
-  "provider.homeState",
-  "provider.boardCertified",
-  "provider.medicaidAttested",
-  "provider.languages",
-  "provider.degree",
-  "provider.schoolName",
-  "provider.graduationDate",
-  "provider.malpracticeCarrier",
-  "provider.malpracticePolicyNumber",
-  "provider.malpracticeCoverageStart",
-  "provider.malpracticeCoverageEnd",
-  "provider.licenseNumber",
-  "provider.licenseState",
-  "provider.licenseIssueDate",
-  "provider.licenseExpirationDate",
-  // state_licenses (the ?state-selected primary license)
-  "license.licenseNumber",
-  "license.state",
-  "license.licenseType",
-  "license.issueDate",
-  "license.expirationDate",
-  "license.verifiedStatus",
-  // provider_groups (Type 2)
-  "group.name",
-  "group.tin",
-  "group.npiType2",
-  "group.taxIdType",
-  "group.websiteUrl",
-  "group.billingContactName",
-  "group.billingPhone",
-  "group.billingEmail",
-  "group.billingState",
-  "group.contractingContactName",
-  "group.contractingContactEmail",
-  "group.credentialingContactName",
-  "group.credentialingPhone",
-  "group.credentialingEmail",
-  "group.contractSignerName",
-  "group.contractSignerEmail",
-  // group_insurance_policies (malpractice)
-  "groupInsurance.insurerName",
-  "groupInsurance.policyNumber",
-  "groupInsurance.policyStartDate",
-  "groupInsurance.policyEndDate",
-  "groupInsurance.insuranceType",
-  // facilities (the selected practice location)
-  "facility.name",
-  "facility.street",
-  "facility.suite",
-  "facility.city",
-  "facility.state",
-  "facility.zip",
-  "facility.phone",
-  "facility.fax",
-  "facility.county",
-  "facility.contactName",
-  "facility.appointmentPhone",
-  // provider_facility_assignments (the link row of the selected facility)
-  "assignment.startDate",
-  "assignment.isPrimary",
-  "assignment.practiceFrequency",
-];
-
-const CATALOG_SET: ReadonlySet<string> = new Set(QUICK_CARD_FIELD_CATALOG);
-
-export function isQuickCardField(key: string): boolean {
-  return CATALOG_SET.has(key);
-}
 
 // The default ID-grid layout (PM decision 2026-07-17, §5 Q1: the Type 1 slot
 // the spec called "Medicare ID" ships as the primary License # now — no
@@ -118,22 +30,33 @@ export const DEFAULT_QUICK_CARD_LAYOUT: readonly string[] = [
   "group.tin",
 ];
 
-/** F4.3.5 3.3 — the user may swap defaults and ADD UP TO 3 custom fields, so
- * a layout never exceeds default count + 3. (The server's own ceiling is 32;
- * this is the tighter product rule, enforced in the editor.) */
-export const MAX_CUSTOM_FIELDS = 3;
-export const MAX_LAYOUT_FIELDS = DEFAULT_QUICK_CARD_LAYOUT.length + MAX_CUSTOM_FIELDS;
+// The old "defaults + up to 3 custom" cap is GONE (S2.1): the picker groups
+// by section, so layout length stopped being a usability problem, and the
+// served catalog's closed key set already bounds what a layout can contain.
 
 /** TE-15's degrade rule: a missing or invalid stored layout falls back to the
- * default — never a broken card. Valid = non-empty array of unique
- * closed-catalog keys. Order is preserved (it IS the user's layout order). */
-export function resolveLayout(stored: unknown): { fields: string[]; source: "saved" | "default" } {
+ * default — never a broken card. Valid = non-empty array of unique string
+ * keys, each in the SERVED catalog when one is available. `allowedKeys` null/
+ * empty means the catalog fetch failed or the server predates it — then only
+ * the shape is validated: the stored keys were server-validated at PUT time,
+ * and nuking a saved layout because one read failed would be the worse bug.
+ * Order is preserved (it IS the user's layout order). */
+export function resolveLayout(
+  stored: unknown,
+  allowedKeys?: ReadonlySet<string> | null,
+): { fields: string[]; source: "saved" | "default" } {
+  const checkMembership = allowedKeys != null && allowedKeys.size > 0;
   if (Array.isArray(stored) && stored.length > 0) {
     const seen = new Set<string>();
     const fields: string[] = [];
     let valid = true;
     for (const item of stored) {
-      if (typeof item !== "string" || !CATALOG_SET.has(item) || seen.has(item)) {
+      if (
+        typeof item !== "string" ||
+        item === "" ||
+        seen.has(item) ||
+        (checkMembership && !allowedKeys.has(item))
+      ) {
         valid = false;
         break;
       }
@@ -241,6 +164,10 @@ export function projectQuickCards(
   unresolved: UnresolvedToken[],
   layout: { fields: string[]; source: "saved" | "default" },
   today: string,
+  // Served catalog labels (key -> label). Preferred over the local
+  // labelForToken derivation so the panel and the webapp agree on wording;
+  // absent/missing keys fall back to the local rule.
+  labels?: ReadonlyMap<string, string>,
 ): QuickCards {
   const values = new Map<string, unknown>(tokens.map((t) => [t.token, t.value]));
   const reasons = new Map<string, string>(unresolved.map((u) => [u.token, u.reason]));
@@ -253,7 +180,7 @@ export function projectQuickCards(
     }
     return {
       key,
-      label: labelForToken(key),
+      label: labels?.get(key) ?? labelForToken(key),
       value,
       reason: value == null ? (reasons.get(key) ?? null) : null,
     };

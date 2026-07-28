@@ -91,4 +91,8 @@ export interface FillReportRecord {
   submitted: boolean;
 }
 
-export type ContentRequest = { type: "PING" } | { type: "APPLY_FILL"; instructions: FillInstruction[] };
+export type ContentRequest =
+  | { type: "PING" }
+  | { type: "APPLY_FILL"; instructions: FillInstruction[] }
+  // S5.2: read the form's SHAPE (labels/selectors/types only — never a value).
+  | { type: "SCAN_FIELDS" };

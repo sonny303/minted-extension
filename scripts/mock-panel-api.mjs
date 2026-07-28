@@ -36,6 +36,25 @@ export const FIXTURES = {
   UNTRAINED_MAP_ID: "fm-untrained-1",
 };
 
+// A representative slice of the served quick-card catalog (the real one is
+// derived from get_sop_field_tokens() panel-side; 117 fields). Enough here to
+// exercise grouping, labels, and the ssnLast4-is-offered contract.
+const QUICK_CARD_CATALOG = [
+  { key: "provider.npi", label: "NPI (Type 1)", group: "provider", groupLabel: "Provider" },
+  { key: "provider.caqhId", label: "CAQH ID", group: "provider", groupLabel: "Provider" },
+  { key: "provider.ssnLast4", label: "SSN (last 4)", group: "provider", groupLabel: "Provider" },
+  { key: "provider.firstName", label: "First name", group: "provider", groupLabel: "Provider" },
+  { key: "group.tin", label: "Tax ID (TIN)", group: "group", groupLabel: "Provider group" },
+  { key: "group.npiType2", label: "Group NPI (Type 2)", group: "group", groupLabel: "Provider group" },
+  {
+    key: "license.licenseNumber",
+    label: "License number",
+    group: "license",
+    groupLabel: "State license",
+  },
+  { key: "user.name", label: "Name", group: "user", groupLabel: "You" },
+];
+
 const PROVIDERS = [
   {
     id: FIXTURES.PROVIDER_ID,
@@ -240,6 +259,8 @@ export async function createMockPanelApi(options = {}) {
     failTouches: 0,
     // Request log so tests can assert what was sent.
     requests: [],
+    completedSteps: new Set(),
+    proposedMaps: new Map(),
   };
 
   const server = createServer((req, res) => {
@@ -286,21 +307,69 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
+    // --- /api/tasks/:id/steps (S4.3 step tick) ---
+    const stepMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/steps\/?$/);
+    if (stepMatch) {
+      if (method !== "PATCH") return envelope(res, 405, null, "Method not allowed");
+      const body = (await readBody(req)) ?? {};
+      if (typeof body.stepId !== "string" || body.stepId.trim() === "") {
+        return envelope(res, 422, null, "stepId is required");
+      }
+      // The ordering rule lives server-side; the mock mirrors the 409 shape so
+      // the panel's "render the server's message verbatim" path is exercised.
+      if (body.stepId === "blocked-step") {
+        return envelope(res, 409, null, 'Complete "Upload W-9" first');
+      }
+      state.completedSteps.add(`${stepMatch[1]}:${body.stepId}`);
+      return envelope(res, 200, {
+        task: { id: stepMatch[1], status: "in_progress" },
+        allDone: false,
+      });
+    }
+
+    // --- /api/portals (S3.2: the DB-driven registry — own-org + global) ---
+    if (/^\/api\/portals\/?$/.test(url.pathname)) {
+      if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
+      const rows = [
+        {
+          id: "portal-1",
+          orgId: null,
+          portalKey: "bcbs_ks_enrollment",
+          name: "BCBS KS network enrollment",
+          payerId: null,
+          formUrl:
+            "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces",
+          isVerified: true,
+          lastVerifiedAt: "2026-07-01T00:00:00Z",
+          provenAt: "2026-07-02T00:00:00Z",
+          urlChangedAt: null,
+          createdAt: "2026-06-01T00:00:00Z",
+          updatedAt: "2026-07-02T00:00:00Z",
+        },
+      ];
+      return envelope(res, 200, rows, null, { total: rows.length });
+    }
+
     // --- /api/me/view-prefs (E4.3 TE-15: user-scoped, closed catalog) ---
     if (/^\/api\/me\/view-prefs\/?$/.test(url.pathname)) {
       if (method === "GET") {
-        return envelope(res, 200, { fields: state.viewPrefs.get(FIXTURES.USER_ID) ?? null });
+        // The schema-derived catalog rides the GET (2026-07-28) — a slice of
+        // it, enough to exercise the picker contract: grouped fields incl.
+        // the now-offered ssnLast4.
+        return envelope(res, 200, {
+          fields: state.viewPrefs.get(FIXTURES.USER_ID) ?? null,
+          catalog: QUICK_CARD_CATALOG,
+        });
       }
       if (method === "PUT") {
         const body = await readBody(req);
         const fields = body?.fields;
+        const allowed = new Set(QUICK_CARD_CATALOG.map((f) => f.key));
+        // No length cap (S2.1); membership in the DERIVED catalog is the rule.
         if (
           !Array.isArray(fields) ||
-          fields.length > 32 ||
           new Set(fields).size !== fields.length ||
-          fields.some(
-            (f) => typeof f !== "string" || f === "provider.ssnLast4" || !f.includes("."),
-          )
+          fields.some((f) => typeof f !== "string" || !allowed.has(f))
         ) {
           return envelope(res, 422, null, "unknown or excluded field key");
         }
@@ -343,11 +412,13 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, rows, null, { total: rows.length, page: 1, pageSize: 25 });
     }
 
-    // --- /api/next-best-action (E4.3 TE-6) ---
+    // --- /api/next-best-action (S3.3: ranked list + top) ---
     if (/^\/api\/next-best-action\/?$/.test(url.pathname)) {
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
-      return envelope(res, 200, {
-        item: {
+      const raw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
+      const limit = Number.isFinite(raw) && raw >= 1 && raw <= 100 ? raw : 20;
+      const ranked = [
+        {
           caseId: FIXTURES.CASE2_ID,
           providerId: FIXTURES.PROVIDER2_ID,
           providerName: "Pat Ostrander",
@@ -358,9 +429,26 @@ export async function createMockPanelApi(options = {}) {
           action: "Follow up with Humana",
           reason: "Follow-up overdue by 3 days.",
           deadline: { date: isoDaysFromNow(-3), source: "follow_up", overdue: true },
-          payerPipelineState: "not_started",
+          payerPipelineState: "submitted",
           deepLink: `/cases/${FIXTURES.CASE2_ID}`,
         },
+        {
+          caseId: FIXTURES.CASE_ID,
+          providerId: FIXTURES.PROVIDER_ID,
+          providerName: "Kay One",
+          payerName: "BCBS of Kansas",
+          groupName: "Kansas Fitness Physio Group",
+          state: "KS",
+          actionKind: "task",
+          action: "Enroll on BCBS portal",
+          reason: "Task due in 5 days.",
+          deadline: { date: isoDaysFromNow(5), source: "task_due", overdue: false },
+          payerPipelineState: "in_review",
+          deepLink: `/cases/${FIXTURES.CASE_ID}`,
+        },
+      ].slice(0, limit);
+      return envelope(res, 200, { item: ranked[0] ?? null, items: ranked }, null, {
+        total: ranked.length,
       });
     }
 
@@ -488,11 +576,59 @@ export async function createMockPanelApi(options = {}) {
         source: "extension",
       };
       state.touches.set(body.idempotency_id, touch);
-      return envelope(res, 201, touch);
+      // S4.4: the opt-in bump's outcome rides META, never the touch. The mock
+      // mirrors both outcomes so the panel's honest-reporting path is
+      // exercised: a case already past In Progress reports skipped.
+      let meta = null;
+      if (body.bump_status === true) {
+        meta =
+          caseRow.status === "Submitted"
+            ? {
+                status_bump: "skipped",
+                status_bump_reason: "The case was not in a status that can move to Submitted.",
+              }
+            : { status_bump: "applied" };
+      }
+      return envelope(res, 201, touch, null, meta);
     }
 
     // --- /api/portal-field-maps ---
     if (/^\/api\/portal-field-maps\/?$/.test(url.pathname)) {
+      // S5.1/S5.3: propose-only. The row is always proposed/manual/token-null;
+      // the response carries the org's learned suggestion for the label.
+      if (method === "POST") {
+        const body = (await readBody(req)) ?? {};
+        if (typeof body.portal_key !== "string" || !body.portal_key.trim()) {
+          return envelope(res, 422, null, "portal_key is required");
+        }
+        if (typeof body.selector !== "string" || !body.selector.trim()) {
+          return envelope(res, 422, null, "selector is required");
+        }
+        const label = String(body.field_label ?? "").trim().toLowerCase();
+        const key = `${body.portal_key}:${body.selector}`;
+        let map = state.proposedMaps.get(key);
+        if (!map) {
+          map = {
+            id: `fm-proposed-${state.proposedMaps.size + 1}`,
+            orgId: FIXTURES.KANSAS_ORG,
+            portalKey: body.portal_key,
+            selector: body.selector,
+            fieldLabel: label || null,
+            source: "manual",
+            token: null,
+            status: "proposed",
+          };
+          state.proposedMaps.set(key, map);
+        }
+        // A tiny learned dictionary so the panel's evidence path is exercised.
+        const learned = { npi: { token: "provider.npi", portalCount: 3 } }[label];
+        return envelope(res, 201, {
+          map,
+          suggestion: learned
+            ? { token: learned.token, portalCount: learned.portalCount, fromDictionary: false }
+            : null,
+        });
+      }
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
       const portalKey = url.searchParams.get("portal_key");
       let rows = state.fieldMaps;

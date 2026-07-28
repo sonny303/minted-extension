@@ -11,9 +11,13 @@ import type {
   ProviderProfileFacility,
   SubmissionTouch,
   UserOrgMembership,
+  QuickCardCatalogField,
+  PortalRegistryRow,
+  StatusBumpMeta,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
+import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 
@@ -28,6 +32,9 @@ export type BgRequest =
   // before the new id is stored. null = single-org mode, no x-org-id header.
   | { type: "SET_ACTIVE_ORG"; orgId: string | null }
   | { type: "LIST_PROVIDERS" }
+  // S3.2: the DB-driven portal registry (own-org + global rows) — page
+  // recognition and the PROVEN chip read from these, never a bundled list.
+  | { type: "LIST_PORTALS" }
   | { type: "LIST_CASES"; providerId: string }
   // E4.3 F4.3.5: the unified standalone search — the worker queries
   // GET /api/cases?q= and GET /api/providers?search= CONCURRENTLY and returns
@@ -37,6 +44,18 @@ export type BgRequest =
   // The selected case's context (identity header, open tasks, pipeline state,
   // tracking ID, latest note/touch) — a read-only, org-scoped fetch.
   | { type: "GET_CASE_CONTEXT"; caseId: string }
+  // S5.2/S5.4 — capture. START scans the bound tab's form shape (labels and
+  // selectors ONLY) and asks the server what it already knows about each
+  // label; SEND proposes the undecided rows; the session survives a worker
+  // restart in chrome.storage.session (nothing PHI-bearing is ever in it).
+  | { type: "GET_CAPTURE" }
+  | { type: "START_CAPTURE"; tabId: number; portalKey: string; templateStepId?: string | null }
+  | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
+  | { type: "SEND_CAPTURE" }
+  | { type: "CLEAR_CAPTURE" }
+  // S4.3: tick one SOP step complete. The server enforces the ordering rule
+  // and returns a 409 naming the blocker — the panel never re-derives it.
+  | { type: "COMPLETE_TASK_STEP"; taskId: string; stepId: string }
   // The provider's facility set + the Quick Cards projection, from ONE
   // audited profile read — the panel never receives the raw token payload.
   | { type: "GET_PROVIDER_FACILITIES"; providerId: string }
@@ -59,7 +78,13 @@ export type BgRequest =
   | { type: "ENTER_ACTIVE_CASE"; caseId: string; providerId: string; orgId: string | null }
   | { type: "CLEAR_ACTIVE_CASE" }
   // E4.3 F4.3.4/TE-6: the server-derived queue top (or null = queue clear).
-  | { type: "GET_NEXT_BEST_ACTION" }
+  | { type: "GET_NEXT_BEST_ACTION"; limit?: number }
+  // S6.2 — record a CAQH attestation and stamp the fields the fill carried.
+  // PUSH ONLY: nothing is read back from CAQH into Minted Panel.
+  | { type: "RECORD_CAQH_ATTESTATION"; providerId: string; verifiedFields: string[] }
+  // S6.3 — pull ONE field CAQH holds that we are blank on. An exception, not
+  // a sync: a disagreement is never offered, only a gap.
+  | { type: "PULL_CAQH_FIELD"; providerId: string; token: string; value: string }
   // E4.3 F4.3.4/TE-5: log ONE structured touch. The panel generates the
   // idempotency id once per draft and REUSES it on retries, so a failed write
   // retried can never double-log; a fresh draft gets a fresh id.
@@ -105,6 +130,8 @@ export type BgRequest =
       payerReferenceId?: string | null;
       wipNote?: string | null;
       taskId?: string | null;
+      // S4.4: also move the case to Submitted, evidenced by this touch.
+      bumpStatus?: boolean;
     };
 
 // Worker → panel broadcast when the active-case context changes out from
@@ -129,6 +156,9 @@ export interface AuthState {
 // deliberately not carried here.
 export interface ProviderFacilitiesInfo {
   facilities: ProviderProfileFacility[];
+  // The server-derived quick-card field catalog (GET /api/me/view-prefs) —
+  // the Edit Layout picker renders from THIS, never a local allowlist.
+  catalog: QuickCardCatalogField[];
   // meta.needs_facility: several facilities, none picked — the fill gate
   // stays closed until the user picks ("Pick a location first.").
   needsFacility: boolean;
@@ -161,9 +191,16 @@ export interface BgResponseMap {
   GET_ACTIVE_ORG: string | null;
   SET_ACTIVE_ORG: null;
   LIST_PROVIDERS: ProviderListItem[];
+  LIST_PORTALS: PortalRegistryRow[];
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;
+  GET_CAPTURE: CaptureSession | null;
+  START_CAPTURE: CaptureSession;
+  SET_CAPTURE_CHOICE: CaptureSession;
+  SEND_CAPTURE: CaptureSession;
+  CLEAR_CAPTURE: null;
+  COMPLETE_TASK_STEP: { allDone: boolean };
   GET_PROVIDER_FACILITIES: ProviderFacilitiesInfo;
   GET_SELECTED_PROVIDER: string | null;
   SET_SELECTED_PROVIDER: null;
@@ -176,11 +213,15 @@ export interface BgResponseMap {
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;
   GET_NEXT_BEST_ACTION: NextBestActionResult;
+  RECORD_CAQH_ATTESTATION: { caqhLastAttestedDate: string | null; verifiedFields: number };
+  PULL_CAQH_FIELD: null;
   LOG_STRUCTURED_TOUCH: SubmissionTouch;
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
-  MARK_SUBMITTED: SubmissionTouch;
+  // S4.4: the touch PLUS the opt-in bump's outcome. A skipped bump is not a
+  // failed touch — the panel reports both.
+  MARK_SUBMITTED: { touch: SubmissionTouch; statusBump: StatusBumpMeta | null };
 }
 
 // Typed wrapper so panel call sites get the right response type per request.

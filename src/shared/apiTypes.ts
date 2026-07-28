@@ -95,6 +95,45 @@ export interface ProviderProfileResponse {
 // GET /api/me/orgs — the caller's own memberships (user-scoped; works BEFORE
 // an x-org-id can be sent, which is the point). Mirrors mintedpanel
 // src/services/orgMemberships.ts.
+// GET /api/me/view-prefs — the saved layout PLUS the server-derived catalog of
+// selectable quick-card fields (schema-derived panel-side from
+// get_sop_field_tokens(), 2026-07-28 — supersedes the closed-allowlist mirror
+// this repo used to carry in quickCards.ts). The catalog is the SINGLE source
+// for the picker AND the PUT validator, served together so they can never
+// disagree. `group` is the token family (provider/group/facility/license/
+// assignment/groupInsurance/user); `groupLabel` is its section heading.
+// GET /api/portals — the DB-driven payer-portal registry (2026-07-28), so
+// portal identity stops being a hardcoded list in this bundle. Own-org rows
+// plus global (orgId null) registry rows, the shared-catalog pattern the
+// field maps already follow. `provenAt` non-null = a dry-run proved the form
+// (the S4.1 PROVEN chip); `formUrl` drives page recognition.
+export interface PortalRegistryRow {
+  id: string;
+  orgId: string | null;
+  portalKey: string;
+  name: string;
+  payerId: string | null;
+  formUrl: string | null;
+  isVerified: boolean;
+  lastVerifiedAt: string | null;
+  provenAt: string | null;
+  urlChangedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QuickCardCatalogField {
+  key: string;
+  label: string;
+  group: string;
+  groupLabel: string;
+}
+
+export interface ViewPrefsResponse {
+  fields: string[] | null;
+  catalog: QuickCardCatalogField[];
+}
+
 export interface UserOrgMembership {
   orgId: string;
   orgName: string;
@@ -191,6 +230,17 @@ export interface CaseContextParty {
 // E4.3 TE-2 — one open SOP task with its E4.2 execution type. `extension_fill`
 // tasks are the ones the panel offers the fill action on; the rest render as
 // read-only checklist context. Task-state writes stay in the webapp (R6).
+// S4.3 — one SOP step on an open task. LABELS AND STATE ONLY; the fill
+// payload stays the profile endpoint's job.
+export interface CaseContextTaskStep {
+  id: string;
+  label: string;
+  order: number;
+  isCompleted: boolean;
+  stepType: string | null;
+  portalKey: string | null;
+}
+
 export interface CaseContextTask {
   id: string;
   title: string;
@@ -198,6 +248,9 @@ export interface CaseContextTask {
   executionType: string;
   sortOrder: number;
   dueDate: string | null;
+  // OPTIONAL: a server predating S4.3 omits it — the Progress tab then falls
+  // back to task-level rows rather than rendering an empty checklist.
+  steps?: CaseContextTaskStep[];
 }
 
 export interface CaseContext {
@@ -265,6 +318,10 @@ export interface NextBestActionItem {
 
 export interface NextBestActionResult {
   item: NextBestActionItem | null;
+  // S3.3 — the ranked queue (server-derived, bounded by ?limit=). `item` is
+  // items[0]. OPTIONAL so a server predating S3.3 degrades to the single-item
+  // handback rather than an empty queue.
+  items?: NextBestActionItem[];
 }
 
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys
@@ -290,6 +347,12 @@ export interface SubmissionTouchBody {
   task_id?: string | null;
   // Story 7: the attached PDF's filename → a second system_event.
   pdf_filename?: string | null;
+  // S4.4 (2026-07-28): also move the case In Progress -> Submitted through
+  // set_case_status, evidenced by this touch. OFF by default — the R2 rule
+  // that the extension never changes status IMPLICITLY still holds; this is
+  // explicit and per-request. The outcome rides meta.status_bump, never the
+  // touch itself, so a rejected transition can't look like a failed touch.
+  bump_status?: boolean;
 }
 
 // POST /api/cases/:id/touches with kind 'structured_touch' — E4.3 TE-5 /
@@ -315,6 +378,14 @@ export interface StructuredTouchBody {
 
 // Either kind on the same POST — the two bodies never mix fields.
 export type CaseTouchBody = SubmissionTouchBody | StructuredTouchBody;
+
+// S4.4 — the opt-in status bump's outcome, from the touch response's meta.
+// null = no bump was requested (or the server predates it).
+export interface StatusBumpMeta {
+  applied: boolean;
+  // Populated when applied === false: the server's caller-facing reason.
+  reason: string | null;
+}
 
 // The created touch, camelCased like every row in the envelope contract
 // (mintedpanel src/services/submissionTouches.ts). touchType/outcome are
