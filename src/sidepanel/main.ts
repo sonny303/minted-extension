@@ -24,7 +24,7 @@ import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
 import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
-import { partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
+import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
 import { accountGreeting } from "../shared/greeting";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -101,6 +101,10 @@ const caseNote = el<HTMLElement>("case-note");
 const caseContextBox = el<HTMLElement>("case-context");
 const portalStatus = el<HTMLElement>("portal-status");
 const coveragePanel = el<HTMLElement>("coverage-panel");
+const provenChip = el<HTMLElement>("proven-chip");
+const driftStrip = el<HTMLElement>("drift-strip");
+const unprovenNote = el<HTMLElement>("unproven-note");
+const dupPickup = el<HTMLElement>("dup-pickup");
 const coverageCount = el<HTMLElement>("coverage-count");
 const coverageGaps = el<HTMLUListElement>("coverage-gaps");
 const refreshMapsBtn = el<HTMLButtonElement>("refresh-maps-btn");
@@ -321,6 +325,9 @@ let currentCards: QuickCards | null = null;
 // catalog read failed — the picker renders an honest failure note instead of
 // a stale local list.
 let currentCatalog: QuickCardCatalogField[] = [];
+// S4.1: dead-selector count from the last REAL fill on the current portal —
+// drives the drift strip. 0 = no known drift (also the pre-fill default).
+let lastReportBrokenCount = 0;
 
 // One ID-grid entry: monospace value with 1-click hover-copy, or an honest
 // empty (muted em-dash, plus the profile's unresolved reason as its tooltip).
@@ -713,6 +720,49 @@ async function copyValue(
 
 // Story 11: the selected case's latest touchlog note, shown under the case
 // picker. Hidden when no case is selected or the case has no note.
+// S4.2 — the duplicate-work guard, fired ON PICKUP (not at submit, where it
+// arrives too late to save the work). Never blocks: "Continue anyway"
+// dismisses it for this pickup, and "See the touchlog" opens the case in the
+// webapp. Re-evaluated on every case change, so it survives a case switch.
+const dismissedDupCaseIds = new Set<string>();
+
+function renderDuplicateGuard(): void {
+  const caseId = selectedCaseId();
+  const caseItem = cases.find((c) => c.id === caseId);
+  const phrase = caseId && !dismissedDupCaseIds.has(caseId)
+    ? recentSubmissionPhrase(caseItem)
+    : null;
+  dupPickup.hidden = phrase == null;
+  dupPickup.replaceChildren();
+  if (phrase == null || caseId == null) return;
+
+  const text = document.createElement("p");
+  text.className = "dup-pickup-text";
+  text.textContent = `This case was marked submitted ${phrase}. Someone may already have done this work.`;
+  dupPickup.append(text);
+
+  const actions = document.createElement("div");
+  actions.className = "dup-pickup-actions";
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "link";
+  dismiss.textContent = "Continue anyway";
+  dismiss.addEventListener("click", () => {
+    dismissedDupCaseIds.add(caseId);
+    renderDuplicateGuard();
+  });
+  actions.append(dismiss);
+
+  const link = document.createElement("a");
+  link.className = "link";
+  link.href = `${API_BASE_URL}/cases/${caseId}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = "See the touchlog ↗";
+  actions.append(link);
+  dupPickup.append(actions);
+}
+
 function renderCaseNote(): void {
   const id = selectedCaseId();
   const note = cases.find((c) => c.id === id)?.latestNote ?? null;
@@ -1216,6 +1266,28 @@ function renderCoverage(coverage: FillCoverage | null): void {
   }
   const noun = coverage.total === 1 ? "field" : "fields";
   coverageCount.textContent = `Can fill ${coverage.available} of ${coverage.total} mapped ${noun}.`;
+
+  // S4.1 — PROVEN only when a dry run actually proved this form. An unproven
+  // form still fills; it just says so and the button drops to secondary.
+  const proven = portal?.proven === true;
+  provenChip.hidden = !proven;
+  unprovenNote.hidden = proven;
+  unprovenNote.textContent = proven
+    ? ""
+    : "This form hasn't been proven by a dry run — check the result before you submit.";
+  fillBtn.classList.toggle("secondary", !proven);
+  fillBtn.classList.toggle("primary", proven);
+
+  // S4.1 — drift: dead selectors from the LAST REAL fill on this portal mean
+  // the form changed. Stated before the run, with the count, so a partial
+  // fill is never a surprise.
+  const broken = lastReportBrokenCount;
+  driftStrip.hidden = broken === 0;
+  driftStrip.textContent =
+    broken === 0
+      ? ""
+      : `${broken} mapped ${broken === 1 ? "field" : "fields"} went missing on the last fill — this form may have changed.`;
+
   coverageGaps.replaceChildren();
   const portalKey = portal?.key ?? null;
   const providerId = selectedProviderId();
@@ -1444,6 +1516,7 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
   renderCaseNote();
+  renderDuplicateGuard();
   renderActiveCases();
   // Load context for the restored case (or hide when none was restored). Runs
   // under this generation; a superseding switch discards its response.
@@ -1461,12 +1534,17 @@ async function restoreFillReport(
   selectedCase: string | null,
   generation: number,
 ): Promise<void> {
+  lastReportBrokenCount = 0;
   if (selectedCase == null) return;
   const response = await sendToBackground({ type: "GET_FILL_REPORT", providerId });
   if (!isCurrent(generation)) return;
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
   if (record.caseId !== selectedCase) return;
+  // S4.1 drift signal: dead selectors from this portal's last REAL fill.
+  if (record.portalKey === portal?.key) {
+    lastReportBrokenCount = countBrokenSelectors(record.summary.skipped ?? []);
+  }
   lastFill = {
     providerId,
     caseId: record.caseId,
@@ -1953,6 +2031,7 @@ function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
   }
   renderCaseStatusPill();
   renderCaseNote();
+  renderDuplicateGuard();
   renderActiveCases();
   refreshCaseContext();
   clearFillResults();
@@ -2064,7 +2143,10 @@ markSubmittedBtn.addEventListener("click", () => {
   if (!dupConfirmPending) {
     const caseItem = cases.find((c) => c.id === context.caseId);
     const phrase = recentSubmissionPhrase(caseItem);
-    if (phrase != null) {
+    // S4.2 moved the duplicate WARNING to pickup, where it can still save the
+    // work. Submitting stays a one-click confirm rather than a second warning:
+    // by here the human has already seen the pickup notice and done the fill.
+    if (phrase != null && !dismissedDupCaseIds.has(caseItem?.id ?? "")) {
       dupConfirmPending = true;
       dupWarn.hidden = false;
       dupWarn.textContent = `This case was marked submitted ${phrase}. Log another submission?`;

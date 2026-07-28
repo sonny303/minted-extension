@@ -354,6 +354,25 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
   });
 });
 
+describe("S4.1 — the fill report is a snapshot", () => {
+  it("persists the run's own counts, so a later data change can't rewrite history", async () => {
+    // The record carries the fill's OWN summary + completedAt. Nothing in the
+    // restore path recomputes coverage — a field fixed after the run must not
+    // retroactively change what the run reported.
+    // @ts-expect-error — node builtin, untyped in this browser-typed project
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const restore = source.slice(
+      source.indexOf("async function restoreFillReport"),
+      source.indexOf("function renderFacilityAddress"),
+    );
+    // It renders record.summary verbatim and never asks for fresh coverage.
+    expect(restore).toContain("renderFillSummary(record.summary");
+    expect(restore).not.toContain("GET_FILL_COVERAGE");
+    expect(restore).not.toContain("refreshCoverage(");
+  });
+});
+
 describe("S3.3 — the pickup queue is server-ranked", () => {
   it("returns a ranked list whose first entry IS the single-item top", async () => {
     const result = await getNextBestAction();
