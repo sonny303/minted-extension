@@ -17,6 +17,8 @@ const PROVIDER_ID = "49ad83a8-d8b6-419d-8dcc-88c04a54c4da";
 const ORG_ID = "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d";
 const PORTAL_URL = "https://provider.bcbsks.com/enroll/form";
 
+const FACILITY_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
 const validMessage = {
   type: "SET_ACTIVE_CASE",
   caseId: CASE_ID,
@@ -31,6 +33,8 @@ function record(overrides: Partial<ActiveCaseRecord> = {}): ActiveCaseRecord {
     providerId: PROVIDER_ID,
     orgId: ORG_ID,
     portalUrl: PORTAL_URL,
+    portalKey: null,
+    facilityId: null,
     source: "handoff",
     boundTabId: null,
     tabClosedAt: null,
@@ -103,5 +107,44 @@ describe("expiry (TE-1: tab close or 60 minutes idle)", () => {
 
   it("no record = none", () => {
     expect(resolveActiveCaseState(null, t0).status).toBe("none");
+  });
+});
+
+describe("S3.5 — the widened C1 payload", () => {
+  it("accepts and normalizes portalKey + facilityId", () => {
+    const parsed = parseSetActiveCase({
+      ...validMessage,
+      portalKey: "  BCBS_KS_Enrollment ",
+      facilityId: FACILITY_ID,
+    });
+    // The key folds to the canonical bare/lowercase form so the portal join
+    // stays a literal compare (the standing token/portal-key rule).
+    expect(parsed?.portalKey).toBe("bcbs_ks_enrollment");
+    expect(parsed?.facilityId).toBe(FACILITY_ID);
+  });
+
+  it("DROPS a malformed extra rather than rejecting the whole handoff", () => {
+    // Losing the location costs a picker prompt; rejecting the message would
+    // cost the launch entirely.
+    const parsed = parseSetActiveCase({
+      ...validMessage,
+      portalKey: 42,
+      facilityId: "not-a-uuid",
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.caseId).toBe(CASE_ID);
+    expect(parsed?.portalKey).toBeUndefined();
+    expect(parsed?.facilityId).toBeUndefined();
+  });
+
+  it("still parses a pre-S3.5 message unchanged", () => {
+    const parsed = parseSetActiveCase(validMessage);
+    expect(parsed).toEqual({
+      type: "SET_ACTIVE_CASE",
+      caseId: CASE_ID,
+      providerId: PROVIDER_ID,
+      orgId: ORG_ID,
+      portalUrl: PORTAL_URL,
+    });
   });
 });

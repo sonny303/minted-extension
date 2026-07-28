@@ -112,11 +112,16 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   whatever the body says; idempotent on `(portal_key, selector)` across
   global + own-org rows (200 on a repeat, 201 first sighting).
   (Panel `src/services/portalFieldMaps.ts`.)
-- **SET_ACTIVE_CASE handoff (E4.3 TE-1):** the webapp sends
-  `{ type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl }` through
+- **SET_ACTIVE_CASE handoff (E4.3 TE-1; widened by S3.5 2026-07-28):** the
+  webapp sends `{ type: "SET_ACTIVE_CASE", caseId, providerId, orgId,
+portalUrl, portalKey?, facilityId? }` through
   `externally_connectable` — IDENTIFIERS + URL ONLY, never a profile/token
   value. `parseSetActiveCase` (`src/shared/handoff.ts`) strict-parses and
-  drops unknown fields; the worker (`src/background/activeCase.ts`) stores
+  drops unknown fields; the two S3.5 extras are OPTIONAL both ways — the
+  webapp omits them when a case has none, and a malformed value is DROPPED
+  rather than failing the handoff (losing the location costs a picker prompt,
+  rejecting the message costs the launch). A carried `facilityId` pre-selects
+  the location so the panel lands with zero dropdowns; the worker (`src/background/activeCase.ts`) stores
   ONE record (last launch wins), binds the next portal-origin tab, expires on
   tab close or 60 min idle. (Panel `src/lib/extensionHandoff.ts`.)
 - **Case context (E4.3 TE-2):** `GET /api/cases/:id/context` returns

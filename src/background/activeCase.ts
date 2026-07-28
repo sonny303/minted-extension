@@ -78,6 +78,10 @@ export async function enterActiveCase(input: {
     providerId: input.providerId,
     orgId: input.orgId,
     portalUrl: null,
+    // An in-panel selection has no launched portal and no case location: the
+    // panel already knows both from its own selection state.
+    portalKey: null,
+    facilityId: null,
     source: "panel",
     boundTabId: null,
     tabClosedAt: null,
@@ -126,6 +130,9 @@ export async function handleExternalMessage(
     providerId: parsed.providerId,
     orgId: parsed.orgId,
     portalUrl: parsed.portalUrl,
+    // S3.5: carried through when the webapp sent them; null otherwise.
+    portalKey: parsed.portalKey ?? null,
+    facilityId: parsed.facilityId ?? null,
     source: "handoff",
     boundTabId: null,
     tabClosedAt: null,

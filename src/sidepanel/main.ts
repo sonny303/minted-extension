@@ -2229,12 +2229,24 @@ async function selectCaseInPanel(
   providerId: string,
   caseId: string,
   recordEntry: boolean,
+  // S3.5: the case's location from the C1 payload. Recorded BEFORE facilities
+  // load so the picker opens already resolved — "zero dropdowns". Ignored when
+  // the provider isn't actually assigned to it (loadFacilities validates the
+  // stored pick against the real set).
+  preferredFacilityId?: string | null,
 ): Promise<void> {
   const generation = bumpGeneration();
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId });
   await sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
   if (recordEntry) {
     await sendToBackground({ type: "ENTER_ACTIVE_CASE", caseId, providerId, orgId: activeOrgId });
+  }
+  if (preferredFacilityId) {
+    await sendToBackground({
+      type: "SET_SELECTED_FACILITY",
+      providerId,
+      facilityId: preferredFacilityId,
+    });
   }
   if (!isCurrent(generation)) return;
   resetTouchForm();
@@ -2451,7 +2463,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   providerSection.hidden = false;
   searchSection.hidden = false;
   renderIdentityGuard();
-  await selectCaseInPanel(record.providerId, record.caseId, true);
+  await selectCaseInPanel(record.providerId, record.caseId, true, record.facilityId);
   renderHandoffBanner();
 }
 
