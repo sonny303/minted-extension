@@ -15,7 +15,7 @@ import type {
   UserOrgMembership,
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
-import { sendToBackground, type SearchResults } from "../shared/messages";
+import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
 import { PREFIX_LABELS, labelForToken, looksLikeIsoDate, tokenPrefix } from "../shared/detailFields";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 import { matchPortalTasks } from "../shared/submission";
@@ -29,6 +29,8 @@ import {
   type QuickCards,
 } from "../shared/quickCards";
 import { partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
+import { accountGreeting } from "../shared/greeting";
+import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
   TOUCH_DISPOSITIONS,
@@ -296,11 +298,11 @@ function renderProviderCard(provider: ProviderListItem | null): void {
   renderQuickCards(null);
   renderActiveCases();
   if (!provider) return;
-  providerName.textContent = [
+  providerName.textContent = providerDisplayName(
     `${provider.firstName} ${provider.lastName}`,
     provider.credentials,
     provider.specialty,
-  ].filter(Boolean).join(", ");
+  );
   openInPanelLink.hidden = false;
   openInPanelLink.href = `${API_BASE_URL}${providerWebappPath(provider.id)}`;
 }
@@ -386,7 +388,7 @@ function renderQuickCards(cards: QuickCards | null): void {
   // Type 1 header: name + DOB (bold, compact). The profile's name wins over
   // the list row's when present.
   if (cards.name) {
-    providerName.textContent = [cards.name, cards.credentials].filter(Boolean).join(", ");
+    providerName.textContent = providerDisplayName(cards.name, cards.credentials);
   }
   providerDob.textContent = cards.dateOfBirth
     ? `DOB ${fmtContextDate(cards.dateOfBirth)}`
@@ -1516,8 +1518,8 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   }
 });
 
-function showMain(email: string | null): void {
-  accountEmail.textContent = email ? `Signed in as ${email}` : "Signed in";
+function showMain(auth: AuthState): void {
+  accountEmail.textContent = accountGreeting(auth.name, auth.email);
   showView("main");
   // Fresh context: this restore load (and every loader it chains into) runs
   // under one generation so it populates uninterrupted. The handoff check
@@ -1562,7 +1564,7 @@ signinForm.addEventListener("submit", (event) => {
       setError(signinError, response.error);
       return;
     }
-    showMain(response.data.email);
+    showMain(response.data);
   })();
 });
 
@@ -2401,7 +2403,7 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
 void (async () => {
   const response = await sendToBackground({ type: "GET_AUTH_STATE" });
   if (response.ok && response.data.signedIn) {
-    showMain(response.data.email);
+    showMain(response.data);
   } else {
     showSignin();
   }

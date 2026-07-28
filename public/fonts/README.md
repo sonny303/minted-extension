@@ -1,22 +1,20 @@
 # Bundled fonts
 
-`instrument-sans-latin-400/500/600/700-normal.woff2` are the four static weights
-of **Instrument Sans**, the same font the Minted Panel app self-hosts
-(`mintedpanel/public/fonts/`). Bundling the identical files keeps the extension's
-type in lockstep with the app.
+`geist-latin-400/500/600/700-normal.woff2` are the four static UI weights of
+**Geist**, the Minted Panel Design System's UI font, and
+`geist-mono-latin-400/500-normal.woff2` are the two mono weights the panel uses
+for digit-only NPI/ID readouts. Both come from `@fontsource/geist` /
+`@fontsource/geist-mono` — the same packages the app imports
+(`mintedpanel/src/styles.css`) — so the extension's type stays in lockstep with
+the app.
 
-Instrument Sans is distributed through Google Fonts under the SIL Open Font
-License 1.1 (<https://fonts.google.com/specimen/Instrument+Sans>).
+Geist is distributed under the SIL Open Font License 1.1
+(<https://fonts.google.com/specimen/Geist>).
 
 The files are bundled inside the extension and declared via `@font-face` in
 `src/sidepanel/sidepanel.css` so the panel never makes an external font request
-(extension CSP + no network dependency).
+— MV3's CSP blocks the Google Fonts CDN, and self-hosting removes the network
+dependency entirely.
 
-The app also uses **Geist Mono** for monospaced numerals; it is intentionally
-not bundled here (the side panel uses mono only for digit-only NPI/ID readouts,
-where the system monospace fallback is indistinguishable). The `--mp-mono` stack
-in `sidepanel.css` names `"Geist Mono"` first so it upgrades automatically if
-the file is ever added.
-
-If a licensed brand font arrives, drop its woff2 files in here and update the
-`@font-face` blocks — nothing else references the files.
+Instrument Sans (the pre-conformance UI font) was removed when the panel was
+brought onto the design system.
