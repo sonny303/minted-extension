@@ -259,6 +259,7 @@ export async function createMockPanelApi(options = {}) {
     failTouches: 0,
     // Request log so tests can assert what was sent.
     requests: [],
+    completedSteps: new Set(),
   };
 
   const server = createServer((req, res) => {
@@ -303,6 +304,26 @@ export async function createMockPanelApi(options = {}) {
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
       const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Kansas Fitness Physio", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
+    }
+
+    // --- /api/tasks/:id/steps (S4.3 step tick) ---
+    const stepMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/steps\/?$/);
+    if (stepMatch) {
+      if (method !== "PATCH") return envelope(res, 405, null, "Method not allowed");
+      const body = (await readBody(req)) ?? {};
+      if (typeof body.stepId !== "string" || body.stepId.trim() === "") {
+        return envelope(res, 422, null, "stepId is required");
+      }
+      // The ordering rule lives server-side; the mock mirrors the 409 shape so
+      // the panel's "render the server's message verbatim" path is exercised.
+      if (body.stepId === "blocked-step") {
+        return envelope(res, 409, null, 'Complete "Upload W-9" first');
+      }
+      state.completedSteps.add(`${stepMatch[1]}:${body.stepId}`);
+      return envelope(res, 200, {
+        task: { id: stepMatch[1], status: "in_progress" },
+        allDone: false,
+      });
     }
 
     // --- /api/portals (S3.2: the DB-driven registry — own-org + global) ---

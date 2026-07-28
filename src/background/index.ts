@@ -9,6 +9,7 @@ import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import {
   ApiError,
+  completeTaskStep,
   getCaseContext,
   getNextBestAction,
   getProviderProfile,
@@ -244,6 +245,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "CLEAR_ACTIVE_CASE":
       await clearActiveCase();
       return null;
+    case "COMPLETE_TASK_STEP": {
+      const result = await completeTaskStep(request.taskId, request.stepId);
+      return { allDone: result.allDone };
+    }
     case "GET_NEXT_BEST_ACTION":
       return getNextBestAction(request.limit);
     case "LOG_STRUCTURED_TOUCH": {

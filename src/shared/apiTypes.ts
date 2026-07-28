@@ -230,6 +230,17 @@ export interface CaseContextParty {
 // E4.3 TE-2 — one open SOP task with its E4.2 execution type. `extension_fill`
 // tasks are the ones the panel offers the fill action on; the rest render as
 // read-only checklist context. Task-state writes stay in the webapp (R6).
+// S4.3 — one SOP step on an open task. LABELS AND STATE ONLY; the fill
+// payload stays the profile endpoint's job.
+export interface CaseContextTaskStep {
+  id: string;
+  label: string;
+  order: number;
+  isCompleted: boolean;
+  stepType: string | null;
+  portalKey: string | null;
+}
+
 export interface CaseContextTask {
   id: string;
   title: string;
@@ -237,6 +248,9 @@ export interface CaseContextTask {
   executionType: string;
   sortOrder: number;
   dueDate: string | null;
+  // OPTIONAL: a server predating S4.3 omits it — the Progress tab then falls
+  // back to task-level rows rather than rendering an empty checklist.
+  steps?: CaseContextTaskStep[];
 }
 
 export interface CaseContext {

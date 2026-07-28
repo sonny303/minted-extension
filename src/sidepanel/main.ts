@@ -18,7 +18,11 @@ import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from 
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
 import { looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortalByUrl, type MatchedPortal } from "../shared/portals";
-import type { NextBestActionItem, PortalRegistryRow } from "../shared/apiTypes";
+import type {
+  CaseContextTaskStep,
+  NextBestActionItem,
+  PortalRegistryRow,
+} from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
@@ -877,6 +881,74 @@ function maybeApplyCaseFacility(): void {
 // argument (no case, an error, or nothing to show) hides the block. Purely
 // informational — it never gates the fill/submit flow, and nothing here is
 // persisted beyond this render.
+// S4.3 — one task's SOP steps. The step for the page in hand carries a THIS
+// PAGE chip and a row tint. Ticking writes through the server, which owns the
+// ordering rule; a rejection renders verbatim beneath the step and the
+// checkbox reverts — never a false success (the cross-cutting gate).
+function stepList(taskId: string, steps: readonly CaseContextTaskStep[]): HTMLElement {
+  const list = document.createElement("ul");
+  list.className = "step-list";
+  for (const step of steps) {
+    const li = document.createElement("li");
+    li.className = "step-row";
+    const onThisPage = portal != null && step.portalKey === portal.key;
+    if (onThisPage) li.classList.add("step-row-here");
+
+    const label = document.createElement("label");
+    label.className = "step-label";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = step.isCompleted;
+    // A completed step is terminal here: un-ticking is a webapp correction,
+    // not something the panel should offer mid-fill.
+    box.disabled = step.isCompleted;
+    const text = document.createElement("span");
+    text.textContent = step.label;
+    label.append(box, text);
+    li.append(label);
+
+    if (onThisPage) {
+      const chip = document.createElement("span");
+      chip.className = "pill this-page-chip";
+      chip.textContent = "THIS PAGE";
+      li.append(chip);
+    }
+
+    const error = document.createElement("p");
+    error.className = "step-error";
+    error.hidden = true;
+    li.append(error);
+
+    box.addEventListener("change", () => {
+      if (!box.checked) return;
+      const caseId = selectedCaseId();
+      box.disabled = true;
+      error.hidden = true;
+      void (async () => {
+        const response = await sendToBackground({
+          type: "COMPLETE_TASK_STEP",
+          taskId,
+          stepId: step.id,
+        });
+        if (!response.ok) {
+          // Explicit failure: revert the box and say why (the server's own
+          // message, e.g. 'Complete "Upload W-9" first').
+          box.checked = false;
+          box.disabled = false;
+          error.hidden = false;
+          error.textContent = response.error;
+          return;
+        }
+        // Re-read the context so the whole checklist reflects the server's
+        // state (including a task that just rolled up to completed).
+        if (caseId) refreshCaseContext();
+      })();
+    });
+    list.append(li);
+  }
+  return list;
+}
+
 function renderCaseContext(context: CaseContext | null): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
@@ -912,13 +984,21 @@ function renderCaseContext(context: CaseContext | null): void {
     caseContextBox.append(row);
   }
 
-  // Open SOP tasks with execution types (E4.2 tee-up). Read-only in R6 —
-  // marking a task done stays in the webapp.
+  // S4.3 — Progress: the case's open tasks and their SOP steps, scoped to the
+  // portal in hand when one is recognized. Ticking a step WRITES
+  // (PATCH /api/tasks/:id/steps); the server owns the ordering rule and a
+  // rejection is shown verbatim — never a false success.
   if (tasks.length > 0) {
-    const { row } = contextRow(`Open tasks (${tasks.length})`);
+    // Scope to the portal in hand: a task counts when any of its steps names
+    // the detected portal. Off a recognized page, all open tasks show.
+    const scoped = portal
+      ? tasks.filter((t) => (t.steps ?? []).some((st) => st.portalKey === portal?.key))
+      : [];
+    const shown = scoped.length > 0 ? scoped : tasks;
+    const { row } = contextRow(`Progress (${shown.length})`);
     const list = document.createElement("ul");
     list.className = "case-task-list";
-    for (const task of tasks) {
+    for (const task of shown) {
       const item = document.createElement("li");
       const title = document.createElement("span");
       title.className = "case-task-title";
@@ -934,6 +1014,8 @@ function renderCaseContext(context: CaseContext | null): void {
         due.textContent = `due ${fmtContextDate(task.dueDate)}`;
         item.append(due);
       }
+      const steps = task.steps ?? [];
+      if (steps.length > 0) item.append(stepList(task.id, steps));
       list.append(item);
     }
     row.append(list);

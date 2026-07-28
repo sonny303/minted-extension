@@ -168,6 +168,20 @@ export async function getNextBestAction(limit?: number): Promise<NextBestActionR
   return data;
 }
 
+// PATCH /api/tasks/:id/steps — tick one SOP step complete (S4.3). The ONE
+// task-state write the extension makes; the server owns the ordering rule and
+// returns a 409 naming the blocker when a step isn't next.
+export async function completeTaskStep(
+  taskId: string,
+  stepId: string,
+): Promise<{ task: unknown; allDone: boolean }> {
+  const { data } = await apiFetch<{ task: unknown; allDone: boolean }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/steps`,
+    { method: "PATCH", body: JSON.stringify({ stepId }) },
+  );
+  return data;
+}
+
 // GET /api/cases/:id/context — the selected case's reference number(s), latest
 // note, and latest touch (Epic 3d). Org-scoped like the other case routes, so
 // requestOnce attaches x-org-id in multi-org mode (this pathname is NOT the

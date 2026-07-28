@@ -20,6 +20,7 @@ import {
   putViewPrefs,
   searchCases,
   searchProviders,
+  completeTaskStep,
 } from "../background/api";
 import { coveragePortal } from "../background/fill";
 import {
@@ -74,6 +75,8 @@ interface MockApi {
     touches: Map<string, unknown>;
     viewPrefs: Map<string, string[]>;
     failTouches: number;
+    // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
+    completedSteps: Set<string>;
   };
   close(): Promise<void>;
 }
@@ -351,6 +354,24 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     // Malpractice is 200 days out — no badge.
     expect(cards.malpractice.expiry).toBe("ok");
     expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+  });
+});
+
+describe("S4.3 — the step tick writes, and never falsely succeeds", () => {
+  it("ticks a step through the server", async () => {
+    const result = await completeTaskStep("task-1", "step-1");
+    expect(result.allDone).toBe(false);
+    expect(mock.state.completedSteps.has("task-1:step-1")).toBe(true);
+  });
+
+  it("surfaces the server's ordering rejection instead of inventing one", async () => {
+    // The ordering rule lives server-side (shared pure module with the
+    // webapp). The panel must render the 409's message, not re-derive it.
+    await expect(completeTaskStep("task-1", "blocked-step")).rejects.toThrow(
+      /Complete "Upload W-9" first/,
+    );
+    // Nothing was recorded — a rejected tick must not look done.
+    expect(mock.state.completedSteps.has("task-1:blocked-step")).toBe(false);
   });
 });
 

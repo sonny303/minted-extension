@@ -42,6 +42,9 @@ export type BgRequest =
   // The selected case's context (identity header, open tasks, pipeline state,
   // tracking ID, latest note/touch) — a read-only, org-scoped fetch.
   | { type: "GET_CASE_CONTEXT"; caseId: string }
+  // S4.3: tick one SOP step complete. The server enforces the ordering rule
+  // and returns a 409 naming the blocker — the panel never re-derives it.
+  | { type: "COMPLETE_TASK_STEP"; taskId: string; stepId: string }
   // The provider's facility set + the Quick Cards projection, from ONE
   // audited profile read — the panel never receives the raw token payload.
   | { type: "GET_PROVIDER_FACILITIES"; providerId: string }
@@ -173,6 +176,7 @@ export interface BgResponseMap {
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;
+  COMPLETE_TASK_STEP: { allDone: boolean };
   GET_PROVIDER_FACILITIES: ProviderFacilitiesInfo;
   GET_SELECTED_PROVIDER: string | null;
   SET_SELECTED_PROVIDER: null;
