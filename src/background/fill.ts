@@ -238,7 +238,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
-      "Could not reach the enrollment form - open the BCBS KS enrollment page in the current tab and reload it.",
+      "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
       { cause: error },
     );
   }

@@ -17,6 +17,7 @@ import type {
   ProviderProfileResponse,
   SubmissionTouch,
   UserOrgMembership,
+  PortalRegistryRow,
   QuickCardCatalogField,
   ViewPrefsResponse,
 } from "../shared/apiTypes";
@@ -91,6 +92,13 @@ export async function apiFetch<T>(
 // how a multi-org caller learns what to send as x-org-id in the first place).
 export async function listMyOrgs(): Promise<UserOrgMembership[]> {
   const { data } = await apiFetch<UserOrgMembership[]>("/api/me/orgs");
+  return data;
+}
+
+// GET /api/portals — the DB-driven portal registry (own-org + global rows).
+// Org-scoped; the panel refetches per org and keeps rows in memory only.
+export async function listPortals(): Promise<PortalRegistryRow[]> {
+  const { data } = await apiFetch<PortalRegistryRow[]>("/api/portals");
   return data;
 }
 

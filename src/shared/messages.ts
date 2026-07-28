@@ -12,6 +12,7 @@ import type {
   SubmissionTouch,
   UserOrgMembership,
   QuickCardCatalogField,
+  PortalRegistryRow,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
@@ -29,6 +30,9 @@ export type BgRequest =
   // before the new id is stored. null = single-org mode, no x-org-id header.
   | { type: "SET_ACTIVE_ORG"; orgId: string | null }
   | { type: "LIST_PROVIDERS" }
+  // S3.2: the DB-driven portal registry (own-org + global rows) — page
+  // recognition and the PROVEN chip read from these, never a bundled list.
+  | { type: "LIST_PORTALS" }
   | { type: "LIST_CASES"; providerId: string }
   // E4.3 F4.3.5: the unified standalone search — the worker queries
   // GET /api/cases?q= and GET /api/providers?search= CONCURRENTLY and returns
@@ -165,6 +169,7 @@ export interface BgResponseMap {
   GET_ACTIVE_ORG: string | null;
   SET_ACTIVE_ORG: null;
   LIST_PROVIDERS: ProviderListItem[];
+  LIST_PORTALS: PortalRegistryRow[];
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;

@@ -102,6 +102,26 @@ export interface ProviderProfileResponse {
 // for the picker AND the PUT validator, served together so they can never
 // disagree. `group` is the token family (provider/group/facility/license/
 // assignment/groupInsurance/user); `groupLabel` is its section heading.
+// GET /api/portals — the DB-driven payer-portal registry (2026-07-28), so
+// portal identity stops being a hardcoded list in this bundle. Own-org rows
+// plus global (orgId null) registry rows, the shared-catalog pattern the
+// field maps already follow. `provenAt` non-null = a dry-run proved the form
+// (the S4.1 PROVEN chip); `formUrl` drives page recognition.
+export interface PortalRegistryRow {
+  id: string;
+  orgId: string | null;
+  portalKey: string;
+  name: string;
+  payerId: string | null;
+  formUrl: string | null;
+  isVerified: boolean;
+  lastVerifiedAt: string | null;
+  provenAt: string | null;
+  urlChangedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface QuickCardCatalogField {
   key: string;
   label: string;

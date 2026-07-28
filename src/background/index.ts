@@ -15,6 +15,7 @@ import {
   getViewPrefs,
   listCases,
   listMyOrgs,
+  listPortals,
   listProviders,
   postSubmissionTouch,
   putViewPrefs,
@@ -191,6 +192,8 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       await writeActiveOrgId(request.orgId);
       return null;
     }
+    case "LIST_PORTALS":
+      return listPortals();
     case "LIST_PROVIDERS":
       return listProviders();
     case "LIST_CASES":

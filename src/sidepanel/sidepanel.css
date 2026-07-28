@@ -1685,3 +1685,11 @@ button.link:hover {
 .detail-fix-note:hover {
   text-decoration: underline;
 }
+
+/* ---- S3.4: the THIS PAGE chip on cases that use the recognized form ---- */
+.this-page-chip {
+  background: var(--mp-primary-tint);
+  color: var(--mp-primary);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}

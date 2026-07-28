@@ -305,6 +305,29 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
+    // --- /api/portals (S3.2: the DB-driven registry — own-org + global) ---
+    if (/^\/api\/portals\/?$/.test(url.pathname)) {
+      if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
+      const rows = [
+        {
+          id: "portal-1",
+          orgId: null,
+          portalKey: "bcbs_ks_enrollment",
+          name: "BCBS KS network enrollment",
+          payerId: null,
+          formUrl:
+            "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces",
+          isVerified: true,
+          lastVerifiedAt: "2026-07-01T00:00:00Z",
+          provenAt: "2026-07-02T00:00:00Z",
+          urlChangedAt: null,
+          createdAt: "2026-06-01T00:00:00Z",
+          updatedAt: "2026-07-02T00:00:00Z",
+        },
+      ];
+      return envelope(res, 200, rows, null, { total: rows.length });
+    }
+
     // --- /api/me/view-prefs (E4.3 TE-15: user-scoped, closed catalog) ---
     if (/^\/api\/me\/view-prefs\/?$/.test(url.pathname)) {
       if (method === "GET") {

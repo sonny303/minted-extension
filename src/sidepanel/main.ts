@@ -17,7 +17,8 @@ import type {
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
 import { looksLikeIsoDate } from "../shared/detailFields";
-import { matchPortal, type PortalConfig } from "../shared/portals";
+import { matchPortalByUrl, type MatchedPortal } from "../shared/portals";
+import type { PortalRegistryRow } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
@@ -157,8 +158,12 @@ let facilitiesLoaded = false;
 // meta.needs_facility from the profile: several locations, server won't
 // guess — the fill gate stays closed until the user picks one.
 let needsFacility = false;
-let portal: PortalConfig | null = null;
+let portal: MatchedPortal | null = null;
 let portalTabId: number | null = null;
+// The DB-driven portal registry (S3.2): fetched per org, held in memory only.
+// Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
+// which is the correct signed-out/org-less posture.
+let portalRows: PortalRegistryRow[] = [];
 let lastFill: LastFill | null = null;
 // Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
 // selected case's portalTasks matched against the current page's portal. null =
@@ -1094,11 +1099,22 @@ function updateFillReady(): void {
 // portal's field maps — NOT the case — but only shows for a fill-ready
 // selection, so a case must be picked for the key to be non-null. null = not
 // fill-ready = panel hidden.
+// The enrollment state comes from the selected CASE (S3.2): the registry row
+// carries no state — a national portal serves many — while every fill
+// requires a case and every case names its state.
+function selectedCaseState(): string {
+  const caseItem = cases.find((c) => c.id === selectedCaseId());
+  return caseItem?.state ?? "";
+}
+
 function coverageSelectionKey(): string | null {
   if (!isFillReady()) return null;
-  return [selectedProviderId(), selectedFacilityId() ?? "none", portal?.key ?? "", portal?.state ?? ""].join(
-    "|",
-  );
+  return [
+    selectedProviderId(),
+    selectedFacilityId() ?? "none",
+    portal?.key ?? "",
+    selectedCaseState(),
+  ].join("|");
 }
 
 // Request coverage when the fill-ready selection changes, and render it above
@@ -1133,7 +1149,7 @@ function refreshCoverage(): void {
       providerId,
       caseId,
       portalKey: activePortal.key,
-      state: activePortal.state,
+      state: selectedCaseState(),
       facilityId,
     });
     // Discard a stale response: a newer generation superseded this selection,
@@ -1651,6 +1667,7 @@ async function loadOrgs(generation: number): Promise<void> {
     searchSection.hidden = false;
     renderIdentityGuard();
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
     return;
   }
 
@@ -1678,6 +1695,7 @@ async function loadOrgs(generation: number): Promise<void> {
     providerSection.hidden = false;
     searchSection.hidden = false;
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
   } else {
     updateFillReady();
   }
@@ -1695,11 +1713,25 @@ async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   }
 }
 
+// S3.2: fetch the portal registry for the resolved org, then re-run portal
+// detection — a page that wasn't recognized before the rows arrived becomes
+// recognized the moment they do. Failure degrades to an empty registry
+// (nothing recognized), never an error state: recognition is an enhancement,
+// the fill gate reports its own errors.
+async function loadPortalRegistry(generation: number): Promise<void> {
+  const response = await sendToBackground({ type: "LIST_PORTALS" });
+  if (!isCurrent(generation)) return;
+  portalRows = response.ok ? response.data : [];
+  void detectPortal();
+}
+
 async function detectPortal(): Promise<void> {
   const tab = await queryActiveTab();
-  portal = matchPortal(tab?.url);
+  portal = matchPortalByUrl(tab?.url, portalRows);
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
+  // The active-cases heading + THIS PAGE chips reflect the detected page.
+  renderActiveCases();
 }
 
 // The panel reflects the ACTIVE tab: re-detect on tab switch and on
@@ -1827,7 +1859,11 @@ signoutBtn.addEventListener("click", () => {
   })();
 });
 
-refreshBtn.addEventListener("click", () => void loadProviders(bumpGeneration()));
+refreshBtn.addEventListener("click", () => {
+  const generation = bumpGeneration();
+  void loadProviders(generation);
+  void loadPortalRegistry(generation);
+});
 
 orgSelect.addEventListener("change", () => {
   const orgId = orgSelect.value || null;
@@ -1849,6 +1885,7 @@ orgSelect.addEventListener("change", () => {
     searchSection.hidden = false;
     renderIdentityGuard();
     await loadProviders(generation);
+    void loadPortalRegistry(generation);
     // A handoff pending for THIS org can now apply (the switch prompt's path).
     await refreshActiveCase();
   })();
@@ -1931,7 +1968,7 @@ fillBtn.addEventListener("click", () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
     const tab = await queryActiveTab();
-    const clickPortal = matchPortal(tab?.url);
+    const clickPortal = matchPortalByUrl(tab?.url, portalRows);
     portal = clickPortal;
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
     updateFillReady();
@@ -1954,7 +1991,7 @@ fillBtn.addEventListener("click", () => {
       providerId,
       caseId,
       portalKey: clickPortal.key,
-      state: clickPortal.state,
+      state: selectedCaseState(),
       facilityId,
     });
     fillBtn.textContent = "Fill this page";
@@ -2077,6 +2114,14 @@ markSubmittedBtn.addEventListener("click", () => {
 // a handoff and lands in the fill loop.
 // ---------------------------------------------------------------------------
 
+// S3.4: does this case USE the recognized page? True when any of its open
+// portal-linked tasks names the detected portal's key (already-normalized
+// literal match, the portalTasks contract).
+function caseUsesDetectedPortal(c: CaseListItem): boolean {
+  if (portal == null) return false;
+  return (c.portalTasks ?? []).some((t) => t.portalKey === portal?.key);
+}
+
 function renderActiveCases(): void {
   const providerId = selectedProviderId();
   const show = providerId != null && cases.length > 0;
@@ -2084,7 +2129,19 @@ function renderActiveCases(): void {
   activeCasesList.replaceChildren();
   if (!show) return;
   const selected = selectedCaseId();
-  for (const c of cases) {
+
+  // S3.4: on a recognized payer form the heading flips to "Cases that use
+  // this page" and matching cases sort FIRST, each carrying a THIS PAGE chip.
+  // Off a recognized page the list renders in server order under the default
+  // heading. Stable within each half (no invented priority).
+  const heading = activeCasesBox.querySelector<HTMLElement>(".active-cases-heading");
+  const anyMatch = portal != null && cases.some((c) => caseUsesDetectedPortal(c));
+  if (heading) heading.textContent = anyMatch ? "Cases that use this page" : "Open cases";
+  const ordered = anyMatch
+    ? [...cases.filter(caseUsesDetectedPortal), ...cases.filter((c) => !caseUsesDetectedPortal(c))]
+    : cases;
+
+  for (const c of ordered) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = c.id === selected ? "case-row case-row-selected" : "case-row";
@@ -2092,6 +2149,12 @@ function renderActiveCases(): void {
     title.className = "case-row-title";
     title.textContent = `${c.payerName ?? "Unknown payer"} · ${c.state}`;
     row.append(title);
+    if (anyMatch && caseUsesDetectedPortal(c)) {
+      const chip = document.createElement("span");
+      chip.className = "pill this-page-chip";
+      chip.textContent = "THIS PAGE";
+      row.append(chip);
+    }
     if (c.status) {
       const pill = document.createElement("span");
       pill.className = `pill ${pillClassFor(c.status)}`.trim();
