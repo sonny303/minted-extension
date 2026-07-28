@@ -1900,3 +1900,59 @@ button.link:hover {
   font-size: 11px;
   color: var(--mp-ink-secondary);
 }
+
+/* ---- S6.2/S6.3: CAQH push offer + exception strip ---- */
+.caqh {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+}
+/* Recently attested: present, but not competing for attention. */
+.caqh.de-emphasized {
+  opacity: 0.72;
+}
+.caqh-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.caqh-headline {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-ink);
+}
+.caqh-attested {
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+.caqh-gaps {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: var(--mp-radius-control);
+  background: #fef3c7;
+}
+.caqh-gap {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #92400e;
+  padding: 2px 0;
+}
+.caqh-gap-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.caqh-actions {
+  margin-top: 8px;
+}
+.caqh-status {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}

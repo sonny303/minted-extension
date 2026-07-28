@@ -11,7 +11,9 @@ import {
   ApiError,
   completeTaskStep,
   getCaseContext,
+  patchProviderField,
   proposeFieldMap,
+  recordCaqhAttestation,
   getNextBestAction,
   getProviderProfile,
   getViewPrefs,
@@ -375,6 +377,22 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
     case "CLEAR_CAPTURE":
       await chrome.storage.session.remove(CAPTURE_KEY);
       return null;
+    case "RECORD_CAQH_ATTESTATION": {
+      const result = await recordCaqhAttestation(request.providerId, {
+        verifiedFields: request.verifiedFields,
+      });
+      return {
+        caqhLastAttestedDate: result.caqhLastAttestedDate,
+        verifiedFields: result.verifiedFields,
+      };
+    }
+    case "PULL_CAQH_FIELD": {
+      // S6.3: write ONE field the portal holds and we don't, stamping it
+      // verified in the same breath (it was just read off the source). Uses
+      // the existing provider PATCH — no new write surface.
+      await patchProviderField(request.providerId, request.token, request.value);
+      return null;
+    }
     case "GET_NEXT_BEST_ACTION":
       return getNextBestAction(request.limit);
     case "LOG_STRUCTURED_TOUCH": {

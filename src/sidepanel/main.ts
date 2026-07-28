@@ -29,6 +29,7 @@ import type { ActiveCaseRecord } from "../shared/handoff";
 import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
+import { attestationLine, buildCaqhPushOffer, type CaqhGap } from "../shared/caqh";
 import {
   canSendCapture,
   captureCounts,
@@ -116,6 +117,12 @@ const provenChip = el<HTMLElement>("proven-chip");
 const driftStrip = el<HTMLElement>("drift-strip");
 const unprovenNote = el<HTMLElement>("unproven-note");
 const dupPickup = el<HTMLElement>("dup-pickup");
+const caqhSection = el<HTMLElement>("caqh-section");
+const caqhHeadline = el<HTMLElement>("caqh-headline");
+const caqhAttested = el<HTMLElement>("caqh-attested");
+const caqhGaps = el<HTMLElement>("caqh-gaps");
+const caqhAttest = el<HTMLButtonElement>("caqh-attest");
+const caqhStatus = el<HTMLElement>("caqh-status");
 const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
@@ -1911,6 +1918,7 @@ async function detectPortal(): Promise<void> {
   // The active-cases heading + THIS PAGE chips reflect the detected page.
   renderActiveCases();
   renderCapture();
+  renderCaqh();
 }
 
 // The queue is the landing state: visible only while NOTHING is in hand
@@ -3012,6 +3020,107 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// S6.2/S6.3 — CAQH. PUSH ONLY: we fill CAQH from Minted Panel and record the
+// attestation. The exception strip (S6.3) is the single narrow pull — a field
+// CAQH holds where we are blank — and appears ONLY when such a gap exists.
+// There is no reconciliation of disagreements anywhere: Minted Panel is the
+// source of truth.
+// ---------------------------------------------------------------------------
+
+// Whether the tab in hand is a CAQH portal. Registry-driven like every other
+// portal check (S3.2) — no hardcoded host.
+function isCaqhPortal(): boolean {
+  return portal != null && /caqh/i.test(`${portal.key} ${portal.label}`);
+}
+
+let caqhOffer: ReturnType<typeof buildCaqhPushOffer> | null = null;
+
+function renderCaqh(): void {
+  const cards = currentCards;
+  caqhSection.hidden = !isCaqhPortal() || cards == null;
+  if (caqhSection.hidden || cards == null) return;
+
+  // The offer counts fields we actually hold — see buildCaqhPushOffer.
+  const tokens = [...cards.type1Fields, ...cards.type2Fields]
+    .filter((f) => f.value != null)
+    .map((f) => ({ token: f.key, value: f.value }));
+  caqhOffer = buildCaqhPushOffer(tokens, caqhLastAttestedOn, localToday());
+  caqhHeadline.textContent = caqhOffer.headline;
+  caqhAttested.textContent = attestationLine(caqhOffer);
+  // S6.2: a recently-attested profile de-emphasizes rather than nags.
+  caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
+
+  // S6.3: the strip is OMITTED ENTIRELY when there are no gaps.
+  caqhGaps.replaceChildren();
+  caqhGaps.hidden = caqhGapRows.length === 0;
+  for (const gap of caqhGapRows) {
+    const row = document.createElement("div");
+    row.className = "caqh-gap";
+    const label = document.createElement("span");
+    label.className = "caqh-gap-label";
+    label.textContent = `${gap.label}: ${gap.portalValue}`;
+    const pull = document.createElement("button");
+    pull.type = "button";
+    pull.className = "link";
+    pull.textContent = "Add to Minted Panel";
+    pull.addEventListener("click", () => {
+      const providerId = selectedProviderId();
+      if (!providerId) return;
+      pull.disabled = true;
+      void (async () => {
+        const response = await sendToBackground({
+          type: "PULL_CAQH_FIELD",
+          providerId,
+          token: gap.token,
+          value: gap.portalValue,
+        });
+        if (!response.ok) {
+          pull.disabled = false;
+          setError(mainError, response.error);
+          return;
+        }
+        // The gap is closed — drop it and refetch so the card and the next
+        // fill count both reflect the new value immediately (S6.3).
+        caqhGapRows = caqhGapRows.filter((g) => g.token !== gap.token);
+        renderCaqh();
+        void loadFacilities(providerId, loadGeneration);
+      })();
+    });
+    row.append(label, pull);
+    caqhGaps.append(row);
+  }
+}
+
+caqhAttest.addEventListener("click", () => {
+  const providerId = selectedProviderId();
+  const offer = caqhOffer;
+  if (!providerId || offer == null) return;
+  const generation = loadGeneration;
+  caqhAttest.disabled = true;
+  caqhAttest.textContent = "Recording…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "RECORD_CAQH_ATTESTATION",
+      providerId,
+      verifiedFields: offer.fieldKeys,
+    });
+    caqhAttest.disabled = false;
+    caqhAttest.textContent = "Record attestation";
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      setError(mainError, response.error);
+      return;
+    }
+    caqhLastAttestedOn = response.data.caqhLastAttestedDate;
+    caqhStatus.hidden = false;
+    caqhStatus.textContent = `Attestation recorded. ${response.data.verifiedFields} ${
+      response.data.verifiedFields === 1 ? "field" : "fields"
+    } stamped as verified.`;
+    renderCaqh();
+  })();
+});
+
+// ---------------------------------------------------------------------------
 // S5.4 — capture: "we recognise N of M" with per-row evidence, gaps that are
 // actionable but never blocking, and a send that works even when we
 // recognised nothing (a form we understand none of is the one worth
@@ -3019,6 +3128,17 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
 // ---------------------------------------------------------------------------
 
 let captureSession: CaptureSession | null = null;
+// S6.2/S6.3 state: the provider's last attestation (server-authoritative once
+// recorded) and the exception rows the portal scan surfaced.
+let caqhLastAttestedOn: string | null = null;
+let caqhGapRows: CaqhGap[] = [];
+
+// Date-only today for the pure CAQH module (it never reads a clock itself).
+function localToday(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
 
 function renderCapture(): void {
   // Capture is offered whenever a recognized portal page is in the active tab.

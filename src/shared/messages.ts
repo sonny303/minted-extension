@@ -79,6 +79,12 @@ export type BgRequest =
   | { type: "CLEAR_ACTIVE_CASE" }
   // E4.3 F4.3.4/TE-6: the server-derived queue top (or null = queue clear).
   | { type: "GET_NEXT_BEST_ACTION"; limit?: number }
+  // S6.2 — record a CAQH attestation and stamp the fields the fill carried.
+  // PUSH ONLY: nothing is read back from CAQH into Minted Panel.
+  | { type: "RECORD_CAQH_ATTESTATION"; providerId: string; verifiedFields: string[] }
+  // S6.3 — pull ONE field CAQH holds that we are blank on. An exception, not
+  // a sync: a disagreement is never offered, only a gap.
+  | { type: "PULL_CAQH_FIELD"; providerId: string; token: string; value: string }
   // E4.3 F4.3.4/TE-5: log ONE structured touch. The panel generates the
   // idempotency id once per draft and REUSES it on retries, so a failed write
   // retried can never double-log; a fresh draft gets a fresh id.
@@ -207,6 +213,8 @@ export interface BgResponseMap {
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;
   GET_NEXT_BEST_ACTION: NextBestActionResult;
+  RECORD_CAQH_ATTESTATION: { caqhLastAttestedDate: string | null; verifiedFields: number };
+  PULL_CAQH_FIELD: null;
   LOG_STRUCTURED_TOUCH: SubmissionTouch;
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;

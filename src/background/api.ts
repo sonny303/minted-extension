@@ -208,6 +208,61 @@ export async function proposeFieldMap(input: {
   return data;
 }
 
+// PATCH /api/providers/:id — write ONE field (S6.3 gap pull). Deliberately
+// narrow: the token key maps to the provider column the profile resolved it
+// from, and only the gap fields the exception strip can offer are accepted, so
+// this can never become a general provider-editing surface in the panel.
+const PULLABLE_FIELDS: Readonly<Record<string, string>> = {
+  "provider.deaNumber": "deaNumber",
+  "provider.caqhId": "caqhId",
+  "provider.taxonomyCode": "taxonomyCode",
+  "provider.suffix": "suffix",
+  "provider.middleInitial": "middleInitial",
+  "provider.specialty": "specialty",
+  "provider.subSpecialty": "subSpecialty",
+};
+
+export function isPullableField(token: string): boolean {
+  return Object.hasOwn(PULLABLE_FIELDS, token);
+}
+
+export async function patchProviderField(
+  providerId: string,
+  token: string,
+  value: string,
+): Promise<void> {
+  const column = PULLABLE_FIELDS[token];
+  if (!column) throw new Error("That field can't be pulled from CAQH.");
+  await apiFetch(`/api/providers/${encodeURIComponent(providerId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ [column]: value }),
+  });
+}
+
+// POST /api/providers/:id/caqh-attestation — record a CAQH re-attestation
+// (S6.2/C6). `verifiedFields` are the token keys the fill carried; the server
+// stamps each so the Details card can show per-field freshness (S6.1).
+// PUSH ONLY: this never reads anything back into Minted Panel.
+export async function recordCaqhAttestation(
+  providerId: string,
+  input: { attestedOn?: string | null; verifiedFields?: string[] } = {},
+): Promise<{ caqhLastAttestedDate: string | null; currentThroughDays: number; verifiedFields: number }> {
+  const { data } = await apiFetch<{
+    caqhLastAttestedDate: string | null;
+    currentThroughDays: number;
+    verifiedFields: number;
+  }>(`/api/providers/${encodeURIComponent(providerId)}/caqh-attestation`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      ...(input.attestedOn ? { attested_on: input.attestedOn } : {}),
+      ...(input.verifiedFields?.length ? { verified_fields: input.verifiedFields } : {}),
+    }),
+  });
+  return data;
+}
+
 // GET /api/cases/:id/context — the selected case's reference number(s), latest
 // note, and latest touch (Epic 3d). Org-scoped like the other case routes, so
 // requestOnce attaches x-org-id in multi-org mode (this pathname is NOT the

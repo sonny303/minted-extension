@@ -181,6 +181,19 @@
 
           <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
 
+          <!-- S6.2/S6.3: CAQH — push our data out, and pull the exceptions. -->
+          <div id="caqh-section" class="caqh" hidden>
+            <div class="caqh-head">
+              <p id="caqh-headline" class="caqh-headline"></p>
+              <span id="caqh-attested" class="caqh-attested"></span>
+            </div>
+            <div id="caqh-gaps" class="caqh-gaps" hidden></div>
+            <div class="caqh-actions">
+              <button id="caqh-attest" class="secondary" type="button">Record attestation</button>
+            </div>
+            <p id="caqh-status" class="caqh-status" hidden></p>
+          </div>
+
           <!-- S5.4: capture — turn a form we don't know into one we do. -->
           <div id="capture-section" class="capture" hidden>
             <div class="capture-head">
