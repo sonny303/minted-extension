@@ -317,23 +317,87 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
   const dt = document.createElement("dt");
   dt.textContent = field.label;
   const dd = document.createElement("dd");
+  dd.classList.add("detail-row");
   if (field.value == null || field.value === "") {
-    dd.textContent = "—";
-    dd.classList.add("id-empty");
-    if (field.reason) dd.title = field.reason;
+    // S2.3: absent values read "Not on file" with an amber icon and are not
+    // clickable; the profile's unresolved reason rides the tooltip.
+    const empty = document.createElement("span");
+    empty.className = "id-empty not-on-file";
+    empty.textContent = "⚠ Not on file";
+    if (field.reason) empty.title = field.reason;
+    dd.append(empty);
   } else {
     const text = document.createElement("span");
-    text.className = "id-value mono";
+    // Wrap, never truncate (S2.3) — long values break to the next line.
+    text.className = "id-value mono wrap";
     text.textContent = looksLikeIsoDate(field.value) ? fmtContextDate(field.value) : field.value;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "id-copy";
     copy.textContent = "Copy";
     copy.setAttribute("aria-label", `Copy ${field.label}`);
-    copy.addEventListener("click", () => void copyValue(field.value ?? "", copy));
+    copy.addEventListener("click", () => void copyValue(field.value ?? "", copy, field.key, text));
+    if (copiedKeys.has(field.key)) dd.classList.add("copied-row");
     dd.append(text, copy);
   }
   return [dt, dd];
+}
+
+// S2.3: one section per catalog group inside the details area — heading, the
+// picked fields of that group, and (when any field is absent) ONE fix
+// footnote deep-linking the provider's webapp page. Groups render in served-
+// catalog order; a group with no picked fields renders nothing.
+function renderGroupedDetails(
+  container: HTMLElement,
+  fields: QuickCardField[],
+  providerId: string | null,
+): void {
+  container.replaceChildren();
+  container.hidden = fields.length === 0;
+  if (fields.length === 0) return;
+
+  const groupOf = new Map<string, { label: string; order: number }>();
+  currentCatalog.forEach((f, i) => {
+    if (!groupOf.has(f.group)) groupOf.set(f.group, { label: f.groupLabel, order: i });
+  });
+
+  interface Section {
+    group: string;
+    label: string;
+    order: number;
+    fields: QuickCardField[];
+  }
+  const sections = new Map<string, Section>();
+  for (const field of fields) {
+    const prefix = field.key.split(".")[0] ?? "";
+    const meta = groupOf.get(prefix) ?? { label: prefix, order: Number.MAX_SAFE_INTEGER };
+    let section = sections.get(prefix);
+    if (!section) {
+      section = { group: prefix, label: meta.label, order: meta.order, fields: [] };
+      sections.set(prefix, section);
+    }
+    section.fields.push(field);
+  }
+
+  for (const section of [...sections.values()].sort((a, b) => a.order - b.order)) {
+    const heading = document.createElement("p");
+    heading.className = "detail-section-heading";
+    heading.textContent = section.label;
+    container.append(heading);
+    const grid = document.createElement("dl");
+    grid.className = "ids qc-grid";
+    for (const field of section.fields) grid.append(...idGridEntry(field));
+    container.append(grid);
+    if (section.fields.some((f) => f.value == null || f.value === "") && providerId) {
+      const note = document.createElement("a");
+      note.className = "detail-fix-note";
+      note.href = `${API_BASE_URL}${providerWebappPath(providerId)}`;
+      note.target = "_blank";
+      note.rel = "noreferrer";
+      note.textContent = "Add missing details in Minted Panel ↗";
+      container.append(note);
+    }
+  }
 }
 
 // A structural row (license / malpractice): label: value triplet line with an
@@ -371,6 +435,9 @@ function structuralRow(
 }
 
 function renderQuickCards(cards: QuickCards | null): void {
+  // A provider switch/sign-out clears the session copy marks — they are
+  // per-provider (a copied NPI for Kay is not "copied" for Eric).
+  if (cards == null || cards !== currentCards) copiedKeys.clear();
   currentCards = cards;
   // Any cards change (provider switch, refetch) closes the layout form — it
   // must never show one provider's layout over another's card.
@@ -393,7 +460,7 @@ function renderQuickCards(cards: QuickCards | null): void {
     ? `DOB ${fmtContextDate(cards.dateOfBirth)}`
     : "DOB —";
 
-  for (const field of cards.type1Fields) providerIds.append(...idGridEntry(field));
+  renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
   structuralRow(
     licenseRow,
     "License",
@@ -405,9 +472,7 @@ function renderQuickCards(cards: QuickCards | null): void {
   groupCard.hidden = false;
   groupName.textContent = cards.groupName ?? "No group on file";
   groupName.classList.toggle("id-empty", cards.groupName == null);
-  groupIds.replaceChildren();
-  groupIds.hidden = cards.type2Fields.length === 0;
-  for (const field of cards.type2Fields) groupIds.append(...idGridEntry(field));
+  renderGroupedDetails(groupIds, cards.type2Fields, selectedProviderId());
   structuralRow(
     malpracticeRow,
     "Malpractice",
@@ -594,19 +659,44 @@ viewSettingsSave.addEventListener("click", () => {
   })();
 });
 
-// Copy a single identifier to the clipboard, with brief "Copied" feedback.
-// Best-effort: a clipboard permission denial just leaves the label unchanged.
-async function copyValue(value: string, button: HTMLButtonElement): Promise<void> {
+// Copy a single identifier to the clipboard. Copied rows stay marked for the
+// session (S2.3) — the mark set clears on provider switch/sign-out via
+// renderQuickCards(null). When the clipboard API is blocked, the fallback
+// SELECTS the value text and says so, instead of failing silently.
+const copiedKeys = new Set<string>();
+
+async function copyValue(
+  value: string,
+  button: HTMLButtonElement,
+  key?: string,
+  valueNode?: HTMLElement,
+): Promise<void> {
   try {
     await navigator.clipboard.writeText(value);
     button.textContent = "Copied";
     button.classList.add("copied");
+    if (key) {
+      copiedKeys.add(key);
+      button.closest(".detail-row")?.classList.add("copied-row");
+    }
     window.setTimeout(() => {
       button.textContent = "Copy";
       button.classList.remove("copied");
     }, 1200);
   } catch {
-    // clipboard blocked — leave the button as-is
+    // Clipboard blocked (permission policy, headless contexts): select the
+    // text so a manual Ctrl/Cmd+C works, and say what happened.
+    if (valueNode) {
+      const range = document.createRange();
+      range.selectNodeContents(valueNode);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    button.textContent = "Copy blocked — press Ctrl+C";
+    window.setTimeout(() => {
+      button.textContent = "Copy";
+    }, 2500);
   }
 }
 
