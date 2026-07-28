@@ -169,74 +169,97 @@ body {
   background: var(--mp-app);
 }
 
-/* ---- header: the app's dark-green sidebar surface with a white logo tile and
-   the account line (the app's sidebar top, condensed into the panel bar) ---- */
+/* ---- S1.4/S1.5: the panel's own green bar is gone — content starts at the
+   account row. Brand reads via Chrome's header + the S1.1 icons. The row is
+   a light strip: active-org name (ellipsized, never dropped — the 320px
+   rule) + the avatar menu. ---- */
 
-.header {
+.account-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  height: 50px;
-  padding: 0 14px;
-  background: var(--mp-sidebar);
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px 4px;
   flex: none;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: #ffffff;
-  white-space: nowrap;
-}
-
-.brand-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--mp-radius-sm);
-  background: #ffffff;
-  flex: none;
-}
-
-.account {
-  flex: 1;
+.org-context {
   min-width: 0;
-  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--mp-nav-ink);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-ink);
 }
 
-/* The account line lives in the header but belongs to the signed-in view. */
-body:has(#view-main[hidden]) .account {
-  visibility: hidden;
-}
-
-/* On the forest header the primary green of button.link is invisible — the
-   sidebar's nav ink is the readable pairing. */
-button.header-link {
-  color: var(--mp-nav-ink);
+.avatar-wrap {
+  position: relative;
   flex: none;
 }
 
-button.header-link:hover {
+/* 26px forest circle, white 11px/600 initial (doc 02 §2.1). */
+.avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: var(--mp-primary);
   color: #ffffff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.avatar:focus-visible {
+  outline: none;
+  box-shadow: var(--mp-focus);
 }
 
-button.header-link:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.35);
-  outline-offset: 2px;
+.avatar-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-width: min(260px, calc(100vw - 24px));
+  background: #ffffff;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  box-shadow: 0 4px 12px rgba(31, 41, 55, 0.12);
+  padding: 6px;
 }
+
+.avatar-menu-email {
+  margin: 0 0 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+  overflow-wrap: anywhere;
+}
+
+.avatar-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--mp-ink);
+  border-radius: var(--mp-radius-control);
+  cursor: pointer;
+}
+.avatar-menu-item:hover {
+  background: var(--mp-primary-tint);
+}
+
+
 
 main {
   flex: 1;

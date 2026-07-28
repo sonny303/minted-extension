@@ -5,34 +5,28 @@
     <title>Minted Panel Workbench</title>
   </head>
   <body>
-    <header class="header">
-      <span class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 24 24">
-            <g transform="rotate(14 12 12)" fill="#1B4D3E">
-              <g>
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-              <g transform="rotate(60 12 12)">
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-              <g transform="rotate(-60 12 12)">
-                <rect x="10.7" y="1.6" width="2.6" height="20.8" rx="1.3" />
-                <circle cx="12" cy="2.8" r="2.2" />
-                <circle cx="12" cy="21.2" r="2.2" />
-              </g>
-            </g>
-          </svg>
-        </span>
-        Minted Panel Workbench
-      </span>
-      <p id="account-email" class="account"></p>
-      <button id="signout" class="link header-link" hidden>Sign out</button>
-    </header>
+    <!-- S1.4: the panel's own green bar is GONE — brand reads via Chrome's
+         header + the S1.1 toolbar/panel icon. Content starts at the account
+         row (S1.5): avatar menu with the email + Sign out. -->
+    <div class="account-row" id="account-row" hidden>
+      <span id="org-context" class="org-context"></span>
+      <div class="avatar-wrap">
+        <button
+          id="avatar-btn"
+          class="avatar"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded="false"
+          aria-label="Account menu"
+        ></button>
+        <div id="avatar-menu" class="avatar-menu" role="menu" hidden>
+          <p id="account-email" class="avatar-menu-email"></p>
+          <button id="signout" class="avatar-menu-item" role="menuitem" type="button">
+            Sign out
+          </button>
+        </div>
+      </div>
+    </div>
     <div id="identity-guard" class="identity-guard" hidden></div>
     <main>
       <section id="view-loading" class="centered"><p class="hint">Loading…</p></section>
@@ -202,7 +196,7 @@
                 ></textarea>
               </div>
               <div id="task-link" class="field submit-field" hidden>
-                <label for="task-select">SOP task</label>
+                <label for="task-select">Checklist task</label>
                 <p id="task-link-single" class="task-link-single" hidden></p>
                 <select id="task-select" hidden></select>
               </div>

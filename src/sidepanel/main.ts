@@ -51,6 +51,10 @@ const views = {
   main: el<HTMLElement>("view-main"),
 };
 const signoutBtn = el<HTMLButtonElement>("signout");
+const accountRow = el<HTMLElement>("account-row");
+const avatarBtn = el<HTMLButtonElement>("avatar-btn");
+const avatarMenu = el<HTMLElement>("avatar-menu");
+const orgContext = el<HTMLElement>("org-context");
 const signinForm = el<HTMLFormElement>("signin-form");
 const emailInput = el<HTMLInputElement>("email");
 const passwordInput = el<HTMLInputElement>("password");
@@ -219,7 +223,8 @@ function showView(name: keyof typeof views): void {
   for (const [key, section] of Object.entries(views)) {
     section.hidden = key !== name;
   }
-  signoutBtn.hidden = name !== "main";
+  accountRow.hidden = name !== "main";
+  if (name !== "main") closeAvatarMenu();
 }
 
 function setError(box: HTMLElement, message: string | null): void {
@@ -751,7 +756,7 @@ function humanizeStateKey(value: string): string {
 // checklist context).
 const EXECUTION_TYPE_LABELS: Record<string, string> = {
   manual: "Manual",
-  extension_fill: "Extension fill",
+  extension_fill: "Auto-fill",
   auto_verify: "Auto verify",
   document_attach: "Document attach",
 };
@@ -1583,6 +1588,15 @@ async function loadProviders(generation: number): Promise<void> {
     ]);
 }
 
+// S1.5: the account row shows the active org's name beside the avatar —
+// ellipsized by CSS at narrow widths, never dropped entirely (the 320px
+// criterion). Empty until an org resolves.
+function renderOrgContext(): void {
+  const active = orgs.find((o) => o.orgId === activeOrgId);
+  orgContext.textContent = active ? active.orgName : "";
+  orgContext.title = active ? active.orgName : "";
+}
+
 function orgLabel(org: UserOrgMembership): string {
   return org.orgName || org.orgId;
 }
@@ -1595,6 +1609,7 @@ async function loadOrgs(generation: number): Promise<void> {
   setError(mainError, null);
   orgs = [];
   activeOrgId = null;
+  renderOrgContext();
   orgSelect.disabled = true;
   orgSelect.replaceChildren(new Option("Loading organizations…", ""));
   providerSection.hidden = true;
@@ -1649,6 +1664,7 @@ async function loadOrgs(generation: number): Promise<void> {
     if (!isCurrent(generation)) return;
   }
   activeOrgId = storedId;
+  renderOrgContext();
   orgSelect.replaceChildren();
   const placeholder = new Option("Select an organization…", "", true, storedId == null);
   placeholder.disabled = true;
@@ -1697,7 +1713,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 });
 
 function showMain(auth: AuthState): void {
-  accountEmail.textContent = accountGreeting(auth.name, auth.email);
+  renderAccountRow(auth.name, auth.email);
   showView("main");
   // Fresh context: this restore load (and every loader it chains into) runs
   // under one generation so it populates uninterrupted. The handoff check
@@ -1705,6 +1721,39 @@ function showMain(auth: AuthState): void {
   void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
   void detectPortal();
 }
+
+// S1.5 — the account row: a 26px forest avatar circle with the user's white
+// initial; the menu holds the email and Sign out. The initial comes from the
+// same name source as the greeting (auth user_metadata, else the email's
+// first letter).
+function renderAccountRow(name: string | null, email: string | null): void {
+  const greeting = accountGreeting(name, email);
+  const source = (name ?? "").trim() || (email ?? "").trim();
+  avatarBtn.textContent = (source.charAt(0) || "?").toUpperCase();
+  avatarBtn.title = greeting;
+  accountEmail.textContent = email ?? greeting;
+}
+
+function closeAvatarMenu(): void {
+  avatarMenu.hidden = true;
+  avatarBtn.setAttribute("aria-expanded", "false");
+}
+
+avatarBtn.addEventListener("click", () => {
+  const open = avatarMenu.hidden;
+  avatarMenu.hidden = !open;
+  avatarBtn.setAttribute("aria-expanded", String(open));
+});
+
+// Click-away + Escape close the menu (it must never trap the panel).
+document.addEventListener("click", (event) => {
+  if (avatarMenu.hidden) return;
+  const target = event.target as Node;
+  if (!avatarMenu.contains(target) && !avatarBtn.contains(target)) closeAvatarMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeAvatarMenu();
+});
 
 function showSignin(): void {
   signinForm.reset();
@@ -1754,6 +1803,7 @@ signoutBtn.addEventListener("click", () => {
     await sendToBackground({ type: "SIGN_OUT" });
     orgs = [];
     activeOrgId = null;
+    renderOrgContext();
     providers = [];
     cases = [];
     facilities = [];
@@ -1787,6 +1837,7 @@ orgSelect.addEventListener("change", () => {
   const generation = bumpGeneration();
   void (async () => {
     activeOrgId = orgId;
+    renderOrgContext();
     // The worker wipes provider/case/facility/report state — including any
     // active-case context — before storing the new org; every call from here
     // on carries x-org-id.
@@ -2314,6 +2365,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   appliedHandoffKey = handoffKey(record);
   const generation = bumpGeneration();
   activeOrgId = target;
+  renderOrgContext();
   orgSelect.value = target;
   await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: target });
   if (!isCurrent(generation)) return;
