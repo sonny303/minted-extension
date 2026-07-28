@@ -35,6 +35,22 @@ function daysBetween(fromIso: string | null, today: string): number | null {
   return Math.floor(ms / 86_400_000);
 }
 
+/** The attestation date to show for the selected provider.
+ *
+ * Lives here, in the tested pure module, because the panel originally decided
+ * it with a module variable that was only ever assigned after a successful
+ * attestation POST. On every ordinary render that variable was still null, so
+ * a provider attested last week read "Never attested", the S6.2 de-emphasis
+ * never fired, and a stale value outlived a provider switch. The roster row
+ * carries `caqhLastAttestedDate`; it is the source of truth. */
+export function attestedOnFor(
+  providerId: string | null | undefined,
+  providers: readonly { id: string; caqhLastAttestedDate: string | null }[],
+): string | null {
+  if (!providerId) return null;
+  return providers.find((p) => p.id === providerId)?.caqhLastAttestedDate ?? null;
+}
+
 /** Build the push offer from the profile. Only tokens with a non-empty value
  * count: offering to "update 40 fields" when 26 are blank would be a lie the
  * user discovers mid-fill. */

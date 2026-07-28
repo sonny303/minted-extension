@@ -29,7 +29,12 @@ import type { ActiveCaseRecord } from "../shared/handoff";
 import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
-import { attestationLine, buildCaqhPushOffer, type CaqhGap } from "../shared/caqh";
+import {
+  attestationLine,
+  attestedOnFor,
+  buildCaqhPushOffer,
+  type CaqhGap,
+} from "../shared/caqh";
 import {
   canSendCapture,
   captureCounts,
@@ -3044,7 +3049,13 @@ function renderCaqh(): void {
   const tokens = [...cards.type1Fields, ...cards.type2Fields]
     .filter((f) => f.value != null)
     .map((f) => ({ token: f.key, value: f.value }));
-  caqhOffer = buildCaqhPushOffer(tokens, caqhLastAttestedOn, localToday());
+  // The date comes from the roster row (see attestedOnFor) — never a module
+  // variable, which is what made this read "Never attested" for everyone.
+  caqhOffer = buildCaqhPushOffer(
+    tokens,
+    attestedOnFor(selectedProviderId(), providers),
+    localToday(),
+  );
   caqhHeadline.textContent = caqhOffer.headline;
   caqhAttested.textContent = attestationLine(caqhOffer);
   // S6.2: a recently-attested profile de-emphasizes rather than nags.
@@ -3111,7 +3122,11 @@ caqhAttest.addEventListener("click", () => {
       setError(mainError, response.error);
       return;
     }
-    caqhLastAttestedOn = response.data.caqhLastAttestedDate;
+    // Write the server-authoritative date back onto the roster row, which is
+    // what renderCaqh reads. Keeping it here rather than in a side variable is
+    // why a provider switch cannot show another provider's attestation.
+    const row = providers.find((p) => p.id === providerId);
+    if (row) row.caqhLastAttestedDate = response.data.caqhLastAttestedDate;
     caqhStatus.hidden = false;
     caqhStatus.textContent = `Attestation recorded. ${response.data.verifiedFields} ${
       response.data.verifiedFields === 1 ? "field" : "fields"
@@ -3128,9 +3143,21 @@ caqhAttest.addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 let captureSession: CaptureSession | null = null;
-// S6.2/S6.3 state: the provider's last attestation (server-authoritative once
-// recorded) and the exception rows the portal scan surfaced.
-let caqhLastAttestedOn: string | null = null;
+
+// S6.3 — the CAQH EXCEPTION strip: fields CAQH holds where Minted Panel is
+// blank. The rendering, the pure `findCaqhGaps` reducer and the PULL_CAQH_FIELD
+// round trip are all built and unit-tested, but nothing populates this array,
+// so the strip never appears.
+//
+// It is UNFINISHED, not broken, and the missing half is deliberate: populating
+// it means reading VALUES off the CAQH page, which is a different capability
+// from the S5.2 capture scan (that reads form SHAPE only — labels and
+// selectors, never values — and that boundary is load-bearing for PHI). Wiring
+// it needs a value-reading content script and a real CAQH account to verify
+// against; shipping a guess would be worse than shipping nothing.
+//
+// Tracked so this reads as a known gap rather than a mystery. The push half of
+// S6.2 (offer + attestation) IS live.
 let caqhGapRows: CaqhGap[] = [];
 
 // Date-only today for the pure CAQH module (it never reads a clock itself).

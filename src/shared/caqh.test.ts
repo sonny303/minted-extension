@@ -1,6 +1,6 @@
 // S6.2/S6.3 — CAQH push offer and the exception (gap) strip.
 import { describe, expect, it } from "vitest";
-import { attestationLine, buildCaqhPushOffer, findCaqhGaps } from "./caqh";
+import { attestationLine, attestedOnFor, buildCaqhPushOffer, findCaqhGaps } from "./caqh";
 import type { ProfileToken } from "./apiTypes";
 
 const TODAY = "2026-07-28";
@@ -10,6 +10,38 @@ const tokens: ProfileToken[] = [
   { token: "provider.deaNumber", value: null },
   { token: "provider.suffix", value: "   " },
 ];
+
+// Regression cover for the panel bug these back: the attestation date used to
+// come from a module variable written ONLY after a successful attestation POST,
+// so every ordinary render passed null into buildCaqhPushOffer. The pure module
+// was correct and fully tested; the wiring that fed it was not, so "Never
+// attested" showed for every provider and deEmphasize never fired.
+describe("attestedOnFor (S6.2 wiring)", () => {
+  const roster = [
+    { id: "p1", caqhLastAttestedDate: "2026-07-25" },
+    { id: "p2", caqhLastAttestedDate: null },
+  ];
+
+  it("reads the selected provider's date off the roster row", () => {
+    expect(attestedOnFor("p1", roster)).toBe("2026-07-25");
+  });
+
+  it("switching providers reports THAT provider's date, never the last one seen", () => {
+    expect(attestedOnFor("p2", roster)).toBeNull();
+  });
+
+  it("is null with no provider selected, and for a provider not on the roster", () => {
+    expect(attestedOnFor(null, roster)).toBeNull();
+    expect(attestedOnFor(undefined, roster)).toBeNull();
+    expect(attestedOnFor("nope", roster)).toBeNull();
+  });
+
+  it("feeds a real date through to the offer, so de-emphasis can actually fire", () => {
+    const offer = buildCaqhPushOffer(tokens, attestedOnFor("p1", roster), TODAY);
+    expect(offer.deEmphasize).toBe(true);
+    expect(attestationLine(offer)).toBe("Last attested 3 days ago");
+  });
+});
 
 describe("buildCaqhPushOffer (S6.2)", () => {
   it("counts only fields we actually hold a value for", () => {
