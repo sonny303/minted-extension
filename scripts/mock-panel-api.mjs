@@ -575,7 +575,20 @@ export async function createMockPanelApi(options = {}) {
         source: "extension",
       };
       state.touches.set(body.idempotency_id, touch);
-      return envelope(res, 201, touch);
+      // S4.4: the opt-in bump's outcome rides META, never the touch. The mock
+      // mirrors both outcomes so the panel's honest-reporting path is
+      // exercised: a case already past In Progress reports skipped.
+      let meta = null;
+      if (body.bump_status === true) {
+        meta =
+          caseRow.status === "Submitted"
+            ? {
+                status_bump: "skipped",
+                status_bump_reason: "The case was not in a status that can move to Submitted.",
+              }
+            : { status_bump: "applied" };
+      }
+      return envelope(res, 201, touch, null, meta);
     }
 
     // --- /api/portal-field-maps ---

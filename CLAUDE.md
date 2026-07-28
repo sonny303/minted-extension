@@ -87,8 +87,14 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   fill-events' camelCase): `POST /api/cases/:id/touches` takes
   `{ kind: "portal_submission", portal_key, idempotency_id,
   fill_session_id?, note?, payer_reference_id?, wip_note?, task_id?,
-  pdf_filename? }`. Server sets org + user from the JWT; never a status
-  change. (Panel `src/services/submissionTouches.ts`; mirror
+  pdf_filename?, bump_status? }`. Server sets org + user from the JWT.
+  **S4.4 (2026-07-28): `bump_status: true` also moves the case In Progress ->
+  Submitted** through the panel's `set_case_status`, evidenced by that touch.
+  Off by default and omitted from the body unless asked, so the R2 "never an
+  IMPLICIT status change" rule still holds. The outcome rides
+  `meta.status_bump` (`applied` | `skipped` + `status_bump_reason`), never the
+  touch — a rejected transition is NOT a failed touch, and the panel reports
+  both separately. (Panel `src/services/submissionTouches.ts`; mirror
   `SubmissionTouchBody` in `src/shared/apiTypes.ts`.)
 - **Fill-events body is camelCase:** `POST /api/fill-events` takes
   `{ id, caseId, providerId, portalKey, fillMode: "web", startedAt,

@@ -31,6 +31,8 @@ export interface SubmissionTouchInput {
   // The SOP task the human just closed. Included as task_id ONLY when set —
   // never sent as null/empty (an absent key is how "no task to close" is wired).
   taskId?: string | null;
+  // S4.4: request the In Progress -> Submitted bump alongside the touch.
+  bumpStatus?: boolean;
 }
 
 // Blank/whitespace → null so an empty field is a no-op server-side (the server
@@ -54,5 +56,8 @@ export function buildSubmissionTouchBody(input: SubmissionTouchInput): Submissio
     payer_reference_id: cleanText(input.payerReferenceId),
     wip_note: cleanText(input.wipNote),
     ...(taskId ? { task_id: taskId } : {}),
+    // Omitted entirely when not requested, so a server predating S4.4 sees the
+    // exact pre-bump body it already understands.
+    ...(input.bumpStatus ? { bump_status: true } : {}),
   };
 }

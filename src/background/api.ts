@@ -20,6 +20,7 @@ import type {
   PortalRegistryRow,
   QuickCardCatalogField,
   ViewPrefsResponse,
+  StatusBumpMeta,
 } from "../shared/apiTypes";
 import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
@@ -247,8 +248,8 @@ export async function postFillEvent(body: FillEventBody): Promise<void> {
 export async function postSubmissionTouch(
   caseId: string,
   body: CaseTouchBody,
-): Promise<SubmissionTouch> {
-  const { data } = await apiFetch<SubmissionTouch>(
+): Promise<{ touch: SubmissionTouch; statusBump: StatusBumpMeta | null }> {
+  const { data, meta } = await apiFetch<SubmissionTouch>(
     `/api/cases/${encodeURIComponent(caseId)}/touches`,
     {
       method: "POST",
@@ -256,5 +257,12 @@ export async function postSubmissionTouch(
       body: JSON.stringify(body),
     },
   );
-  return data;
+  // S4.4: the bump outcome rides meta, never the touch. A skipped bump is not
+  // a failed touch — the panel reports both honestly.
+  const bump = (meta as { status_bump?: string; status_bump_reason?: string } | null) ?? null;
+  const statusBump =
+    bump?.status_bump === "applied" || bump?.status_bump === "skipped"
+      ? { applied: bump.status_bump === "applied", reason: bump.status_bump_reason ?? null }
+      : null;
+  return { touch: data, statusBump };
 }

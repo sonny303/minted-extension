@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 // deliberately outside the typechecked tree (it mirrors the panel repo's own
 // scripts/mock-api-server.mjs pattern).
 import { createMockPanelApi, FIXTURES } from "../../scripts/mock-panel-api.mjs";
+import { buildSubmissionTouchBody } from "../shared/submission";
 import {
   ApiError,
   getCaseContext,
@@ -269,10 +270,10 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
   it("logs one structured touch; a same-id retry replays instead of double-logging", async () => {
     const id = crypto.randomUUID();
     const body = buildStructuredTouchBody(draft, id);
-    const created = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: created } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(created.touchType).toBe("portal");
     expect(created.outcome).toBe("successful");
-    const replayed = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: replayed } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(replayed.id).toBe(created.id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -285,7 +286,7 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     await expect(postSubmissionTouch(FIXTURES.CASE_ID, body)).rejects.toThrow(ApiError);
     expect(mock.state.touches.size).toBe(0);
     // The retry reuses the same idempotency id (the panel preserves the draft).
-    const retried = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: retried } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
     expect(retried.id).toBe(id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -354,6 +355,51 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     // Malpractice is 200 days out — no badge.
     expect(cards.malpractice.expiry).toBe("ok");
     expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+  });
+});
+
+describe("S4.4 — the opt-in status bump", () => {
+  const submissionBody = (idempotencyId: string, bump: boolean) =>
+    buildSubmissionTouchBody({
+      portalKey: "bcbs_ks_enrollment",
+      fillSessionId: null,
+      idempotencyId,
+      bumpStatus: bump,
+    });
+
+  it("OMITS bump_status unless asked — a server predating S4.4 sees the old body", () => {
+    const body = submissionBody(crypto.randomUUID(), false);
+    expect("bump_status" in body).toBe(false);
+  });
+
+  it("reports an applied bump beside the touch", async () => {
+    // CASE2 is In Progress — the legal source for the bump.
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE2_ID,
+      submissionBody(crypto.randomUUID(), true),
+    );
+    expect(result.touch.outcome).toBe("submitted");
+    expect(result.statusBump).toEqual({ applied: true, reason: null });
+  });
+
+  it("reports a SKIPPED bump without failing the touch", async () => {
+    // CASE_ID is already Submitted, so the transition is illegal — but the
+    // touch itself must still land. A rejected bump is never a failed touch.
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE_ID,
+      submissionBody(crypto.randomUUID(), true),
+    );
+    expect(result.touch.id).toBeTruthy();
+    expect(result.statusBump?.applied).toBe(false);
+    expect(result.statusBump?.reason).toMatch(/status that can move to Submitted/);
+  });
+
+  it("carries no bump meta when none was requested", async () => {
+    const result = await postSubmissionTouch(
+      FIXTURES.CASE2_ID,
+      submissionBody(crypto.randomUUID(), false),
+    );
+    expect(result.statusBump).toBeNull();
   });
 });
 

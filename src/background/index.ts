@@ -258,7 +258,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // network failure replays instead of double-logging.
       const validation = validateStructuredTouch(request.draft);
       if (!validation.ok) throw new Error(validation.message);
-      const touch = await postSubmissionTouch(
+      const { touch } = await postSubmissionTouch(
         request.caseId,
         buildStructuredTouchBody(request.draft, request.idempotencyId),
       );
@@ -384,7 +384,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // POST. buildSubmissionTouchBody drops blank fields to null (a no-op
       // server-side) and OMITS task_id unless one was selected — never sends it
       // as null/empty.
-      const touch = await postSubmissionTouch(
+      const { touch, statusBump } = await postSubmissionTouch(
         request.caseId,
         buildSubmissionTouchBody({
           portalKey: request.portalKey,
@@ -393,6 +393,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
           payerReferenceId: request.payerReferenceId,
           wipNote: request.wipNote,
           taskId: request.taskId,
+          bumpStatus: request.bumpStatus,
         }),
       );
       // Logging the submission is user activity on the case — reset the
@@ -410,7 +411,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       } catch {
         // best-effort — the touch itself was logged
       }
-      return touch;
+      return { touch, statusBump };
     }
   }
 }

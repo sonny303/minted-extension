@@ -1822,3 +1822,9 @@ button.link:hover {
   font-size: 11px;
   color: #b91c1c;
 }
+
+/* ---- S4.4: a partial/unsent submission outcome (never styled as success) ---- */
+.submit-status.partial,
+#submit-status.partial {
+  color: #92400e;
+}

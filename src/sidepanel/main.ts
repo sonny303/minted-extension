@@ -2236,8 +2236,6 @@ markSubmittedBtn.addEventListener("click", () => {
       return;
     }
   }
-
-  const buttonLabel = dupConfirmPending ? "Log anyway" : "Mark submitted";
   // Capture the task to close BEFORE the async work: a successful submit refetches
   // cases (mutating matchingPortalTasks), so read the id + title now.
   const closedTaskId = selectedTaskId;
@@ -2257,27 +2255,51 @@ markSubmittedBtn.addEventListener("click", () => {
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
       taskId: closedTaskId,
+      // S4.4: request the In Progress -> Submitted bump alongside the touch.
+      // Explicit and per-request — the R2 rule that the extension never
+      // changes status IMPLICITLY still holds.
+      bumpStatus: true,
     });
     if (!response.ok) {
       // A 404 here can now also mean a cross-org/invalid task_id — surface the
       // server's message as-is and let the human retry. Never auto-retry with
       // the task stripped.
+      //
+      // S4.4 offline/failure contract: the typed values stay on screen, the
+      // state says UNSENT in as many words, and the button becomes an explicit
+      // retry. The worker reuses the same idempotency id across retries, so a
+      // retry after a network drop replays the anchor rather than double-
+      // logging — the safe thing to do is press it again.
       markSubmittedBtn.disabled = false;
-      markSubmittedBtn.textContent = buttonLabel;
+      markSubmittedBtn.textContent = "Retry — mark submitted";
+      submitStatus.hidden = false;
+      submitStatus.classList.add("partial");
+      submitStatus.textContent = navigator.onLine
+        ? "Not logged yet — nothing was recorded on the case. Your entries are kept; press retry."
+        : "You're offline — nothing was recorded on the case. Your entries are kept; retry when you reconnect.";
       setError(mainError, response.error);
       return;
     }
     dupConfirmPending = false;
     dupWarn.hidden = true;
+    submitStatus.classList.remove("partial");
     submitDetails.hidden = true;
     taskLink.hidden = true;
     selectedTaskId = null;
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    submitStatus.textContent = closedTaskTitle
-      ? `Logged to the case. Task closed: ${closedTaskTitle}`
-      : "Logged to the case.";
+    // S4.4 — report the touch AND the bump, separately and honestly. A
+    // skipped bump is not a failed touch: the submission IS recorded, and the
+    // reason (illegal edge, role, concurrency) comes from the server.
+    const bump = response.data.statusBump;
+    const lines = [closedTaskTitle ? `Logged to the case. Task closed: ${closedTaskTitle}` : "Logged to the case."];
+    if (bump?.applied) lines.push("Case moved to Submitted.");
+    else if (bump && !bump.applied) {
+      lines.push(`Status unchanged — ${bump.reason ?? "the case couldn't be moved to Submitted."}`);
+    }
+    submitStatus.textContent = lines.join(" ");
+    submitStatus.classList.toggle("partial", bump != null && !bump.applied);
     // Point 6: drop the now-closed task from the case's portalTasks so a later
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);

@@ -13,6 +13,7 @@ import type {
   UserOrgMembership,
   QuickCardCatalogField,
   PortalRegistryRow,
+  StatusBumpMeta,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
@@ -113,6 +114,8 @@ export type BgRequest =
       payerReferenceId?: string | null;
       wipNote?: string | null;
       taskId?: string | null;
+      // S4.4: also move the case to Submitted, evidenced by this touch.
+      bumpStatus?: boolean;
     };
 
 // Worker → panel broadcast when the active-case context changes out from
@@ -193,7 +196,9 @@ export interface BgResponseMap {
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
-  MARK_SUBMITTED: SubmissionTouch;
+  // S4.4: the touch PLUS the opt-in bump's outcome. A skipped bump is not a
+  // failed touch — the panel reports both.
+  MARK_SUBMITTED: { touch: SubmissionTouch; statusBump: StatusBumpMeta | null };
 }
 
 // Typed wrapper so panel call sites get the right response type per request.

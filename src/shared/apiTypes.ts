@@ -347,6 +347,12 @@ export interface SubmissionTouchBody {
   task_id?: string | null;
   // Story 7: the attached PDF's filename → a second system_event.
   pdf_filename?: string | null;
+  // S4.4 (2026-07-28): also move the case In Progress -> Submitted through
+  // set_case_status, evidenced by this touch. OFF by default — the R2 rule
+  // that the extension never changes status IMPLICITLY still holds; this is
+  // explicit and per-request. The outcome rides meta.status_bump, never the
+  // touch itself, so a rejected transition can't look like a failed touch.
+  bump_status?: boolean;
 }
 
 // POST /api/cases/:id/touches with kind 'structured_touch' — E4.3 TE-5 /
@@ -372,6 +378,14 @@ export interface StructuredTouchBody {
 
 // Either kind on the same POST — the two bodies never mix fields.
 export type CaseTouchBody = SubmissionTouchBody | StructuredTouchBody;
+
+// S4.4 — the opt-in status bump's outcome, from the touch response's meta.
+// null = no bump was requested (or the server predates it).
+export interface StatusBumpMeta {
+  applied: boolean;
+  // Populated when applied === false: the server's caller-facing reason.
+  reason: string | null;
+}
 
 // The created touch, camelCased like every row in the envelope contract
 // (mintedpanel src/services/submissionTouches.ts). touchType/outcome are
