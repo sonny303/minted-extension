@@ -17,6 +17,8 @@ import type {
   ProviderProfileResponse,
   SubmissionTouch,
   UserOrgMembership,
+  QuickCardCatalogField,
+  ViewPrefsResponse,
 } from "../shared/apiTypes";
 import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
@@ -92,12 +94,19 @@ export async function listMyOrgs(): Promise<UserOrgMembership[]> {
   return data;
 }
 
-// GET /api/me/view-prefs — the user's saved detail-card field list; fields
-// null = nothing saved (caller falls back to the default set). User-scoped
-// like org discovery, but harmless with an x-org-id attached.
-export async function getViewPrefs(): Promise<string[] | null> {
-  const { data } = await apiFetch<{ fields: string[] | null }>("/api/me/view-prefs");
-  return data.fields;
+// GET /api/me/view-prefs — the user's saved detail-card field list PLUS the
+// server-derived catalog of selectable fields (one round trip; the offered set
+// is guaranteed to match what a PUT validates against). fields null = nothing
+// saved (caller falls back to the default set). User-scoped like org
+// discovery, but harmless with an x-org-id attached. A server that predates
+// the catalog (no `catalog` key) degrades to an empty catalog — callers fall
+// back to shape-only layout validation, never a broken card.
+export async function getViewPrefs(): Promise<ViewPrefsResponse> {
+  const { data } = await apiFetch<{
+    fields: string[] | null;
+    catalog?: QuickCardCatalogField[];
+  }>("/api/me/view-prefs");
+  return { fields: data.fields, catalog: Array.isArray(data.catalog) ? data.catalog : [] };
 }
 
 // PUT /api/me/view-prefs — save the field list (bare token keys, in order).

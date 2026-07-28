@@ -5,6 +5,7 @@
 // or API traffic, and tokens never appear in responses.
 import type { BgRequest, BgResponse, ProviderFacilitiesInfo, SearchResults } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
+import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
 import {
   ApiError,
@@ -106,14 +107,21 @@ function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
-// The saved quick-card layout, degraded to the default on anything invalid,
-// missing, or unreachable (TE-15: never a broken card — the prefs read is
-// cosmetic, never a blocker).
-async function readCardLayout(): Promise<{ fields: string[]; source: "saved" | "default" }> {
+// The saved quick-card layout + the served field catalog, degraded on
+// anything invalid, missing, or unreachable (TE-15: never a broken card — the
+// prefs read is cosmetic, never a blocker). The layout is validated against
+// the SERVED key set when the catalog came back; on a failed read the catalog
+// is empty and resolveLayout falls back to shape-only validation.
+async function readCardLayout(): Promise<{
+  layout: { fields: string[]; source: "saved" | "default" };
+  catalog: QuickCardCatalogField[];
+}> {
   try {
-    return resolveLayout(await getViewPrefs());
+    const prefs = await getViewPrefs();
+    const allowed = new Set(prefs.catalog.map((f) => f.key));
+    return { layout: resolveLayout(prefs.fields, allowed), catalog: prefs.catalog };
   } catch {
-    return resolveLayout(null);
+    return { layout: resolveLayout(null), catalog: [] };
   }
 }
 
@@ -255,10 +263,11 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // existing profile endpoint, never a second route). The raw token
       // payload stays in the worker; the panel receives display values only,
       // held in memory (TE-14).
-      const [{ profile, meta }, layout] = await Promise.all([
+      const [{ profile, meta }, { layout, catalog }] = await Promise.all([
         getProviderProfile(request.providerId),
         readCardLayout(),
       ]);
+      const servedLabels = new Map(catalog.map((f) => [f.key, f.label]));
       // The panel owns facility SELECTION (sole auto-select, or the user's
       // per-provider pick remembered in session storage), so the server's
       // resolved selected_facility_id isn't threaded through here — only the
@@ -266,7 +275,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
-        cards: projectQuickCards(profile.tokens, profile.unresolved, layout, todayIso()),
+        cards: projectQuickCards(profile.tokens, profile.unresolved, layout, todayIso(), servedLabels),
+        // The served picker catalog rides along so the Edit Layout form offers
+        // exactly what the server will accept — no mirrored allowlist.
+        catalog,
       };
       return info;
     }

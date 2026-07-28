@@ -16,18 +16,13 @@ import type {
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
-import { PREFIX_LABELS, labelForToken, looksLikeIsoDate, tokenPrefix } from "../shared/detailFields";
+import { looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortal, type PortalConfig } from "../shared/portals";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
-import {
-  MAX_LAYOUT_FIELDS,
-  QUICK_CARD_FIELD_CATALOG,
-  providerWebappPath,
-  type QuickCardField,
-  type QuickCards,
-} from "../shared/quickCards";
+import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
+import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
 import { accountGreeting } from "../shared/greeting";
 import { providerDisplayName } from "../shared/providerName";
@@ -311,6 +306,10 @@ function renderProviderCard(provider: ProviderListItem | null): void {
 // audited profile read. Held so the Edit Layout form can pre-check the fields
 // the cards currently show. Values are in-memory only.
 let currentCards: QuickCards | null = null;
+// The served picker catalog (rides GET_PROVIDER_FACILITIES). Empty = the
+// catalog read failed — the picker renders an honest failure note instead of
+// a stale local list.
+let currentCatalog: QuickCardCatalogField[] = [];
 
 // One ID-grid entry: monospace value with 1-click hover-copy, or an honest
 // empty (muted em-dash, plus the profile's unresolved reason as its tooltip).
@@ -425,38 +424,127 @@ function closeViewSettings(): void {
   viewSettingsSave.textContent = "Save layout";
 }
 
-// The Edit Layout form (F4.3.5 3.3): one checkbox per CLOSED-CATALOG field
-// (TE-16 — the picker offers nothing the server wouldn't accept; sensitive/
-// vault fields are structurally absent from the catalog), grouped by token
-// prefix, pre-checked for the current layout. Checkbox DOM order is the saved
-// order; the cap is defaults + up to 3 custom (MAX_LAYOUT_FIELDS).
-function openViewSettings(cards: QuickCards): void {
-  viewSettingsFields.replaceChildren();
-  setError(viewSettingsError, null);
-  const shown = new Set(cards.layout);
-  let group: string | null = null;
-  for (const key of QUICK_CARD_FIELD_CATALOG) {
-    const prefix = tokenPrefix(key);
-    if (prefix !== group) {
-      group = prefix;
-      const heading = document.createElement("p");
-      heading.className = "view-settings-group";
-      heading.textContent = PREFIX_LABELS[prefix] ?? prefix;
-      viewSettingsFields.append(heading);
-    }
-    const row = document.createElement("label");
-    row.className = "view-settings-field";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = key;
-    checkbox.checked = shown.has(key);
-    const text = document.createElement("span");
-    text.textContent = labelForToken(key);
-    row.append(checkbox, text);
-    viewSettingsFields.append(row);
-  }
-  viewSettings.hidden = false;
+// The Edit Layout form (S2.2): search over collapsible groups rendered from
+// the SERVED catalog (GET /api/me/view-prefs `catalog` — schema-derived
+// server-side, so the picker offers exactly what a PUT will accept; no local
+// allowlist survives). Checkbox DOM order within the render is the saved
+// order source; there is no layout-length cap (S2.1) — the closed served key
+// set bounds what a layout can contain.
+const viewSettingsSearch = el<HTMLInputElement>("view-settings-search");
+
+interface PickerGroup {
+  group: string;
+  groupLabel: string;
+  fields: QuickCardCatalogField[];
 }
+
+function groupCatalog(catalog: QuickCardCatalogField[]): PickerGroup[] {
+  const groups: PickerGroup[] = [];
+  const byKey = new Map<string, PickerGroup>();
+  for (const field of catalog) {
+    let group = byKey.get(field.group);
+    if (!group) {
+      group = { group: field.group, groupLabel: field.groupLabel, fields: [] };
+      byKey.set(field.group, group);
+      groups.push(group);
+    }
+    group.fields.push(field);
+  }
+  return groups;
+}
+
+// The picker's selection state, seeded from the current layout on open and
+// mutated by checkbox clicks. Kept OUTSIDE the DOM so a search re-render
+// never loses picks made on rows the filter currently hides.
+let pickerSelection = new Set<string>();
+
+function renderPickerRows(query: string): void {
+  viewSettingsFields.replaceChildren();
+  const q = query.trim().toLowerCase();
+  const groups = groupCatalog(currentCatalog);
+  let anyShown = false;
+
+  for (const group of groups) {
+    const matching = q
+      ? group.fields.filter(
+          (f) =>
+            f.label.toLowerCase().includes(q) ||
+            f.key.toLowerCase().includes(q) ||
+            group.groupLabel.toLowerCase().includes(q),
+        )
+      : group.fields;
+    // Empty groups hide (S2.2) — under a query AND when a group is empty.
+    if (matching.length === 0) continue;
+    anyShown = true;
+
+    const details = document.createElement("details");
+    details.className = "view-settings-groupbox";
+    // Matching groups auto-expand under a query; with no query, groups with
+    // any picked field open, the rest start collapsed.
+    const pickedCount = group.fields.filter((f) => pickerSelection.has(f.key)).length;
+    details.open = q !== "" || pickedCount > 0;
+
+    const summary = document.createElement("summary");
+    summary.className = "view-settings-group";
+    const name = document.createElement("span");
+    name.textContent = group.groupLabel;
+    const count = document.createElement("span");
+    // "3 of 45" in primary when any picked, else "of 45" subtle (S2.2).
+    count.className = pickedCount > 0 ? "view-settings-count picked" : "view-settings-count";
+    count.textContent = pickedCount > 0 ? `${pickedCount} of ${group.fields.length}` : `of ${group.fields.length}`;
+    summary.append(name, count);
+    details.append(summary);
+
+    for (const field of matching) {
+      const row = document.createElement("label");
+      row.className = "view-settings-field";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = field.key;
+      checkbox.checked = pickerSelection.has(field.key);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) pickerSelection.add(field.key);
+        else pickerSelection.delete(field.key);
+        // Refresh the group counts without a full re-render churn.
+        const picked = group.fields.filter((f) => pickerSelection.has(f.key)).length;
+        count.className = picked > 0 ? "view-settings-count picked" : "view-settings-count";
+        count.textContent = picked > 0 ? `${picked} of ${group.fields.length}` : `of ${group.fields.length}`;
+      });
+      const text = document.createElement("span");
+      text.textContent = field.label;
+      row.append(checkbox, text);
+      details.append(row);
+    }
+    viewSettingsFields.append(details);
+  }
+
+  if (!anyShown) {
+    const empty = document.createElement("p");
+    empty.className = "view-settings-empty";
+    // The no-results state renders the query back (S2.2).
+    empty.textContent = q
+      ? `No fields match "${query.trim()}".`
+      : "The field list couldn't be loaded — close and reopen the panel to retry.";
+    viewSettingsFields.append(empty);
+  }
+}
+
+function openViewSettings(cards: QuickCards): void {
+  setError(viewSettingsError, null);
+  viewSettingsSearch.value = "";
+  // Seed the selection from the current layout, keeping ONLY keys the served
+  // catalog still offers (a key the server no longer serves can't be re-saved
+  // anyway — the PUT would 422).
+  const served = new Set(currentCatalog.map((f) => f.key));
+  pickerSelection = new Set(cards.layout.filter((key) => served.has(key)));
+  renderPickerRows("");
+  viewSettings.hidden = false;
+  viewSettingsSearch.focus();
+}
+
+viewSettingsSearch.addEventListener("input", () => {
+  if (!viewSettings.hidden) renderPickerRows(viewSettingsSearch.value);
+});
 
 viewSettingsBtn.addEventListener("click", () => {
   const cards = currentCards;
@@ -470,23 +558,22 @@ viewSettingsBtn.addEventListener("click", () => {
 
 viewSettingsCancel.addEventListener("click", () => closeViewSettings());
 
-// Save the checked fields as the layout (PUT /api/me/view-prefs — server-side,
+// Save the picked fields as the layout (PUT /api/me/view-prefs — server-side,
 // so it persists across machines and worker restarts, TS-102), then refetch
-// the profile so the cards re-project under the new layout.
+// the profile so the cards re-project under the new layout. Order: the served
+// catalog's listing order for newly-picked fields, with the previously saved
+// relative order preserved for fields that were already in the layout.
 viewSettingsSave.addEventListener("click", () => {
   const providerId = selectedProviderId();
-  const fields = Array.from(
-    viewSettingsFields.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked"),
-  ).map((box) => box.value);
+  const cards = currentCards;
+  const kept = (cards?.layout ?? []).filter((key) => pickerSelection.has(key));
+  const keptSet = new Set(kept);
+  const added = currentCatalog
+    .map((f) => f.key)
+    .filter((key) => pickerSelection.has(key) && !keptSet.has(key));
+  const fields = [...kept, ...added];
   if (fields.length === 0) {
     setError(viewSettingsError, "Pick at least one field to show.");
-    return;
-  }
-  if (fields.length > MAX_LAYOUT_FIELDS) {
-    setError(
-      viewSettingsError,
-      `That's too many fields — the cards show at most ${MAX_LAYOUT_FIELDS} (the defaults plus up to 3 more).`,
-    );
     return;
   }
   const generation = loadGeneration;
@@ -1322,8 +1409,9 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   facilities = response.data.facilities;
   needsFacility = response.data.needsFacility;
   facilitiesLoaded = true;
-  // The quick cards ride on the same (single, audited) profile fetch as the
-  // facility set.
+  // The quick cards AND the served picker catalog ride on the same (single,
+  // audited) profile fetch as the facility set.
+  currentCatalog = response.data.catalog;
   renderQuickCards(response.data.cards);
 
   if (facilities.length === 0) {

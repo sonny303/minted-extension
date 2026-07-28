@@ -36,6 +36,25 @@ export const FIXTURES = {
   UNTRAINED_MAP_ID: "fm-untrained-1",
 };
 
+// A representative slice of the served quick-card catalog (the real one is
+// derived from get_sop_field_tokens() panel-side; 117 fields). Enough here to
+// exercise grouping, labels, and the ssnLast4-is-offered contract.
+const QUICK_CARD_CATALOG = [
+  { key: "provider.npi", label: "NPI (Type 1)", group: "provider", groupLabel: "Provider" },
+  { key: "provider.caqhId", label: "CAQH ID", group: "provider", groupLabel: "Provider" },
+  { key: "provider.ssnLast4", label: "SSN (last 4)", group: "provider", groupLabel: "Provider" },
+  { key: "provider.firstName", label: "First name", group: "provider", groupLabel: "Provider" },
+  { key: "group.tin", label: "Tax ID (TIN)", group: "group", groupLabel: "Provider group" },
+  { key: "group.npiType2", label: "Group NPI (Type 2)", group: "group", groupLabel: "Provider group" },
+  {
+    key: "license.licenseNumber",
+    label: "License number",
+    group: "license",
+    groupLabel: "State license",
+  },
+  { key: "user.name", label: "Name", group: "user", groupLabel: "You" },
+];
+
 const PROVIDERS = [
   {
     id: FIXTURES.PROVIDER_ID,
@@ -289,18 +308,23 @@ export async function createMockPanelApi(options = {}) {
     // --- /api/me/view-prefs (E4.3 TE-15: user-scoped, closed catalog) ---
     if (/^\/api\/me\/view-prefs\/?$/.test(url.pathname)) {
       if (method === "GET") {
-        return envelope(res, 200, { fields: state.viewPrefs.get(FIXTURES.USER_ID) ?? null });
+        // The schema-derived catalog rides the GET (2026-07-28) — a slice of
+        // it, enough to exercise the picker contract: grouped fields incl.
+        // the now-offered ssnLast4.
+        return envelope(res, 200, {
+          fields: state.viewPrefs.get(FIXTURES.USER_ID) ?? null,
+          catalog: QUICK_CARD_CATALOG,
+        });
       }
       if (method === "PUT") {
         const body = await readBody(req);
         const fields = body?.fields;
+        const allowed = new Set(QUICK_CARD_CATALOG.map((f) => f.key));
+        // No length cap (S2.1); membership in the DERIVED catalog is the rule.
         if (
           !Array.isArray(fields) ||
-          fields.length > 32 ||
           new Set(fields).size !== fields.length ||
-          fields.some(
-            (f) => typeof f !== "string" || f === "provider.ssnLast4" || !f.includes("."),
-          )
+          fields.some((f) => typeof f !== "string" || !allowed.has(f))
         ) {
           return envelope(res, 422, null, "unknown or excluded field key");
         }

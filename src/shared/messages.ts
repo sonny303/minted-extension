@@ -11,6 +11,7 @@ import type {
   ProviderProfileFacility,
   SubmissionTouch,
   UserOrgMembership,
+  QuickCardCatalogField,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
@@ -129,6 +130,9 @@ export interface AuthState {
 // deliberately not carried here.
 export interface ProviderFacilitiesInfo {
   facilities: ProviderProfileFacility[];
+  // The server-derived quick-card field catalog (GET /api/me/view-prefs) —
+  // the Edit Layout picker renders from THIS, never a local allowlist.
+  catalog: QuickCardCatalogField[];
   // meta.needs_facility: several facilities, none picked — the fill gate
   // stays closed until the user picks ("Pick a location first.").
   needsFacility: boolean;

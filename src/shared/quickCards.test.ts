@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ProfileToken, UnresolvedToken } from "./apiTypes";
 import {
   DEFAULT_QUICK_CARD_LAYOUT,
-  MAX_LAYOUT_FIELDS,
-  QUICK_CARD_FIELD_CATALOG,
   expiryStatus,
-  isQuickCardField,
   isType2Field,
   projectQuickCards,
   providerWebappPath,
@@ -36,41 +33,57 @@ const tokens: ProfileToken[] = [
 
 const unresolved: UnresolvedToken[] = [{ token: "provider.caqhId", reason: "empty on provider" }];
 
-describe("closed catalog (TE-16 mirror)", () => {
-  it("structurally excludes ssnLast4 and every vault/sensitive key", () => {
-    expect(isQuickCardField("provider.ssnLast4")).toBe(false);
-    expect(QUICK_CARD_FIELD_CATALOG).not.toContain("provider.ssnLast4");
-    expect(isQuickCardField("provider.npi")).toBe(true);
-  });
-
-  it("keeps the default layout inside the catalog", () => {
-    for (const key of DEFAULT_QUICK_CARD_LAYOUT) expect(isQuickCardField(key)).toBe(true);
-  });
-
-  it("caps a layout at the defaults plus 3 custom fields", () => {
-    expect(MAX_LAYOUT_FIELDS).toBe(DEFAULT_QUICK_CARD_LAYOUT.length + 3);
-  });
-});
+// The catalog is SERVED (GET /api/me/view-prefs `catalog`) — this module no
+// longer carries a mirror, so there is nothing here to pin about which keys
+// exist. Membership enforcement lives server-side (a PUT naming a non-catalog
+// key 422s); resolveLayout only validates against the served set, below.
 
 describe("resolveLayout (TE-15 degrade — never a broken card)", () => {
+  const SERVED = new Set([
+    "provider.npi",
+    "provider.caqhId",
+    "provider.ssnLast4",
+    "group.tin",
+    "group.npiType2",
+    "license.licenseNumber",
+  ]);
+
   it("returns a valid saved layout in the user's order", () => {
     const saved = ["group.tin", "provider.npi"];
-    expect(resolveLayout(saved)).toEqual({ fields: saved, source: "saved" });
+    expect(resolveLayout(saved, SERVED)).toEqual({ fields: saved, source: "saved" });
+  });
+
+  it("accepts ssnLast4 when the served catalog offers it (2026-07-28 decision)", () => {
+    const saved = ["provider.ssnLast4", "provider.npi"];
+    expect(resolveLayout(saved, SERVED)).toEqual({ fields: saved, source: "saved" });
   });
 
   it.each([
     ["null", null],
     ["not an array", "provider.npi"],
     ["empty", []],
-    ["unknown key", ["provider.npi", "provider.medicareId"]],
-    ["excluded key", ["provider.ssnLast4"]],
+    ["a key the served catalog lacks", ["provider.npi", "provider.medicareId"]],
     ["duplicate", ["provider.npi", "provider.npi"]],
     ["non-string", ["provider.npi", 5]],
   ])("degrades %s to the default layout", (_label, stored) => {
-    expect(resolveLayout(stored)).toEqual({
+    expect(resolveLayout(stored, SERVED)).toEqual({
       fields: [...DEFAULT_QUICK_CARD_LAYOUT],
       source: "default",
     });
+  });
+
+  it("with NO served set (catalog fetch failed) validates shape only — a saved layout survives", () => {
+    // The keys were server-validated at PUT time; a failed catalog read must
+    // not nuke the layout. Shape problems still degrade.
+    const saved = ["anything.theServerAccepted", "group.tin"];
+    expect(resolveLayout(saved, null)).toEqual({ fields: saved, source: "saved" });
+    expect(resolveLayout(["dup", "dup"], null).source).toBe("default");
+    expect(resolveLayout([""], null).source).toBe("default");
+  });
+
+  it("with an EMPTY served set behaves like no set (a degraded server never wipes layouts)", () => {
+    const saved = ["group.tin"];
+    expect(resolveLayout(saved, new Set())).toEqual({ fields: saved, source: "saved" });
   });
 });
 
@@ -133,6 +146,17 @@ describe("projectQuickCards (TS-101)", () => {
     ];
     const projected = projectQuickCards(legacyTokens, [], layout, TODAY);
     expect(projected.license.number.value).toBe("LEGACY-1");
+  });
+});
+
+describe("served labels", () => {
+  it("prefers the served catalog label over the local derivation, per key", () => {
+    const layout = { fields: ["provider.npi", "group.tin"], source: "saved" as const };
+    const labels = new Map([["provider.npi", "NPI (Type 1)"]]);
+    const projected = projectQuickCards(tokens, [], layout, TODAY, labels);
+    expect(projected.type1Fields.find((f) => f.key === "provider.npi")?.label).toBe("NPI (Type 1)");
+    // group.tin has no served label here -> falls back to the local rule.
+    expect(projected.type2Fields.find((f) => f.key === "group.tin")?.label).toBe("Tax ID (TIN)");
   });
 });
 

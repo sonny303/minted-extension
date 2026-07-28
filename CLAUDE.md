@@ -104,8 +104,14 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   (Panel `src/services/fillSessions.ts` / `src/services/submissionTouches.ts`.)
 - **Field maps:** `GET /api/portal-field-maps?portal_key=…` is a shared
   catalog — `orgId: null` rows are global portal truths, org rows are
-  overrides. The extension fills `proposed` AND `approved` maps (only
-  `retired` is skipped). (Panel `src/services/portalFieldMaps.ts`.)
+  overrides. **ONLY `approved` maps fill** (S5.1, 2026-07-28 — supersedes the
+  v0 proposed-fills-too posture): a proposed row is an unreviewed observation
+  awaiting the panel trainer; it counts as a gap in coverage, never a fill.
+  `POST /api/portal-field-maps` is the PROPOSE-ONLY write — the server forces
+  `status 'proposed'`, `source 'manual'`, `token null` under the caller's org
+  whatever the body says; idempotent on `(portal_key, selector)` across
+  global + own-org rows (200 on a repeat, 201 first sighting).
+  (Panel `src/services/portalFieldMaps.ts`.)
 - **SET_ACTIVE_CASE handoff (E4.3 TE-1):** the webapp sends
   `{ type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl }` through
   `externally_connectable` — IDENTIFIERS + URL ONLY, never a profile/token
@@ -137,13 +143,20 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   (ids + display fields only); `GET /api/providers?search=` is the provider
   half, the PHI-minimized list projection. (Panel
   `src/services/providerCases.ts` `searchOrgCases`, `src/services/providers.ts`.)
-- **View prefs = quick-card layout (E4.3 TE-15/TE-16):**
-  `GET/PUT /api/me/view-prefs` (user-scoped) stores `{ fields: string[] }` of
-  CLOSED-catalog keys (≤32, deduped, ordered; excluded keys like
-  `provider.ssnLast4` are a 422 — they are structurally absent from the
-  catalog). `src/shared/quickCards.ts` mirrors the catalog verbatim (panel
-  `src/lib/quickCardCatalog.ts`) and degrades any invalid stored layout to
-  the default — never a broken card.
+- **View prefs = quick-card layout + SERVED catalog (2026-07-28, supersedes
+  the TE-16 mirror):** `GET /api/me/view-prefs` (user-scoped) returns
+  `{ fields: string[] | null, catalog: QuickCardCatalogField[] }` — the saved
+  layout plus the schema-derived selectable-field catalog
+  (`{key,label,group,groupLabel}`, 117 fields, derived panel-side from the
+  SAME `get_sop_field_tokens()` the profile resolves values from). The picker
+  renders from the served catalog; `src/shared/quickCards.ts` carries NO
+  mirror anymore. PUT validates against the same derived set (a non-catalog
+  key 422s; there is NO length cap). `provider.ssnLast4` is a legitimate
+  catalog field (product decision 2026-07-28); the FULL SSN remains
+  structurally unreachable (the vault is outside the token catalog's sweep).
+  `resolveLayout` degrades any invalid stored layout to the default — never a
+  broken card — and validates keys against the served set only when the
+  catalog read succeeded (a failed read must not wipe a saved layout).
 
 ## Locked product rules
 
@@ -152,10 +165,18 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
 - **Case selection is REQUIRED before fill** (locked decision) — via the
   E4.3 handoff, the unified search, the active-cases list, the NBA handback,
   or the manual picker; all funnel into the same active-case state.
-- **R6 read-only boundary (E4.3):** the ONLY writes are the manual touch POST
-  (both kinds) and the user-scoped layout PUT. No task-state writes, no
-  mapping writes (fix-it hands off to the platform flows), no auto-submit,
-  no auto-touch.
+- **Write boundary (widened 2026-07-28, supersedes the E4.3 R6 read-only
+  posture — panel-first coordinated change, both repos in one session):** the
+  sanctioned writes are the manual touch POST (both kinds; a
+  `portal_submission` may carry the opt-in `bump_status: true`, the ONE
+  explicit status transition — In Progress → Submitted via the panel's
+  `set_case_status`, evidenced by the touch; the outcome rides
+  `meta.status_bump`, a skipped bump is reported, never silent), the
+  user-scoped layout PUT, the PROPOSE-ONLY field-map POST (never an
+  approval), and the CAQH attestation POST
+  (`/api/providers/:id/caqh-attestation`). Still NO task-state writes, no
+  mapping approvals, no auto-submit, no auto-touch, no IMPLICIT status
+  change.
 - **Never fill from expired context:** the active-case record expires on
   bound-tab close or 60 minutes idle; the panel closes the gate AND the
   worker refuses the FILL. Expiry/absence/mismatch are explicit UX states,

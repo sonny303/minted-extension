@@ -356,20 +356,39 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
 
 describe("TS-102 — layout persists server-side across a worker restart", () => {
   it("saves, then reads the same layout back with no client-side cache", async () => {
-    const layout = ["provider.npi", "group.tin", "provider.deaNumber"];
+    // Keys must be in the SERVED catalog now (schema-derived, 2026-07-28).
+    const layout = ["provider.npi", "group.tin", "provider.caqhId"];
     await putViewPrefs(layout);
     // A worker restart holds NO state — the next read IS the restart path.
-    expect(await getViewPrefs()).toEqual(layout);
+    const prefs = await getViewPrefs();
+    expect(prefs.fields).toEqual(layout);
     expect(mock.state.viewPrefs.get("user-kansas")).toEqual(layout);
   });
 
-  it("the server 422s an excluded key (ssnLast4 is structurally absent)", async () => {
-    await expect(putViewPrefs(["provider.ssnLast4"])).rejects.toThrow(ApiError);
+  it("GET serves the schema-derived catalog beside the layout (one round trip)", async () => {
+    const prefs = await getViewPrefs();
+    expect(prefs.catalog.length).toBeGreaterThan(0);
+    const keys = prefs.catalog.map((f) => f.key);
+    // ssnLast4 is OFFERED as of 2026-07-28 (product decision) — the profile
+    // already returns it and payer forms ask for it. The FULL SSN has no
+    // token to name (the vault is outside get_sop_field_tokens' sweep).
+    expect(keys).toContain("provider.ssnLast4");
+    expect(prefs.catalog.every((f) => f.label && f.groupLabel)).toBe(true);
+  });
+
+  it("a PUT naming ssnLast4 now validates; a non-catalog key still 422s", async () => {
+    await putViewPrefs(["provider.ssnLast4", "provider.npi"]);
+    expect(mock.state.viewPrefs.get("user-kansas")).toEqual([
+      "provider.ssnLast4",
+      "provider.npi",
+    ]);
+    await expect(putViewPrefs(["provider.notARealColumn"])).rejects.toThrow(ApiError);
   });
 
   it("an invalid stored layout degrades to the default, never a broken card", () => {
-    expect(resolveLayout(["provider.npi", "bogus.key"]).source).toBe("default");
-    expect(resolveLayout(null).source).toBe("default");
+    const served = new Set(["provider.npi"]);
+    expect(resolveLayout(["provider.npi", "bogus.key"], served).source).toBe("default");
+    expect(resolveLayout(null, served).source).toBe("default");
   });
 });
 

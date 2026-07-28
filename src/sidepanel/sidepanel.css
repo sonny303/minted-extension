@@ -1565,3 +1565,62 @@ button.link:hover {
   width: auto;
   font-size: 11.5px;
 }
+
+/* ---- S2.2: served-catalog layout picker — search + collapsible groups ---- */
+.view-settings-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--mp-ink);
+  background: var(--mp-surface, #FFFFFF);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-control);
+}
+.view-settings-search:focus {
+  outline: none;
+  box-shadow: var(--mp-focus);
+}
+.view-settings-groupbox {
+  border-top: 1px solid var(--mp-border);
+}
+.view-settings-groupbox:first-child {
+  border-top: 0;
+}
+.view-settings-groupbox > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 2px;
+}
+.view-settings-groupbox > summary::-webkit-details-marker {
+  display: none;
+}
+.view-settings-groupbox > summary::after {
+  content: "▾";
+  font-size: 10px;
+  color: var(--mp-ink-secondary);
+  transition: transform 0.12s ease;
+}
+.view-settings-groupbox:not([open]) > summary::after {
+  transform: rotate(-90deg);
+}
+.view-settings-count {
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+  white-space: nowrap;
+}
+.view-settings-count.picked {
+  color: var(--mp-primary);
+  font-weight: 600;
+}
+.view-settings-empty {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--mp-ink-secondary);
+}

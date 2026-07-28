@@ -95,6 +95,25 @@ export interface ProviderProfileResponse {
 // GET /api/me/orgs — the caller's own memberships (user-scoped; works BEFORE
 // an x-org-id can be sent, which is the point). Mirrors mintedpanel
 // src/services/orgMemberships.ts.
+// GET /api/me/view-prefs — the saved layout PLUS the server-derived catalog of
+// selectable quick-card fields (schema-derived panel-side from
+// get_sop_field_tokens(), 2026-07-28 — supersedes the closed-allowlist mirror
+// this repo used to carry in quickCards.ts). The catalog is the SINGLE source
+// for the picker AND the PUT validator, served together so they can never
+// disagree. `group` is the token family (provider/group/facility/license/
+// assignment/groupInsurance/user); `groupLabel` is its section heading.
+export interface QuickCardCatalogField {
+  key: string;
+  label: string;
+  group: string;
+  groupLabel: string;
+}
+
+export interface ViewPrefsResponse {
+  fields: string[] | null;
+  catalog: QuickCardCatalogField[];
+}
+
 export interface UserOrgMembership {
   orgId: string;
   orgName: string;
