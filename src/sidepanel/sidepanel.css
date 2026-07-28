@@ -1828,3 +1828,75 @@ button.link:hover {
 #submit-status.partial {
   color: #92400e;
 }
+
+/* ---- S5.4: capture ---- */
+.capture {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+}
+.capture-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.capture-summary {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mp-ink);
+}
+.capture-restored {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+.capture-rows {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.capture-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--mp-radius-control);
+  background: #fbfbf9;
+}
+/* A gap is surfaced, never blocking — amber, not red. */
+.capture-row.gap {
+  background: #fef3c7;
+}
+.capture-row-label {
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.capture-row-token {
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+.capture-row-evidence {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--mp-primary);
+}
+.capture-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+.capture-sent {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}

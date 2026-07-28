@@ -180,6 +180,21 @@
           </div>
 
           <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
+
+          <!-- S5.4: capture — turn a form we don't know into one we do. -->
+          <div id="capture-section" class="capture" hidden>
+            <div class="capture-head">
+              <p id="capture-summary" class="capture-summary"></p>
+              <button id="capture-start" class="link" type="button">Capture this form</button>
+            </div>
+            <p id="capture-restored" class="capture-restored" hidden></p>
+            <div id="capture-rows" class="capture-rows"></div>
+            <div id="capture-actions" class="capture-actions" hidden>
+              <button id="capture-send" class="secondary" type="button">Send for approval</button>
+              <button id="capture-clear" class="link" type="button">Discard</button>
+            </div>
+            <p id="capture-sent" class="capture-sent" hidden></p>
+          </div>
           <p id="fill-note" class="btn-note" hidden>Keep this tab open while filling.</p>
 
           <div id="fill-results" hidden>

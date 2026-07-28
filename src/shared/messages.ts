@@ -17,6 +17,7 @@ import type {
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
+import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 
@@ -43,6 +44,15 @@ export type BgRequest =
   // The selected case's context (identity header, open tasks, pipeline state,
   // tracking ID, latest note/touch) — a read-only, org-scoped fetch.
   | { type: "GET_CASE_CONTEXT"; caseId: string }
+  // S5.2/S5.4 — capture. START scans the bound tab's form shape (labels and
+  // selectors ONLY) and asks the server what it already knows about each
+  // label; SEND proposes the undecided rows; the session survives a worker
+  // restart in chrome.storage.session (nothing PHI-bearing is ever in it).
+  | { type: "GET_CAPTURE" }
+  | { type: "START_CAPTURE"; tabId: number; portalKey: string; templateStepId?: string | null }
+  | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
+  | { type: "SEND_CAPTURE" }
+  | { type: "CLEAR_CAPTURE" }
   // S4.3: tick one SOP step complete. The server enforces the ordering rule
   // and returns a 409 naming the blocker — the panel never re-derives it.
   | { type: "COMPLETE_TASK_STEP"; taskId: string; stepId: string }
@@ -179,6 +189,11 @@ export interface BgResponseMap {
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;
+  GET_CAPTURE: CaptureSession | null;
+  START_CAPTURE: CaptureSession;
+  SET_CAPTURE_CHOICE: CaptureSession;
+  SEND_CAPTURE: CaptureSession;
+  CLEAR_CAPTURE: null;
   COMPLETE_TASK_STEP: { allDone: boolean };
   GET_PROVIDER_FACILITIES: ProviderFacilitiesInfo;
   GET_SELECTED_PROVIDER: string | null;

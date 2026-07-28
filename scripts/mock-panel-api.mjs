@@ -260,6 +260,7 @@ export async function createMockPanelApi(options = {}) {
     // Request log so tests can assert what was sent.
     requests: [],
     completedSteps: new Set(),
+    proposedMaps: new Map(),
   };
 
   const server = createServer((req, res) => {
@@ -593,6 +594,41 @@ export async function createMockPanelApi(options = {}) {
 
     // --- /api/portal-field-maps ---
     if (/^\/api\/portal-field-maps\/?$/.test(url.pathname)) {
+      // S5.1/S5.3: propose-only. The row is always proposed/manual/token-null;
+      // the response carries the org's learned suggestion for the label.
+      if (method === "POST") {
+        const body = (await readBody(req)) ?? {};
+        if (typeof body.portal_key !== "string" || !body.portal_key.trim()) {
+          return envelope(res, 422, null, "portal_key is required");
+        }
+        if (typeof body.selector !== "string" || !body.selector.trim()) {
+          return envelope(res, 422, null, "selector is required");
+        }
+        const label = String(body.field_label ?? "").trim().toLowerCase();
+        const key = `${body.portal_key}:${body.selector}`;
+        let map = state.proposedMaps.get(key);
+        if (!map) {
+          map = {
+            id: `fm-proposed-${state.proposedMaps.size + 1}`,
+            orgId: FIXTURES.KANSAS_ORG,
+            portalKey: body.portal_key,
+            selector: body.selector,
+            fieldLabel: label || null,
+            source: "manual",
+            token: null,
+            status: "proposed",
+          };
+          state.proposedMaps.set(key, map);
+        }
+        // A tiny learned dictionary so the panel's evidence path is exercised.
+        const learned = { npi: { token: "provider.npi", portalCount: 3 } }[label];
+        return envelope(res, 201, {
+          map,
+          suggestion: learned
+            ? { token: learned.token, portalCount: learned.portalCount, fromDictionary: false }
+            : null,
+        });
+      }
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
       const portalKey = url.searchParams.get("portal_key");
       let rows = state.fieldMaps;

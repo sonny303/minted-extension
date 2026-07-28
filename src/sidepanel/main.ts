@@ -29,6 +29,13 @@ import type { ActiveCaseRecord } from "../shared/handoff";
 import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
+import {
+  canSendCapture,
+  captureCounts,
+  recognitionSummary,
+  restoredSummary,
+  type CaptureSession,
+} from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -109,6 +116,15 @@ const provenChip = el<HTMLElement>("proven-chip");
 const driftStrip = el<HTMLElement>("drift-strip");
 const unprovenNote = el<HTMLElement>("unproven-note");
 const dupPickup = el<HTMLElement>("dup-pickup");
+const captureSection = el<HTMLElement>("capture-section");
+const captureSummary = el<HTMLElement>("capture-summary");
+const captureStart = el<HTMLButtonElement>("capture-start");
+const captureRestored = el<HTMLElement>("capture-restored");
+const captureRows = el<HTMLElement>("capture-rows");
+const captureActions = el<HTMLElement>("capture-actions");
+const captureSend = el<HTMLButtonElement>("capture-send");
+const captureClear = el<HTMLButtonElement>("capture-clear");
+const captureSent = el<HTMLElement>("capture-sent");
 const coverageCount = el<HTMLElement>("coverage-count");
 const coverageGaps = el<HTMLUListElement>("coverage-gaps");
 const refreshMapsBtn = el<HTMLButtonElement>("refresh-maps-btn");
@@ -1894,6 +1910,7 @@ async function detectPortal(): Promise<void> {
   updateFillReady();
   // The active-cases heading + THIS PAGE chips reflect the detected page.
   renderActiveCases();
+  renderCapture();
 }
 
 // The queue is the landing state: visible only while NOTHING is in hand
@@ -1926,6 +1943,7 @@ function showMain(auth: AuthState): void {
   // runs AFTER orgs load — the org validation needs the membership list.
   void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
   void detectPortal();
+  void restoreCapture();
 }
 
 // S1.5 — the account row: a 26px forest avatar circle with the user's white
@@ -2991,6 +3009,131 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   actions.append(nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`));
   card.append(actions);
   nbaSection.append(card);
+}
+
+// ---------------------------------------------------------------------------
+// S5.4 — capture: "we recognise N of M" with per-row evidence, gaps that are
+// actionable but never blocking, and a send that works even when we
+// recognised nothing (a form we understand none of is the one worth
+// capturing). Approving stays in the webapp: this only proposes.
+// ---------------------------------------------------------------------------
+
+let captureSession: CaptureSession | null = null;
+
+function renderCapture(): void {
+  // Capture is offered whenever a recognized portal page is in the active tab.
+  captureSection.hidden = portal == null || portalTabId == null;
+  if (captureSection.hidden) return;
+
+  const counts = captureCounts(captureSession);
+  captureSummary.textContent = captureSession
+    ? recognitionSummary(counts)
+    : "Not captured yet — read this form's fields into Minted Panel.";
+  captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+
+  captureRows.replaceChildren();
+  captureActions.hidden = !canSendCapture(captureSession);
+  captureSend.disabled = false;
+  captureSent.hidden = counts.sent === 0;
+  if (counts.sent > 0) {
+    captureSent.textContent = `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
+  }
+  if (captureSession == null) return;
+
+  for (const row of captureSession.rows) {
+    const item = document.createElement("div");
+    item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
+
+    const label = document.createElement("span");
+    label.className = "capture-row-label";
+    label.textContent = row.label || row.selector;
+    item.append(label);
+
+    const value = document.createElement("span");
+    value.className = "capture-row-token mono";
+    value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
+    item.append(value);
+
+    if (row.evidence) {
+      const evidence = document.createElement("span");
+      evidence.className = "capture-row-evidence";
+      evidence.textContent = row.evidence;
+      item.append(evidence);
+    }
+
+    if (row.sent) {
+      const chip = document.createElement("span");
+      chip.className = "pill";
+      chip.textContent = "Sent";
+      item.append(chip);
+    }
+    captureRows.append(item);
+  }
+}
+
+captureStart.addEventListener("click", () => {
+  const tabId = portalTabId;
+  const activePortal = portal;
+  if (tabId == null || activePortal == null) return;
+  const generation = loadGeneration;
+  captureStart.disabled = true;
+  captureStart.textContent = "Reading the form…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "START_CAPTURE",
+      tabId,
+      portalKey: activePortal.key,
+    });
+    captureStart.disabled = false;
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      captureStart.textContent = "Capture this form";
+      setError(mainError, response.error);
+      return;
+    }
+    captureSession = response.data;
+    captureRestored.hidden = true;
+    renderCapture();
+  })();
+});
+
+captureSend.addEventListener("click", () => {
+  const generation = loadGeneration;
+  captureSend.disabled = true;
+  captureSend.textContent = "Sending…";
+  void (async () => {
+    const response = await sendToBackground({ type: "SEND_CAPTURE" });
+    captureSend.textContent = "Send for approval";
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      captureSend.disabled = false;
+      setError(mainError, response.error);
+      return;
+    }
+    captureSession = response.data;
+    renderCapture();
+  })();
+});
+
+captureClear.addEventListener("click", () => {
+  void (async () => {
+    await sendToBackground({ type: "CLEAR_CAPTURE" });
+    captureSession = null;
+    captureRestored.hidden = true;
+    renderCapture();
+  })();
+});
+
+// S5.2 — restore an in-flight capture after a worker restart / panel reopen,
+// and SAY what came back (labels and counts; there are no values to restore).
+async function restoreCapture(): Promise<void> {
+  const response = await sendToBackground({ type: "GET_CAPTURE" });
+  captureSession = response.ok ? response.data : null;
+  if (captureSession) {
+    captureRestored.hidden = false;
+    captureRestored.textContent = restoredSummary(captureSession);
+  }
+  renderCapture();
 }
 
 void (async () => {

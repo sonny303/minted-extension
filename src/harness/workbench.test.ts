@@ -22,6 +22,7 @@ import {
   searchCases,
   searchProviders,
   completeTaskStep,
+  proposeFieldMap,
 } from "../background/api";
 import { coveragePortal } from "../background/fill";
 import {
@@ -78,6 +79,8 @@ interface MockApi {
     failTouches: number;
     // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
     completedSteps: Set<string>;
+    // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
+    proposedMaps: Map<string, { status: string; token: string | null }>;
   };
   close(): Promise<void>;
 }
@@ -355,6 +358,45 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     // Malpractice is 200 days out — no badge.
     expect(cards.malpractice.expiry).toBe("ok");
     expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+  });
+});
+
+describe("S5.1/S5.3 — capture proposes, and learns", () => {
+  it("writes a PROPOSED row with no token, whatever we ask for", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#npi",
+      field_label: "NPI",
+    });
+    // Approving is a human act in the webapp; the panel can only propose.
+    expect(result.map.status).toBe("proposed");
+    expect(result.map.token).toBeNull();
+    expect(mock.state.proposedMaps.get("humana_enroll:#npi")?.status).toBe("proposed");
+  });
+
+  it("returns the learned suggestion with its payer-count evidence", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#npi2",
+      field_label: "NPI",
+    });
+    expect(result.suggestion?.token).toBe("provider.npi");
+    expect(result.suggestion?.portalCount).toBe(3);
+  });
+
+  it("returns no suggestion for a label nothing backs — an honest blank", async () => {
+    const result = await proposeFieldMap({
+      portal_key: "humana_enroll",
+      selector: "#mystery",
+      field_label: "Mystery box",
+    });
+    expect(result.suggestion).toBeNull();
+  });
+
+  it("is idempotent on (portal_key, selector)", async () => {
+    const a = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
+    const b = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
+    expect(a.map.id).toBe(b.map.id);
   });
 });
 

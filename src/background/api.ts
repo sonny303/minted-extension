@@ -183,6 +183,31 @@ export async function completeTaskStep(
   return data;
 }
 
+// POST /api/portal-field-maps — PROPOSE a field the fill engine met that
+// nothing maps (S5.1). The server forces status 'proposed' / source 'manual' /
+// token null regardless of what we send: approving is a human act in the
+// webapp trainer. The response carries the org's learned suggestion for the
+// label (S5.3) with the evidence behind it.
+export interface ProposeFieldResponse {
+  map: PortalFieldMap;
+  suggestion: { token: string; portalCount: number; fromDictionary: boolean } | null;
+}
+
+export async function proposeFieldMap(input: {
+  portal_key: string;
+  selector: string;
+  field_label?: string | null;
+  form_section?: string | null;
+  field_type?: string | null;
+}): Promise<ProposeFieldResponse> {
+  const { data } = await apiFetch<ProposeFieldResponse>("/api/portal-field-maps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return data;
+}
+
 // GET /api/cases/:id/context — the selected case's reference number(s), latest
 // note, and latest touch (Epic 3d). Org-scoped like the other case routes, so
 // requestOnce attaches x-org-id in multi-org mode (this pathname is NOT the
