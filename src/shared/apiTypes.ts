@@ -304,6 +304,10 @@ export interface NextBestActionItem {
 
 export interface NextBestActionResult {
   item: NextBestActionItem | null;
+  // S3.3 — the ranked queue (server-derived, bounded by ?limit=). `item` is
+  // items[0]. OPTIONAL so a server predating S3.3 degrades to the single-item
+  // handback rather than an empty queue.
+  items?: NextBestActionItem[];
 }
 
 // POST /api/cases/:id/touches — the "Mark submitted" business log. Body keys

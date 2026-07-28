@@ -354,6 +354,29 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
   });
 });
 
+describe("S3.3 — the pickup queue is server-ranked", () => {
+  it("returns a ranked list whose first entry IS the single-item top", async () => {
+    const result = await getNextBestAction();
+    const items = result.items ?? [];
+    expect(items.length).toBeGreaterThan(1);
+    const first = items[0];
+    if (!first) throw new Error("expected a ranked first entry");
+    // The extension must never re-rank: items[0] and item are the same case,
+    // and the reason line is the server's text rendered verbatim.
+    expect(result.item?.caseId).toBe(first.caseId);
+    expect(first.reason).toBeTruthy();
+  });
+
+  it("honors ?limit= so a large org's queue is bounded", async () => {
+    const one = await getNextBestAction(1);
+    const items = one.items ?? [];
+    expect(items).toHaveLength(1);
+    const first = items[0];
+    if (!first) throw new Error("expected a ranked first entry");
+    expect(one.item?.caseId).toBe(first.caseId);
+  });
+});
+
 describe("TS-102 — layout persists server-side across a worker restart", () => {
   it("saves, then reads the same layout back with no client-side cache", async () => {
     // Keys must be in the SERVED catalog now (schema-derived, 2026-07-28).

@@ -64,7 +64,7 @@ export type BgRequest =
   | { type: "ENTER_ACTIVE_CASE"; caseId: string; providerId: string; orgId: string | null }
   | { type: "CLEAR_ACTIVE_CASE" }
   // E4.3 F4.3.4/TE-6: the server-derived queue top (or null = queue clear).
-  | { type: "GET_NEXT_BEST_ACTION" }
+  | { type: "GET_NEXT_BEST_ACTION"; limit?: number }
   // E4.3 F4.3.4/TE-5: log ONE structured touch. The panel generates the
   // idempotency id once per draft and REUSES it on retries, so a failed write
   // retried can never double-log; a fresh draft gets a fresh id.

@@ -245,7 +245,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       await clearActiveCase();
       return null;
     case "GET_NEXT_BEST_ACTION":
-      return getNextBestAction();
+      return getNextBestAction(request.limit);
     case "LOG_STRUCTURED_TOUCH": {
       // E4.3 F4.3.4/TE-5: validate locally (mirrors the server's 422 rules),
       // then append ONE structured touch. The panel-generated idempotency id

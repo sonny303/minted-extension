@@ -1693,3 +1693,29 @@ button.link:hover {
   font-weight: 600;
   letter-spacing: 0.03em;
 }
+
+/* ---- S3.3: the pickup queue (landing state when nothing is in hand) ---- */
+.queue {
+  margin-bottom: 12px;
+}
+.queue-row {
+  align-items: flex-start;
+}
+.queue-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.queue-row-reason {
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+  overflow-wrap: anywhere;
+}
+.queue-more {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}

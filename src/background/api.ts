@@ -158,11 +158,13 @@ export async function searchProviders(query: string): Promise<ProviderListItem[]
   return data;
 }
 
-// GET /api/next-best-action — the org's queue top under its ranking config
-// (E4.3 TE-6), or { item: null } for an honest queue-clear. Read-only; the
-// extension renders the ONE item and never ranks anything itself.
-export async function getNextBestAction(): Promise<NextBestActionResult> {
-  const { data } = await apiFetch<NextBestActionResult>("/api/next-best-action");
+// GET /api/next-best-action — the org's RANKED queue (S3.3) plus its top
+// item, or { item: null } for an honest queue-clear. Read-only; ordering and
+// the per-case reason line come from the SERVER — the extension never ranks
+// anything itself (the cross-cutting "no invented priority" gate).
+export async function getNextBestAction(limit?: number): Promise<NextBestActionResult> {
+  const qs = limit != null ? `?limit=${encodeURIComponent(String(limit))}` : "";
+  const { data } = await apiFetch<NextBestActionResult>(`/api/next-best-action${qs}`);
   return data;
 }
 

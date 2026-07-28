@@ -18,7 +18,7 @@ import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from 
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
 import { looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortalByUrl, type MatchedPortal } from "../shared/portals";
-import type { PortalRegistryRow } from "../shared/apiTypes";
+import type { NextBestActionItem, PortalRegistryRow } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
@@ -135,6 +135,7 @@ const touchError = el<HTMLElement>("touch-error");
 const touchSaveBtn = el<HTMLButtonElement>("touch-save");
 const touchStatus = el<HTMLElement>("touch-status");
 const nbaSection = el<HTMLElement>("nba-section");
+const queueSection = el<HTMLElement>("queue-section");
 
 // The last successful fill, held so "Mark submitted" can log the touch
 // against the right case and fill session. Cleared whenever the selection
@@ -1078,6 +1079,7 @@ function isFillReady(): boolean {
 }
 
 function updateFillReady(): void {
+  syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
@@ -1732,6 +1734,18 @@ async function detectPortal(): Promise<void> {
   updateFillReady();
   // The active-cases heading + THIS PAGE chips reflect the detected page.
   renderActiveCases();
+}
+
+// The queue is the landing state: visible only while NOTHING is in hand
+// (no provider/case selected in the panel). Selecting a case hides it;
+// releasing shows it again — no confirmation either way.
+function syncQueueVisibility(): void {
+  const inHand = selectedProviderId() != null || selectedCaseId() != null;
+  if (inHand) {
+    queueSection.hidden = true;
+    return;
+  }
+  if (queueSection.hidden && orgResolved()) void loadQueue(loadGeneration);
 }
 
 // The panel reflects the ACTIVE tab: re-detect on tab switch and on
@@ -2631,6 +2645,94 @@ function nbaLink(label: string, href: string): HTMLAnchorElement {
   link.rel = "noreferrer";
   link.textContent = label;
   return link;
+}
+
+// ---------------------------------------------------------------------------
+// S3.3 — the case pickup queue. The panel opens to it when nothing is in hand
+// (no active case selected): ORDER AND THE REASON LINE COME FROM THE SERVER —
+// the extension never ranks (the cross-cutting "no invented priority" gate).
+// Release returns here without a confirmation.
+// ---------------------------------------------------------------------------
+
+// How many queue rows to render before the "and N more" line. Server-bounded
+// too (?limit=), this is the display cap.
+const QUEUE_PAGE_SIZE = 8;
+
+function queueRow(item: NextBestActionItem): HTMLElement {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "case-row queue-row";
+
+  const main = document.createElement("span");
+  main.className = "queue-row-main";
+  const title = document.createElement("span");
+  title.className = "case-row-title";
+  title.textContent = `${item.providerName} — ${item.payerName} · ${item.state}`;
+  main.append(title);
+  const reason = document.createElement("span");
+  reason.className = "queue-row-reason";
+  // The server's reason line, rendered verbatim.
+  reason.textContent = item.reason || item.action;
+  main.append(reason);
+  row.append(main);
+
+  if (item.deadline != null) {
+    const due = document.createElement("span");
+    due.className = item.deadline.overdue ? "pill pill-red" : "pill";
+    due.textContent = `${item.deadline.overdue ? "Overdue" : "Due"} ${fmtContextDate(item.deadline.date)}`;
+    row.append(due);
+  }
+
+  row.addEventListener("click", () => {
+    queueSection.hidden = true;
+    void selectCaseInPanel(item.providerId, item.caseId, true);
+  });
+  return row;
+}
+
+function renderQueue(items: NextBestActionItem[]): void {
+  queueSection.replaceChildren();
+  const heading = document.createElement("p");
+  heading.className = "section-title";
+  heading.textContent = "Pick up where you left off";
+  queueSection.append(heading);
+
+  if (items.length === 0) {
+    const clear = document.createElement("p");
+    clear.className = "nba-clear";
+    clear.textContent = "Queue clear — nothing needs action right now.";
+    queueSection.append(clear);
+    return;
+  }
+  for (const item of items.slice(0, QUEUE_PAGE_SIZE)) queueSection.append(queueRow(item));
+  if (items.length > QUEUE_PAGE_SIZE) {
+    const more = document.createElement("p");
+    more.className = "queue-more";
+    more.textContent = `and ${items.length - QUEUE_PAGE_SIZE} more in Minted Panel`;
+    queueSection.append(more);
+  }
+}
+
+// Load the queue for the no-context empty state. Loading / empty / failed are
+// all explicit (doc 04 §4.4); a failure never blanks the panel — search and
+// the manual picker stay available beneath it.
+async function loadQueue(generation: number): Promise<void> {
+  if (!orgResolved()) {
+    queueSection.hidden = true;
+    return;
+  }
+  queueSection.hidden = false;
+  queueSection.replaceChildren(searchEmptyLine("Loading your queue…"));
+  const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
+  if (!isCurrent(generation)) return;
+  if (!response.ok) {
+    queueSection.replaceChildren(searchEmptyLine(`Queue unavailable: ${response.error}`));
+    return;
+  }
+  // A server predating S3.3 sends only `item`; degrade to that single entry
+  // rather than showing an empty queue.
+  const items = response.data.items ?? (response.data.item ? [response.data.item] : []);
+  renderQueue(items);
 }
 
 function renderNba(result: NextBestActionResult, loggedCaseId: string): void {

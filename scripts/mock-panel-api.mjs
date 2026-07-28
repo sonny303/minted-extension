@@ -390,11 +390,13 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, rows, null, { total: rows.length, page: 1, pageSize: 25 });
     }
 
-    // --- /api/next-best-action (E4.3 TE-6) ---
+    // --- /api/next-best-action (S3.3: ranked list + top) ---
     if (/^\/api\/next-best-action\/?$/.test(url.pathname)) {
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
-      return envelope(res, 200, {
-        item: {
+      const raw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
+      const limit = Number.isFinite(raw) && raw >= 1 && raw <= 100 ? raw : 20;
+      const ranked = [
+        {
           caseId: FIXTURES.CASE2_ID,
           providerId: FIXTURES.PROVIDER2_ID,
           providerName: "Pat Ostrander",
@@ -405,9 +407,26 @@ export async function createMockPanelApi(options = {}) {
           action: "Follow up with Humana",
           reason: "Follow-up overdue by 3 days.",
           deadline: { date: isoDaysFromNow(-3), source: "follow_up", overdue: true },
-          payerPipelineState: "not_started",
+          payerPipelineState: "submitted",
           deepLink: `/cases/${FIXTURES.CASE2_ID}`,
         },
+        {
+          caseId: FIXTURES.CASE_ID,
+          providerId: FIXTURES.PROVIDER_ID,
+          providerName: "Kay One",
+          payerName: "BCBS of Kansas",
+          groupName: "Kansas Fitness Physio Group",
+          state: "KS",
+          actionKind: "task",
+          action: "Enroll on BCBS portal",
+          reason: "Task due in 5 days.",
+          deadline: { date: isoDaysFromNow(5), source: "task_due", overdue: false },
+          payerPipelineState: "in_review",
+          deepLink: `/cases/${FIXTURES.CASE_ID}`,
+        },
+      ].slice(0, limit);
+      return envelope(res, 200, { item: ranked[0] ?? null, items: ranked }, null, {
+        total: ranked.length,
       });
     }
 
