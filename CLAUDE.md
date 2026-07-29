@@ -11,7 +11,10 @@ decisions) is the source of truth for the wire shapes below.
 MV3 Chrome extension ("Minted Panel Workbench") that fills payer-portal
 enrollment forms with Minted Panel provider data in one click, then logs the
 fill and the human's submission back to the case. v0 is unlisted (loaded
-unpacked); first target portal is BCBS Kansas network enrollment.
+unpacked); the manifest ships static access to BCBS Kansas network enrollment,
+but capture and fill reach ANY DB-registered portal — the panel grants the
+registry's origins on demand and the worker injects `content.js` where there's
+no static match (see "Portal access" below and the README).
 
 ## Architecture (three locked rules — README has the detail)
 
@@ -42,7 +45,7 @@ An eslint rule enforces the boundary: only `src/background/` may import
   unpacked extension
 - `npm run typecheck` — `tsc --noEmit`, clean
 - `npm run lint` — `eslint .`, clean
-- `npm run test` — vitest; 6 files, 78 tests, all pass (includes the TE-10
+- `npm run test` — vitest; 12 files, 133 tests, all pass (includes the TE-10
   mock harness: `src/harness/workbench.test.ts` drives the real background
   modules against `scripts/mock-panel-api.mjs`, an in-repo mirror of the
   panel /api contract — CI never touches a real portal or the real panel)
@@ -171,6 +174,17 @@ portalUrl, portalKey?, facilityId? }` through
 
 ## Locked product rules
 
+- **Portal access is dynamic, not BCBS-only.** Recognition and content-script
+  injection both need host permission for the tab's origin; the manifest ships
+  static access to BCBS KS only. `optional_host_permissions: ["https://*/*"]`
+  lets the panel REQUEST origins, but it only ever requests the specific origins
+  the registry names (`portalOriginPatterns`, `src/shared/portals.ts`) — never
+  `https://*/*` itself. The `#portal-access` panel prompt grants them in one
+  click; `ensureContentScript` (`src/background/inject.ts`) then injects the
+  SAME `content.js` on demand before `START_CAPTURE`/`FILL` when no static
+  content-script match exists. Shape-only capture + resolved-value fill are
+  unchanged — the injection moves no data boundary. Permission/manifest changes
+  mean reloading the unpacked extension.
 - **The extension never submits portal forms. Unchanged, forever.** The human
   submits; the extension logs. Never a case status change from here (v1).
 - **Case selection is REQUIRED before fill** (locked decision) — via the
