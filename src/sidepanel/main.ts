@@ -17,7 +17,7 @@ import type {
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
 import { looksLikeIsoDate } from "../shared/detailFields";
-import { matchPortalByUrl, type MatchedPortal } from "../shared/portals";
+import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../shared/portals";
 import type {
   CaseContextTaskStep,
   NextBestActionItem,
@@ -128,6 +128,8 @@ const caqhAttested = el<HTMLElement>("caqh-attested");
 const caqhGaps = el<HTMLElement>("caqh-gaps");
 const caqhAttest = el<HTMLButtonElement>("caqh-attest");
 const caqhStatus = el<HTMLElement>("caqh-status");
+const portalAccess = el<HTMLElement>("portal-access");
+const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
@@ -1924,7 +1926,55 @@ async function detectPortal(): Promise<void> {
   renderActiveCases();
   renderCapture();
   renderCaqh();
+  void refreshPortalAccessPrompt();
 }
+
+// The one-click grant for this org's registered portals. Recognition and the
+// content-script injection both need host permission for the portal's origin,
+// but the manifest only ships with BCBS KS — every other DB-registered portal
+// (S3.2) is unreadable until the user grants its origin here. The prompt shows
+// only when we're NOT already on a recognized portal AND we lack access to at
+// least one registered origin; on a recognized page or once all are granted it
+// stays hidden. Reads the registry we already fetched, so it needs no host
+// permission to decide what to ask for.
+async function refreshPortalAccessPrompt(): Promise<void> {
+  if (portal != null) {
+    portalAccess.hidden = true;
+    return;
+  }
+  const patterns = portalOriginPatterns(portalRows);
+  if (patterns.length === 0) {
+    portalAccess.hidden = true;
+    return;
+  }
+  portalAccess.hidden = await hasOriginPermissions(patterns);
+}
+
+async function hasOriginPermissions(origins: string[]): Promise<boolean> {
+  try {
+    return await chrome.permissions.contains({ origins });
+  } catch {
+    return false;
+  }
+}
+
+portalAccessGrant.addEventListener("click", () => {
+  const patterns = portalOriginPatterns(portalRows);
+  if (patterns.length === 0) return;
+  portalAccessGrant.disabled = true;
+  void (async () => {
+    try {
+      // Must run in the click's user gesture — request, then re-detect so a
+      // now-readable portal tab is recognized without a reload.
+      const granted = await chrome.permissions.request({ origins: patterns });
+      if (granted) await detectPortal();
+    } catch (error) {
+      setError(mainError, error instanceof Error ? error.message : "Could not grant access");
+    } finally {
+      portalAccessGrant.disabled = false;
+    }
+  })();
+});
 
 // The queue is the landing state: visible only while NOTHING is in hand
 // (no provider/case selected in the panel). Selecting a case hides it;

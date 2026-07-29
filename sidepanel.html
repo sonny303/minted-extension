@@ -194,6 +194,21 @@
             <p id="caqh-status" class="caqh-status" hidden></p>
           </div>
 
+          <!-- Portal access: this org's portals live in a registry, but the
+               extension can only read/fill a page it holds host permission for.
+               Shown when we lack access to the registered portal origins so the
+               user can grant it in one click; hidden once granted or on a
+               recognized page. -->
+          <div id="portal-access" class="capture" hidden>
+            <p class="capture-summary">
+              On a payer portal? Give Minted access to this organization's portal
+              sites so it can capture and fill their forms.
+            </p>
+            <button id="portal-access-grant" class="secondary" type="button">
+              Enable form capture &amp; fill
+            </button>
+          </div>
+
           <!-- S5.4: capture — turn a form we don't know into one we do. -->
           <div id="capture-section" class="capture" hidden>
             <div class="capture-head">

@@ -30,6 +30,7 @@ import { projectQuickCards, resolveLayout } from "../shared/quickCards";
 import { buildStructuredTouchBody, validateStructuredTouch } from "../shared/structuredTouch";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { coveragePortal, fillPortal } from "./fill";
+import { ensureContentScript } from "./inject";
 import { buildSubmissionTouchBody } from "../shared/submission";
 import {
   ACTIVE_CASE_KEY,
@@ -296,6 +297,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // Read the form's SHAPE from the bound tab (labels/selectors/types —
       // never a value), then ask the server what this org already knows about
       // each label so the review opens with suggestions, not a blank grid.
+      // Inject content.js first when it isn't already there (any non-BCBS
+      // portal), so capture works on any DB-registered portal, not just the
+      // one with a static content_scripts match.
+      await ensureContentScript(request.tabId);
       const scanned = (await chrome.tabs.sendMessage(request.tabId, { type: "SCAN_FIELDS" })) as
         | { ok?: boolean; data?: CapturedField[]; error?: string }
         | undefined;
@@ -481,6 +486,10 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
           "This case's context expired - re-launch it from Minted Panel or re-select the case, then fill again.",
         );
       }
+      // Inject content.js when it isn't already there (any non-BCBS portal)
+      // before fillPortal's pre-flight PING, so fill reaches any DB-registered
+      // portal, not just the statically-matched one.
+      await ensureContentScript(request.tabId);
       const summary = await fillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
