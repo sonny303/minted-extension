@@ -71,3 +71,25 @@ export function portalByKey(key: string, rows: PortalRegistryRow[]): MatchedPort
   const row = rows.find((r) => r.portalKey === key);
   return row ? toMatchedPortal(row) : null;
 }
+
+/** Distinct host match patterns (`https://host/*`) for every registry row that
+ * names an https form page — the origins the panel asks the user to grant so
+ * capture and fill can reach ANY DB-registered portal, not just the one baked
+ * into the manifest. Derived from the registry (S3.2), never hardcoded per
+ * payer, so a new portal is still "a registry row, not an extension release":
+ * once its origin is granted the extension can read the tab URL (recognition)
+ * and inject content.js there. Non-https rows are skipped — payer portals are
+ * https, and the manifest only lets us request https origins. */
+export function portalOriginPatterns(rows: PortalRegistryRow[]): string[] {
+  const patterns = new Set<string>();
+  for (const row of rows) {
+    if (!row.formUrl) continue;
+    try {
+      const u = new URL(row.formUrl);
+      if (u.protocol === "https:") patterns.add(`https://${u.host}/*`);
+    } catch {
+      // A malformed formUrl names no origin to grant — skip it.
+    }
+  }
+  return [...patterns];
+}

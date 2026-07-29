@@ -22,7 +22,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "sidePanel"
+    "sidePanel",
+    "scripting"
   ],
   "externally_connectable": {
     "matches": [
@@ -33,6 +34,9 @@
     "https://mintedpanel.vercel.app/*",
     "https://fkvuhfsqcmujywzgczmc.supabase.co/*",
     "https://provider.bcbsks.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "content_scripts": [
     {
