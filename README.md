@@ -66,8 +66,30 @@ gone.
 The panel stays open across tab switches and always reflects the ACTIVE tab:
 portal detection re-runs on `tabs.onActivated`/`onUpdated`, and the fill
 re-checks the active tab's URL at click time. Tab URLs are only readable for
-origins in `host_permissions` (the portals) — every other page reads as "no
-portal detected", which is the correct state.
+origins the extension holds host access to — the static `host_permissions`
+(BCBS KS + the backends) plus any portal origin the user has granted (see
+"Portal access" below). Every other page reads as "no portal detected", which
+is the correct state.
+
+**Portal access — capture/fill reach ANY DB-registered portal, not just BCBS.**
+The registry is DB-driven (a portal is a registry row, not an extension
+release), but the browser only lets us read a tab URL or run a script on an
+origin we hold host permission for. The manifest ships static access to BCBS KS
+only, so every other registered portal (Aetna, etc.) is invisible until its
+origin is granted. `optional_host_permissions: ["https://*/*"]` lets the panel
+REQUEST arbitrary origins; it only ever requests the specific origins the
+registry names (`portalOriginPatterns(portalRows)` in `src/shared/portals.ts`),
+so the user sees "grant access to aetna.com", never "all websites". The
+`#portal-access` prompt in the side panel shows when we're not on a recognized
+portal and lack access to a registered origin; its button runs
+`chrome.permissions.request({ origins })` in the click gesture, then re-detects
+so a now-readable portal tab is recognized without a reload. Once an origin is
+granted, `ensureContentScript(tabId)` (`src/background/inject.ts`) PINGs the tab
+and, when there's no static content-script match, injects `content.js` via
+`chrome.scripting.executeScript` before capture (`START_CAPTURE`) or fill
+(`FILL`). It's the same `content.js` — shape-only read for capture, resolved-
+value apply for fill — so no data boundary moves. (Changing extension
+permissions means reloading the unpacked extension after pulling.)
 
 The workbench remembers where you were: the active org (multi-org users),
 the selected provider, location, and case, and the last fill report (per
