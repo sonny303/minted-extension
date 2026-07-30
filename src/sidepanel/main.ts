@@ -1245,7 +1245,7 @@ function updateFillReady(): void {
   const portalOpen = portal != null && portalTabId != null;
   portalStatus.textContent = portalOpen
     ? `${portal?.label} form detected in the current tab.`
-    : "Open the BCBS KS enrollment form in the current tab to fill it.";
+    : "Open a registered payer portal in the current tab to fill it.";
   portalStatus.classList.toggle("detected", portalOpen);
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;

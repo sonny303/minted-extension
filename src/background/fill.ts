@@ -262,7 +262,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
       message.includes("Receiving end does not exist")
-        ? "Could not reach the enrollment form - open the BCBS KS enrollment page in the current tab and reload it."
+        ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
         : `Fill failed on the page: ${message}`,
       { cause: error },
     );
