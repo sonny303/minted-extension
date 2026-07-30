@@ -10,7 +10,6 @@
 import {
   isAllowedHandoffOrigin,
   isPortalOriginUrl,
-  parseOpenPortal,
   parseSetActiveCase,
   resolveActiveCaseState,
   type ActiveCaseRecord,
@@ -113,46 +112,16 @@ export async function bindFillTab(caseId: string, tabId: number): Promise<void> 
   });
 }
 
-/** Best-effort reveal of the side panel on the sender's window, so a handoff
- * lands in front of the user instead of behind the toolbar icon. Requires a
- * user gesture — the webapp's click usually carries one — and quietly does
- * nothing when it can't. Shared by both handoff intents. */
-async function revealPanel(senderTabWindowId?: number): Promise<void> {
-  try {
-    if (senderTabWindowId != null) {
-      await chrome.sidePanel?.open({ windowId: senderTabWindowId });
-    }
-  } catch {
-    // no gesture / no sidePanel API — the toolbar icon still opens the panel
-  }
-}
-
-/** The external-handoff receipt: ONE door, two intents.
- *
- * OPEN_PORTAL (setup) reveals the panel and stores NOTHING. SET_ACTIVE_CASE
- * (casework) additionally stores the context — LAST LAUNCH WINS, a pending
- * context is replaced never stacked. Returns whether the message was accepted
- * (the webapp's sendMessage response).
- *
- * Order matters only for clarity, not correctness: the two parsers are mutually
- * exclusive on `type`, and parseOpenPortal additionally refuses anything
- * carrying caseId/providerId, so a confused caller is rejected rather than
- * silently downgraded to a context that looks fillable and isn't. */
+/** The SET_ACTIVE_CASE receipt. Validates origin + shape, stores the new
+ * record — LAST LAUNCH WINS, a pending context is replaced never stacked —
+ * and best-effort opens the side panel. Returns whether the message was
+ * accepted (the webapp's sendMessage response). */
 export async function handleExternalMessage(
   message: unknown,
   senderOrigin: string | undefined,
   senderTabWindowId?: number,
 ): Promise<{ ok: boolean }> {
   if (!isAllowedHandoffOrigin(senderOrigin)) return { ok: false };
-
-  // Setup intent: no case exists yet, so no record is written. Capture gates on
-  // a recognized portal tab alone; fill reads the active-case record. That is
-  // what keeps "no case, no fill" true by construction here.
-  if (parseOpenPortal(message) != null) {
-    await revealPanel(senderTabWindowId);
-    return { ok: true };
-  }
-
   const parsed = parseSetActiveCase(message);
   if (parsed == null) return { ok: false };
   const now = new Date().toISOString();
@@ -171,7 +140,16 @@ export async function handleExternalMessage(
     lastActivityAt: now,
   });
   notifyPanel();
-  await revealPanel(senderTabWindowId);
+  // Best-effort: open the side panel on the sender's window so the handoff
+  // lands in front of the user. Requires a user gesture — the webapp's click
+  // usually carries one — and quietly does nothing when it can't.
+  try {
+    if (senderTabWindowId != null) {
+      await chrome.sidePanel?.open({ windowId: senderTabWindowId });
+    }
+  } catch {
+    // no gesture / no sidePanel API — the toolbar icon still opens the panel
+  }
   return { ok: true };
 }
 

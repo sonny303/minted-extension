@@ -7,7 +7,6 @@ import {
   isActiveCaseExpired,
   isAllowedHandoffOrigin,
   isPortalOriginUrl,
-  parseOpenPortal,
   parseSetActiveCase,
   resolveActiveCaseState,
   type ActiveCaseRecord,
@@ -147,65 +146,5 @@ describe("S3.5 — the widened C1 payload", () => {
       orgId: ORG_ID,
       portalUrl: PORTAL_URL,
     });
-  });
-});
-
-// The SETUP handoff (OPEN_PORTAL): portal configuration has no case, and the
-// point of these tests is that it can never acquire one by accident. The two
-// intents share a transport and an origin allow-list; they must not share a
-// shape.
-describe("parseOpenPortal — the setup intent", () => {
-  it("accepts a bare portal URL and normalizes the registry key", () => {
-    const parsed = parseOpenPortal({
-      type: "OPEN_PORTAL",
-      portalUrl: PORTAL_URL,
-      portalKey: "  Aetna_Network ",
-    });
-    expect(parsed?.portalUrl).toBe(PORTAL_URL);
-    // Same folding as the case handoff, so the portal join stays a literal compare.
-    expect(parsed?.portalKey).toBe("aetna_network");
-  });
-
-  it("carries orgId when it is a UUID and drops it otherwise", () => {
-    expect(parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: PORTAL_URL, orgId: ORG_ID })?.orgId).toBe(
-      ORG_ID,
-    );
-    expect(
-      parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: PORTAL_URL, orgId: "nope" })?.orgId,
-    ).toBeUndefined();
-  });
-
-  it("REFUSES anything case-shaped — the two intents must not blur", () => {
-    // Silently ignoring these would hand back a context that reads as a setup
-    // launch while the caller believes it launched a case. Reject instead.
-    expect(
-      parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: PORTAL_URL, caseId: CASE_ID }),
-    ).toBeNull();
-    expect(
-      parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: PORTAL_URL, providerId: PROVIDER_ID }),
-    ).toBeNull();
-  });
-
-  it("requires an https portal URL", () => {
-    expect(parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: "http://x.test/f" })).toBeNull();
-    expect(parseOpenPortal({ type: "OPEN_PORTAL", portalUrl: "not a url" })).toBeNull();
-    expect(parseOpenPortal({ type: "OPEN_PORTAL" })).toBeNull();
-  });
-
-  it("does not answer for the other intent, and vice versa", () => {
-    // Mutually exclusive on `type`, so routing order in the receipt is a
-    // readability choice rather than a correctness one.
-    expect(parseOpenPortal(validMessage)).toBeNull();
-    expect(parseSetActiveCase({ type: "OPEN_PORTAL", portalUrl: PORTAL_URL })).toBeNull();
-  });
-
-  it("drops unknown fields rather than storing them", () => {
-    const parsed = parseOpenPortal({
-      type: "OPEN_PORTAL",
-      portalUrl: PORTAL_URL,
-      ssn: "900-55-6789",
-    }) as Record<string, unknown> | null;
-    expect(parsed).not.toBeNull();
-    expect(Object.keys(parsed ?? {}).sort()).toEqual(["portalUrl", "type"]);
   });
 });
