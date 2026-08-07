@@ -172,6 +172,24 @@ portalUrl, portalKey?, facilityId? }` through
   broken card — and validates keys against the served set only when the
   catalog read succeeded (a failed read must not wipe a saved layout).
 
+- **Shared (org-free) training tier — E6.9, 2026-08-07:** three routes run on
+  the panel's USER-scoped guard and touch the shared library every org
+  inherits: `GET /api/shared-portals` (global registry rows only),
+  `GET /api/shared-field-maps?portal_key=` (that form's shared rows, ordered by
+  `sort_order`), and `POST /api/shared-field-maps` (propose; `org_id` is always
+  null, idempotent on `(portal_key, selector)` — a re-capture returns the
+  existing row with its decision untouched, which is what makes re-capture
+  drift repair rather than a reset). The propose body adds `page_step` and
+  `sort_order` to the org route's shape and is still values-free. `PortalFieldMap`
+  gained optional `displayLabel`/`section`/`sortOrder`; `PortalRegistryRow`
+  gained optional `payerName`. Panel-side: `src/services/portals.ts`
+  `listSharedPortals`, `src/services/portalFieldMaps.ts` `listSharedFieldMaps` /
+  `proposeSharedFieldMap`; gate assertions 22/22b/23 + the `sharedtier` leak
+  mode. **The org header is keyed by MODE, not by path** (`shouldSendOrgHeader`
+  in `src/shared/panelMode.ts`): training sends none even for a multi-org user,
+  because the org-resolving guard would 400 it and an org header would scope
+  the capture to a tenant.
+
 ## Locked product rules
 
 - **Portal access is dynamic, not BCBS-only.** Recognition and content-script
@@ -187,6 +205,30 @@ portalUrl, portalKey?, facilityId? }` through
   mean reloading the unpacked extension.
 - **The extension never submits portal forms. Unchanged, forever.** The human
   submits; the extension logs. Never a case status change from here (v1).
+- **Two jobs, one panel (E6.9 F6.9.7).** After sign-in the panel asks which
+  job is being done: **Train forms** or **Work cases**. Training shows a payer
+  select → form find/select → capture and NOTHING else — no org, provider or
+  case picker, no quick cards, no touch logging — because a trained form has no
+  org and exists before any case for that payer does. Work cases is the
+  unchanged screen. The mode lives in the WORKER
+  (`src/background/mode.ts`, `chrome.storage.session`) because it decides
+  whether a call carries `x-org-id`; the panel mirrors it. A `SET_ACTIVE_CASE`
+  hand-off FORCES the mode to `case` on receipt — the chooser never stands
+  between the webapp's launch and the case it launched.
+- **Capture is per PAGE (E6.9 F6.9.8).** `START_CAPTURE` carries a `pageStep`
+  derived by `derivePageStep` (heading → URL tail → capture sequence; a name
+  already used in the run falls through), and rows carry DOM-order
+  `sortOrder`. `mergePageCapture` folds a scan into the session PER PAGE —
+  a plain `diffCapture` would read every other page's rows as removed and
+  drop them, so a trainer walking five pages would keep only the fifth.
+- **Recognition never blocks or guesses (E6.9 F6.9.9).** `recognizeForm` reuses
+  the SAME `matchPortalByUrl` the fill engine uses, so trainer and filler can
+  never disagree about which portal a page is. A recognized form reports what
+  it already has (`formCaptureState`: pages seen, fields captured, mapped —
+  where "mapped" excludes an approved row that would fill nothing) and is never
+  silently changed; an unrecognized page is greeted as new with a NUMBERED
+  candidate name (`<Payer> form 2`) the admin renames. Nothing is auto-attached
+  to a template or task.
 - **Case selection is REQUIRED before fill** (locked decision) — via the
   E4.3 handoff, the unified search, the active-cases list, the NBA handback,
   or the manual picker; all funnel into the same active-case state.

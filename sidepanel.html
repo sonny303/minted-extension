@@ -21,7 +21,12 @@
         ></button>
         <div id="avatar-menu" class="avatar-menu" role="menu" hidden>
           <p id="account-email" class="avatar-menu-email"></p>
-          <button id="signout" class="avatar-menu-item" role="menuitem" type="button">
+          <button
+            id="signout"
+            class="avatar-menu-item"
+            role="menuitem"
+            type="button"
+          >
             Sign out
           </button>
         </div>
@@ -29,7 +34,9 @@
     </div>
     <div id="identity-guard" class="identity-guard" hidden></div>
     <main>
-      <section id="view-loading" class="centered"><p class="hint">Loading…</p></section>
+      <section id="view-loading" class="centered">
+        <p class="hint">Loading…</p>
+      </section>
 
       <section id="view-signin" hidden>
         <h1>Sign in</h1>
@@ -44,7 +51,12 @@
           </div>
           <div class="field">
             <label for="password">Password</label>
-            <input id="password" type="password" autocomplete="current-password" required />
+            <input
+              id="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
           </div>
           <div id="signin-error" class="error" hidden></div>
           <button id="signin-btn" class="primary" type="submit">Sign in</button>
@@ -52,7 +64,50 @@
       </section>
 
       <section id="view-main" hidden>
-        <div class="field">
+        <!-- E6.9 F6.9.7: which job is being done. Always visible, always
+             switchable — training a payer form is not case work, and it
+             happens before any case for that payer exists. -->
+        <div
+          id="mode-switch"
+          class="mode-switch"
+          role="group"
+          aria-label="What are you doing?"
+        >
+          <button
+            id="mode-case"
+            class="mode-btn"
+            type="button"
+            aria-pressed="true"
+          >
+            Work cases
+          </button>
+          <button
+            id="mode-train"
+            class="mode-btn"
+            type="button"
+            aria-pressed="false"
+          >
+            Train forms
+          </button>
+        </div>
+
+        <!-- E6.9 F6.9.7/F6.9.9 — Train forms. No org, provider or case
+             picker: the trained form lands in the shared library every
+             organization inherits. -->
+        <section id="train-section" hidden>
+          <div class="field">
+            <label for="train-payer">Payer</label>
+            <select id="train-payer"></select>
+          </div>
+          <div id="train-recognition" class="banner"></div>
+          <div class="field" id="train-portal-field" hidden>
+            <label for="train-portal">Form</label>
+            <select id="train-portal"></select>
+          </div>
+          <p id="train-hint" class="btn-note"></p>
+        </section>
+
+        <div id="org-field" class="field">
           <label for="org-select">Organization</label>
           <select id="org-select"></select>
         </div>
@@ -88,7 +143,12 @@
               <div id="provider-dob" class="provider-dob" hidden></div>
             </div>
             <div class="card-head-actions">
-              <a id="open-in-panel" class="open-link" target="_blank" rel="noreferrer" hidden
+              <a
+                id="open-in-panel"
+                class="open-link"
+                target="_blank"
+                rel="noreferrer"
+                hidden
                 >Open in Minted Panel ↗</a
               >
               <button
@@ -99,9 +159,21 @@
                 title="Edit layout"
                 hidden
               >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path
+                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                  ></path>
                 </svg>
               </button>
             </div>
@@ -123,14 +195,18 @@
               aria-label="Search fields"
             />
             <p class="view-settings-hint">
-              Pick the ID fields to show on the cards — swap the defaults or add up to 3 more.
-              Saved to your account.
+              Pick the ID fields to show on the cards — swap the defaults or add
+              up to 3 more. Saved to your account.
             </p>
             <div id="view-settings-fields" class="view-settings-fields"></div>
             <div id="view-settings-error" class="error" hidden></div>
             <div class="view-settings-actions">
-              <button id="view-settings-save" class="primary" type="button">Save layout</button>
-              <button id="view-settings-cancel" class="link" type="button">Cancel</button>
+              <button id="view-settings-save" class="primary" type="button">
+                Save layout
+              </button>
+              <button id="view-settings-cancel" class="link" type="button">
+                Cancel
+              </button>
             </div>
           </div>
         </div>
@@ -143,7 +219,9 @@
           <div class="field">
             <label for="facility-select">Location</label>
             <select id="facility-select"></select>
-            <p id="facility-hint" class="blocked-hint" hidden>Pick a location first.</p>
+            <p id="facility-hint" class="blocked-hint" hidden>
+              Pick a location first.
+            </p>
             <div id="facility-address" class="facility-address" hidden></div>
           </div>
 
@@ -169,17 +247,26 @@
           <div id="coverage-panel" class="coverage offer-card" hidden>
             <div class="offer-head">
               <p id="coverage-count" class="coverage-count"></p>
-              <span id="proven-chip" class="pill proven-chip" hidden>PROVEN</span>
+              <span id="proven-chip" class="pill proven-chip" hidden
+                >PROVEN</span
+              >
             </div>
             <div id="drift-strip" class="drift-strip" hidden></div>
             <p id="unproven-note" class="offer-note" hidden></p>
             <ul id="coverage-gaps" class="coverage-gaps"></ul>
-            <button id="refresh-maps-btn" class="link refresh-maps" type="button" hidden>
+            <button
+              id="refresh-maps-btn"
+              class="link refresh-maps"
+              type="button"
+              hidden
+            >
               I fixed a mapping — refresh and re-check
             </button>
           </div>
 
-          <button id="fill-btn" class="primary" type="button" disabled>Fill this page</button>
+          <button id="fill-btn" class="primary" type="button" disabled>
+            Fill this page
+          </button>
 
           <!-- S6.2/S6.3: CAQH — push our data out, and pull the exceptions. -->
           <div id="caqh-section" class="caqh" hidden>
@@ -189,41 +276,16 @@
             </div>
             <div id="caqh-gaps" class="caqh-gaps" hidden></div>
             <div class="caqh-actions">
-              <button id="caqh-attest" class="secondary" type="button">Record attestation</button>
+              <button id="caqh-attest" class="secondary" type="button">
+                Record attestation
+              </button>
             </div>
             <p id="caqh-status" class="caqh-status" hidden></p>
           </div>
 
-          <!-- Portal access: this org's portals live in a registry, but the
-               extension can only read/fill a page it holds host permission for.
-               Shown when we lack access to the registered portal origins so the
-               user can grant it in one click; hidden once granted or on a
-               recognized page. -->
-          <div id="portal-access" class="capture" hidden>
-            <p class="capture-summary">
-              On a payer portal? Give Minted access to this organization's portal
-              sites so it can capture and fill their forms.
-            </p>
-            <button id="portal-access-grant" class="secondary" type="button">
-              Enable form capture &amp; fill
-            </button>
-          </div>
-
-          <!-- S5.4: capture — turn a form we don't know into one we do. -->
-          <div id="capture-section" class="capture" hidden>
-            <div class="capture-head">
-              <p id="capture-summary" class="capture-summary"></p>
-              <button id="capture-start" class="link" type="button">Capture this form</button>
-            </div>
-            <p id="capture-restored" class="capture-restored" hidden></p>
-            <div id="capture-rows" class="capture-rows"></div>
-            <div id="capture-actions" class="capture-actions" hidden>
-              <button id="capture-send" class="secondary" type="button">Send for approval</button>
-              <button id="capture-clear" class="link" type="button">Discard</button>
-            </div>
-            <p id="capture-sent" class="capture-sent" hidden></p>
-          </div>
-          <p id="fill-note" class="btn-note" hidden>Keep this tab open while filling.</p>
+          <p id="fill-note" class="btn-note" hidden>
+            Keep this tab open while filling.
+          </p>
 
           <div id="fill-results" hidden>
             <div class="report-card">
@@ -236,7 +298,9 @@
             <div id="gap-flag" class="gap-flag" hidden></div>
             <div id="submit-details" hidden>
               <div class="field submit-field">
-                <label for="payer-ref-input">Payer reference / submission ID</label>
+                <label for="payer-ref-input"
+                  >Payer reference / submission ID</label
+                >
                 <input
                   id="payer-ref-input"
                   type="text"
@@ -262,7 +326,9 @@
               Submit the form on the portal yourself, then log it to the case:
             </p>
             <div id="dup-warn" class="dup-warn" hidden></div>
-            <button id="mark-submitted" class="secondary" type="button" hidden>Mark submitted</button>
+            <button id="mark-submitted" class="secondary" type="button" hidden>
+              Mark submitted
+            </button>
             <div id="submit-status" class="logged" hidden></div>
           </div>
 
@@ -296,11 +362,19 @@
               <summary>Recipient &amp; tracking ID</summary>
               <div class="field">
                 <label for="touch-recipient-name">Recipient name</label>
-                <input id="touch-recipient-name" type="text" autocomplete="off" />
+                <input
+                  id="touch-recipient-name"
+                  type="text"
+                  autocomplete="off"
+                />
               </div>
               <div class="field">
                 <label for="touch-recipient-contact">Recipient contact</label>
-                <input id="touch-recipient-contact" type="text" autocomplete="off" />
+                <input
+                  id="touch-recipient-contact"
+                  type="text"
+                  autocomplete="off"
+                />
               </div>
               <div class="field">
                 <label for="touch-tracking">Tracking ID</label>
@@ -313,11 +387,48 @@
               </div>
             </details>
             <div id="touch-error" class="error" hidden></div>
-            <button id="touch-save" class="secondary" type="button">Log touch</button>
+            <button id="touch-save" class="secondary" type="button">
+              Log touch
+            </button>
             <div id="touch-status" class="logged" hidden></div>
           </div>
 
           <div id="nba-section" class="nba" hidden></div>
+        </div>
+        <!-- Portal access: this org's portals live in a registry, but the
+               extension can only read/fill a page it holds host permission for.
+               Shown when we lack access to the registered portal origins so the
+               user can grant it in one click; hidden once granted or on a
+               recognized page. -->
+        <div id="portal-access" class="capture" hidden>
+          <p class="capture-summary">
+            On a payer portal? Give Minted access to this organization's portal
+            sites so it can capture and fill their forms.
+          </p>
+          <button id="portal-access-grant" class="secondary" type="button">
+            Enable form capture &amp; fill
+          </button>
+        </div>
+
+        <!-- S5.4: capture — turn a form we don't know into one we do. -->
+        <div id="capture-section" class="capture" hidden>
+          <div class="capture-head">
+            <p id="capture-summary" class="capture-summary"></p>
+            <button id="capture-start" class="link" type="button">
+              Capture this form
+            </button>
+          </div>
+          <p id="capture-restored" class="capture-restored" hidden></p>
+          <div id="capture-rows" class="capture-rows"></div>
+          <div id="capture-actions" class="capture-actions" hidden>
+            <button id="capture-send" class="secondary" type="button">
+              Send for approval
+            </button>
+            <button id="capture-clear" class="link" type="button">
+              Discard
+            </button>
+          </div>
+          <p id="capture-sent" class="capture-sent" hidden></p>
         </div>
       </section>
     </main>

@@ -7,6 +7,7 @@
 // everything else), so chrome.storage.session stays PHI-free. Profile/token
 // values only ever flow through the audited /api reads, never through the
 // external message.
+import { writePanelMode } from "./mode";
 import {
   isAllowedHandoffOrigin,
   isPortalOriginUrl,
@@ -139,6 +140,12 @@ export async function handleExternalMessage(
     createdAt: now,
     lastActivityAt: now,
   });
+  // E6.9 F6.9.7 — a hand-off is case work by definition, so it lands in Work
+  // cases whatever job the panel was last doing. The chooser must never stand
+  // between the webapp's launch and the case it launched: a trainer who is
+  // handed a case is being asked to work it, and leaving the panel in training
+  // mode would also strip the org header off the calls that case needs.
+  await writePanelMode("case");
   notifyPanel();
   // Best-effort: open the side panel on the sender's window so the handoff
   // lands in front of the user. Requires a user gesture — the webapp's click

@@ -24,6 +24,8 @@ import type {
 } from "../shared/apiTypes";
 import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
+import { readPanelMode } from "./mode";
+import { shouldSendOrgHeader } from "../shared/panelMode";
 
 export class ApiError extends Error {
   constructor(
@@ -38,18 +40,20 @@ export class ApiError extends Error {
 async function requestOnce(path: string, token: string, init?: RequestInit): Promise<Response> {
   // Stored only when a multi-org user has picked; absent = no header sent.
   const orgId = await readActiveOrgId();
-  // Org discovery must work BEFORE/WITHOUT org context — it is how a multi-org
-  // caller learns what to send as x-org-id — so /api/me/orgs never carries the
-  // header. A stale/revoked stored org id must not brick that recovery path.
+  // E6.9 F6.9.8: the org header is decided by MODE, not by a path literal.
+  // Training a payer form has no org at all — it writes the shared library —
+  // and the user-scoped routes (org discovery, view prefs, shared propose)
+  // are named as a contract set in panelMode.ts rather than compared inline.
   // Match the pathname precisely (ignore any query string).
-  const pathname = path.split("?")[0];
+  const pathname = path.split("?")[0] ?? path;
+  const mode = await readPanelMode();
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
       authorization: `Bearer ${token}`,
       accept: "application/json",
-      ...(orgId != null && pathname !== "/api/me/orgs" ? { "x-org-id": orgId } : {}),
+      ...(shouldSendOrgHeader(mode, pathname, orgId) ? { "x-org-id": orgId as string } : {}),
     },
   });
 }
@@ -205,6 +209,54 @@ export async function proposeFieldMap(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
+  return data;
+}
+
+// POST /api/shared-field-maps — the E6.9 SHARED propose path (F6.9.2/F6.9.8).
+//
+// Distinct from proposeFieldMap above in exactly one way that matters: the row
+// lands with `org_id IS NULL`, in the trained-form library every org inherits.
+// It runs on the panel's user-scoped guard, so it carries no org header even
+// for a multi-org user (shouldSendOrgHeader), and it is idempotent on
+// (portal_key, selector) — re-capturing a page returns each existing row with
+// its decision untouched, which is what makes re-capture drift repair rather
+// than a reset.
+//
+// Shape-only, like every capture payload: label, selector, control type,
+// section, page, position. There is no value key in this contract.
+// GET /api/shared-portals — the GLOBAL registry only (E6.9 F6.9.9). Training
+// has no org, so the org-scoped /api/portals cannot serve it; this runs on the
+// panel's user-scoped guard and returns the shared library the trainer adds to.
+export async function listSharedPortals(): Promise<PortalRegistryRow[]> {
+  const { data } = await apiFetch<PortalRegistryRow[]>("/api/shared-portals");
+  return data;
+}
+
+export async function proposeSharedFieldMap(input: {
+  portal_key: string;
+  selector: string;
+  field_label?: string | null;
+  form_section?: string | null;
+  page_step?: string | null;
+  field_type?: string | null;
+  sort_order?: number | null;
+}): Promise<PortalFieldMap> {
+  const { data } = await apiFetch<{ map: PortalFieldMap }>("/api/shared-field-maps", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return data.map;
+}
+
+// GET /api/shared-field-maps?portal_key= — what a RECOGNIZED form already has
+// (F6.9.9: pages seen, fields captured, mapped count). The shared tier only,
+// on the same user-scoped guard as the propose above, because training names
+// no org.
+export async function listSharedFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
+  const { data } = await apiFetch<PortalFieldMap[]>(
+    `/api/shared-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
+  );
   return data;
 }
 

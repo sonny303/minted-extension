@@ -21,6 +21,7 @@ import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../s
 import type {
   CaseContextTaskStep,
   NextBestActionItem,
+  PortalFieldMap,
   PortalRegistryRow,
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
@@ -43,6 +44,15 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
+import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
+import {
+  candidatePortalName,
+  captureStateSummary,
+  derivePageStep,
+  formCaptureState,
+  recognizeForm,
+} from "../shared/trainForms";
+import { nextPageSequence, usedPageNames } from "../shared/capture";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -68,6 +78,16 @@ const views = {
   signin: el<HTMLElement>("view-signin"),
   main: el<HTMLElement>("view-main"),
 };
+// E6.9 F6.9.7 — the job chooser and the Train-forms module.
+const modeCaseBtn = el<HTMLButtonElement>("mode-case");
+const modeTrainBtn = el<HTMLButtonElement>("mode-train");
+const trainSection = el<HTMLElement>("train-section");
+const trainPayer = el<HTMLSelectElement>("train-payer");
+const trainRecognition = el<HTMLElement>("train-recognition");
+const trainPortalField = el<HTMLElement>("train-portal-field");
+const trainPortal = el<HTMLSelectElement>("train-portal");
+const trainHint = el<HTMLElement>("train-hint");
+const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
 const avatarBtn = el<HTMLButtonElement>("avatar-btn");
@@ -203,6 +223,14 @@ let portalTabId: number | null = null;
 // Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
 // which is the correct signed-out/org-less posture.
 let portalRows: PortalRegistryRow[] = [];
+// E6.9: the current job, and the SHARED (global) registry Train forms works
+// against. The worker owns the mode — it decides whether a call carries
+// x-org-id — so the panel mirrors it rather than being its source of truth.
+let panelMode: PanelMode = DEFAULT_PANEL_MODE;
+let sharedPortalRows: PortalRegistryRow[] = [];
+// The shared field maps of the recognized form, for the "what this form
+// already has" read-out. Empty for a form nothing has captured yet.
+let trainFormMaps: PortalFieldMap[] = [];
 let lastFill: LastFill | null = null;
 // Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
 // selected case's portalTasks matched against the current page's portal. null =
@@ -1942,7 +1970,9 @@ async function refreshPortalAccessPrompt(): Promise<void> {
     portalAccess.hidden = true;
     return;
   }
-  const patterns = portalOriginPatterns(portalRows);
+  // The origins to ask for come from whichever registry this job works
+  // against: the org's in case mode, the shared library's while training.
+  const patterns = portalOriginPatterns(panelMode === "train" ? sharedPortalRows : portalRows);
   if (patterns.length === 0) {
     portalAccess.hidden = true;
     return;
@@ -1959,7 +1989,7 @@ async function hasOriginPermissions(origins: string[]): Promise<boolean> {
 }
 
 portalAccessGrant.addEventListener("click", () => {
-  const patterns = portalOriginPatterns(portalRows);
+  const patterns = portalOriginPatterns(panelMode === "train" ? sharedPortalRows : portalRows);
   if (patterns.length === 0) return;
   portalAccessGrant.disabled = true;
   void (async () => {
@@ -2001,12 +2031,25 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 function showMain(auth: AuthState): void {
   renderAccountRow(auth.name, auth.email);
   showView("main");
-  // Fresh context: this restore load (and every loader it chains into) runs
-  // under one generation so it populates uninterrupted. The handoff check
-  // runs AFTER orgs load — the org validation needs the membership list.
-  void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
-  void detectPortal();
-  void restoreCapture();
+  void (async () => {
+    // The worker owns the mode (it decides whether a call carries x-org-id),
+    // and a hand-off received while the panel was closed has already forced it
+    // to case — so read it BEFORE deciding which loaders to run.
+    const modeResponse = await sendToBackground({ type: "GET_PANEL_MODE" });
+    panelMode = modeResponse.ok ? modeResponse.data : DEFAULT_PANEL_MODE;
+    applyPanelMode();
+    if (panelMode === "train") {
+      await loadSharedRegistry();
+      void restoreCapture();
+      return;
+    }
+    // Fresh context: this restore load (and every loader it chains into) runs
+    // under one generation so it populates uninterrupted. The handoff check
+    // runs AFTER orgs load — the org validation needs the membership list.
+    void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
+    void detectPortal();
+    void restoreCapture();
+  })();
 }
 
 // S1.5 — the account row: a 26px forest avatar circle with the user's white
@@ -3219,7 +3262,12 @@ function localToday(): string {
 
 function renderCapture(): void {
   // Capture is offered whenever a recognized portal page is in the active tab.
-  captureSection.hidden = portal == null || portalTabId == null;
+  // In CASE mode it additionally waits for the org to resolve, exactly as it
+  // did while it lived inside the provider section — a proposal there lands
+  // under that org. In TRAIN mode there is no org to wait for.
+  const training = panelMode === "train";
+  captureSection.hidden =
+    portal == null || portalTabId == null || (!training && !orgResolved());
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
@@ -3233,7 +3281,11 @@ function renderCapture(): void {
   captureSend.disabled = false;
   captureSent.hidden = counts.sent === 0;
   if (counts.sent > 0) {
-    captureSent.textContent = `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
+    captureSent.textContent = training
+      ? // Training writes the SHARED library, so the review happens in the
+        // Submit-form task editor (D18) — say where, not just "approve them".
+        `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`
+      : `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
   }
   if (captureSession == null) return;
 
@@ -3276,10 +3328,22 @@ captureStart.addEventListener("click", () => {
   captureStart.disabled = true;
   captureStart.textContent = "Reading the form…";
   void (async () => {
+    // E6.9 F6.9.8 — name the wizard page this scan comes from. Heading first
+    // (what the trainer sees), then the URL tail, then the capture sequence;
+    // a name already used in this run falls through, so two indistinguishable
+    // pages never merge into one bucket. Capture never prompts for it — the
+    // admin renames pages in the editor.
+    const pageStep = derivePageStep({
+      url: (await queryActiveTab())?.url ?? null,
+      heading: (await queryActiveTab())?.title ?? null,
+      sequence: nextPageSequence(captureSession),
+      used: usedPageNames(captureSession),
+    });
     const response = await sendToBackground({
       type: "START_CAPTURE",
       tabId,
       portalKey: activePortal.key,
+      pageStep,
     });
     captureStart.disabled = false;
     if (!isCurrent(generation)) return;
@@ -3332,6 +3396,156 @@ async function restoreCapture(): Promise<void> {
   }
   renderCapture();
 }
+
+// ---------------------------------------------------------------------------
+// E6.9 F6.9.7 — the job chooser, and F6.9.9 — Train forms.
+// ---------------------------------------------------------------------------
+
+/** Show the sections that belong to the current job. Case work keeps every
+ * surface it had; training hides the org, search and provider pickers outright
+ * — not because they are noise, but because a training capture writes the
+ * SHARED library and has no org at all (F6.9.8). Leaving an org selected while
+ * training would suggest the capture lands under it, which is the exact
+ * misunderstanding this split exists to end. */
+function applyPanelMode(): void {
+  const training = panelMode === "train";
+  modeCaseBtn.setAttribute("aria-pressed", String(!training));
+  modeTrainBtn.setAttribute("aria-pressed", String(training));
+  trainSection.hidden = !training;
+  orgField.hidden = training;
+  if (training) {
+    searchSection.hidden = true;
+    providerSection.hidden = true;
+    hideSearchResults();
+    queueSection.hidden = true;
+    handoffBanner.hidden = true;
+  }
+  renderCapture();
+  void refreshPortalAccessPrompt();
+}
+
+async function setPanelMode(mode: PanelMode): Promise<void> {
+  if (panelMode === mode) return;
+  panelMode = mode;
+  await sendToBackground({ type: "SET_PANEL_MODE", mode });
+  applyPanelMode();
+  if (mode === "train") {
+    await loadSharedRegistry();
+  } else {
+    // Returning to case work re-enters the normal load path, which restores
+    // the org pick and everything that hangs off it.
+    void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
+    void detectPortal();
+  }
+}
+
+modeCaseBtn.addEventListener("click", () => void setPanelMode("case"));
+modeTrainBtn.addEventListener("click", () => void setPanelMode("train"));
+
+/** The trained-form library: every payer's shared portals, plus what the open
+ * page is recognized as. */
+async function loadSharedRegistry(): Promise<void> {
+  trainRecognition.textContent = "Looking up this form…";
+  const response = await sendToBackground({ type: "LIST_SHARED_PORTALS" });
+  if (!response.ok) {
+    sharedPortalRows = [];
+    trainRecognition.textContent = response.error;
+    return;
+  }
+  sharedPortalRows = response.data;
+  renderTrainPayers();
+  await refreshTrainRecognition();
+}
+
+function trainPayerNames(): string[] {
+  const names = new Set<string>();
+  for (const row of sharedPortalRows) {
+    const name = (row.payerName ?? "").trim();
+    if (name) names.add(name);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+function renderTrainPayers(): void {
+  const names = trainPayerNames();
+  const previous = trainPayer.value;
+  trainPayer.replaceChildren();
+  const placeholder = new Option("Select a payer…", "", true, previous === "");
+  placeholder.disabled = names.length > 0;
+  trainPayer.add(placeholder);
+  for (const name of names) {
+    trainPayer.add(new Option(name, name, false, name === previous));
+  }
+  trainPayer.disabled = names.length === 0;
+}
+
+/** Portals belonging to the selected payer — the "find/select" half of the
+ * F6.9.7 flow, for when the open tab is not the form (or is not yet granted). */
+function renderTrainPortals(): void {
+  const payerName = trainPayer.value;
+  const rows = sharedPortalRows.filter((r) => (r.payerName ?? "") === payerName);
+  trainPortalField.hidden = payerName === "" || rows.length === 0;
+  const previous = trainPortal.value;
+  trainPortal.replaceChildren();
+  for (const row of rows) {
+    trainPortal.add(new Option(row.name, row.portalKey, false, row.portalKey === previous));
+  }
+}
+
+/**
+ * What is the open page, and what does the system already know about it?
+ *
+ * A RECOGNIZED form is never silently changed (F6.9.9): the panel states what
+ * it already has — pages seen, fields captured, mapped — and re-capturing is
+ * the user's explicit choice, which is drift repair. An UNRECOGNIZED page is
+ * greeted as new and gets a numbered candidate name the admin renames later;
+ * capture never blocks on the name being right.
+ */
+async function refreshTrainRecognition(): Promise<void> {
+  const tab = await queryActiveTab();
+  const recognition = recognizeForm(tab?.url, sharedPortalRows, trainPayer.value || null);
+  if (recognition.kind === "existing") {
+    portal = recognition.portal;
+    portalTabId = tab?.id ?? null;
+    const maps = await sendToBackground({
+      type: "LIST_SHARED_FIELD_MAPS",
+      portalKey: recognition.portal.key,
+    });
+    trainFormMaps = maps.ok ? maps.data : [];
+    const state = formCaptureState(trainFormMaps);
+    trainRecognition.textContent =
+      `${recognition.portal.label} — already trained: ${captureStateSummary(state)}.`;
+    trainHint.textContent =
+      state.undecided > 0
+        ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
+        : "Re-capture only if the form changed — nothing here changes a mapping on its own.";
+  } else {
+    portal = null;
+    portalTabId = null;
+    trainFormMaps = [];
+    const candidate = candidatePortalName(trainPayer.value || null, sharedPortalRows);
+    trainRecognition.textContent = tab?.url
+      ? `New form — nothing matches this page yet. It will be registered as “${candidate}”.`
+      : "Open the payer's form in this tab to train it.";
+    trainHint.textContent =
+      "Register the form in the web app first, then come back and capture each section of it here.";
+  }
+  renderTrainPortals();
+  renderCapture();
+  void refreshPortalAccessPrompt();
+}
+
+trainPayer.addEventListener("change", () => {
+  renderTrainPortals();
+  void refreshTrainRecognition();
+});
+trainPortal.addEventListener("change", () => {
+  const row = sharedPortalRows.find((r) => r.portalKey === trainPortal.value);
+  if (!row?.formUrl) return;
+  // Opening the form is how a trainer gets onto the page they are about to
+  // capture; recognition then re-runs against the tab they land on.
+  void chrome.tabs.create({ url: row.formUrl });
+});
 
 void (async () => {
   const response = await sendToBackground({ type: "GET_AUTH_STATE" });

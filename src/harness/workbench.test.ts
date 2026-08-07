@@ -23,7 +23,18 @@ import {
   searchProviders,
   completeTaskStep,
   proposeFieldMap,
+  listSharedPortals,
+  listSharedFieldMaps,
+  proposeSharedFieldMap,
 } from "../background/api";
+import { writeActiveOrgId } from "../background/orgState";
+import { readPanelMode, writePanelMode } from "../background/mode";
+import {
+  assignSortOrder,
+  candidatePortalName,
+  formCaptureState,
+  recognizeForm,
+} from "../shared/trainForms";
 import { coveragePortal } from "../background/fill";
 import {
   bindFillTab,
@@ -39,6 +50,7 @@ import {
 import { buildStructuredTouchBody } from "../shared/structuredTouch";
 import { projectQuickCards, resolveLayout } from "../shared/quickCards";
 import { ACTIVE_CASE_IDLE_MS, type ActiveCaseRecord } from "../shared/handoff";
+import type { PortalFieldMap, PortalRegistryRow } from "../shared/apiTypes";
 
 const holder = vi.hoisted(() => ({ baseUrl: "" }));
 
@@ -81,6 +93,24 @@ interface MockApi {
     completedSteps: Set<string>;
     // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
     proposedMaps: Map<string, { status: string; token: string | null }>;
+    // E6.9: the shared (org-free) training tier — the global registry, its
+    // field maps, the proposals written to it, and every x-org-id header
+    // those routes were sent (null = none, which is the contract).
+    sharedPortals: PortalRegistryRow[];
+    sharedMaps: Array<Partial<PortalFieldMap> & { id: string }>;
+    sharedProposed: Map<
+      string,
+      {
+        id: string;
+        orgId: string | null;
+        selector: string;
+        pageStep: string | null;
+        sortOrder: number | null;
+        status: string;
+        token: string | null;
+      }
+    >;
+    sharedOrgHeaders: Array<string | null>;
   };
   close(): Promise<void>;
 }
@@ -551,6 +581,175 @@ describe("TS-103 — escape hatch preserves the portal tab", () => {
     const anchor = html.match(/<a[^>]*id="open-in-panel"[^>]*>/)?.[0] ?? "";
     expect(anchor).toContain('target="_blank"');
     expect(anchor).toContain('rel="noreferrer"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E6.9 — Train forms: the org-free tier, page stamping, and recognition
+// (TS-151, TS-152, TS-153) driven through the real background modules.
+// ---------------------------------------------------------------------------
+describe("E6.9 Train forms — the org-free shared tier", () => {
+  beforeEach(async () => {
+    stub.reset();
+    mock.state.sharedOrgHeaders.length = 0;
+    mock.state.sharedProposed.clear();
+  });
+
+  it("TS-151 — training carries NO x-org-id, even for a multi-org caller", async () => {
+    // The mode is what decides this, not the path: an org is stored (the
+    // multi-org case) and case-mode calls still carry it, but every training
+    // call goes out without one. Sending it would land the capture in that
+    // org's private overrides instead of the shared library.
+    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writePanelMode("train");
+
+    await listSharedPortals();
+    await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#npi",
+      field_label: "NPI",
+      page_step: "Provider identity",
+      field_type: "text",
+      sort_order: 1,
+    });
+
+    expect(mock.state.sharedOrgHeaders).toEqual([null, null]);
+
+    // And the row itself is shared, never the caller's org.
+    const written = [...mock.state.sharedProposed.values()];
+    expect(written).toHaveLength(1);
+    expect(written[0]?.orgId).toBeNull();
+    expect(written[0]?.status).toBe("proposed");
+    expect(written[0]?.token).toBeNull();
+  });
+
+  it("TS-151b — a hand-off lands in Work cases whatever job was selected", async () => {
+    // The chooser must never stand between the webapp's launch and the case
+    // it launched — and leaving the panel in training mode would also strip
+    // the org header off the calls that case needs.
+    await writePanelMode("train");
+    const accepted = await handleExternalMessage(
+      {
+        type: "SET_ACTIVE_CASE",
+        caseId: FIXTURES.CASE_ID,
+        providerId: FIXTURES.PROVIDER_ID,
+        orgId: FIXTURES.KANSAS_ORG,
+        portalUrl: "https://provider.bcbsks.com/x",
+      },
+      "https://mintedpanel.vercel.app",
+    );
+    expect(accepted).toEqual({ ok: true });
+    expect(await readPanelMode()).toBe("case");
+  });
+
+  it("TS-152 — a page's fields propose with their page and DOM order", async () => {
+    await writePanelMode("train");
+    const rows = assignSortOrder([
+      { label: "First name", selector: "#first" },
+      { label: "Last name", selector: "#last" },
+    ]);
+    for (const row of rows) {
+      await proposeSharedFieldMap({
+        portal_key: "aetna_join",
+        selector: row.selector,
+        field_label: row.label,
+        page_step: "Provider identity",
+        field_type: "text",
+        sort_order: row.sortOrder,
+      });
+    }
+    const written = [...mock.state.sharedProposed.values()];
+    expect(written.map((r) => [r.selector, r.pageStep, r.sortOrder])).toEqual([
+      ["#first", "Provider identity", 1],
+      ["#last", "Provider identity", 2],
+    ]);
+    // Shape only: no value key exists in this contract, so none can ride in.
+    for (const row of written) {
+      expect(Object.keys(row)).not.toContain("value");
+    }
+  });
+
+  it("TS-152b — re-capturing a page returns the SAME row, decision intact", async () => {
+    await writePanelMode("train");
+    const first = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#npi",
+      field_label: "NPI",
+      page_step: "Page 1",
+      field_type: "text",
+      sort_order: 1,
+    });
+    const again = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#npi",
+      field_label: "NPI number",
+      page_step: "Page 1",
+      field_type: "text",
+      sort_order: 1,
+    });
+    // Idempotent on (portal_key, selector) — this is what makes re-capture
+    // drift repair rather than a reset.
+    expect(again.id).toBe(first.id);
+    expect(mock.state.sharedProposed.size).toBe(1);
+  });
+
+  it("TS-153 — a known form is recognized with what it already has; a new one is greeted", async () => {
+    await writePanelMode("train");
+    const registry = await listSharedPortals();
+
+    const known = recognizeForm(
+      "https://payer.example/aetna/join/start?session=abc",
+      registry,
+      "Aetna",
+    );
+    expect(known.kind).toBe("existing");
+    if (known.kind === "existing") expect(known.portal.key).toBe("aetna_join");
+
+    const unknown = recognizeForm("https://other.example/apply", registry, "Cigna");
+    expect(unknown).toEqual({ kind: "new", candidateName: "Cigna form" });
+
+    // A second form for a payer that already has one is numbered, never a
+    // block and never an overwrite.
+    expect(candidatePortalName("Aetna", registry)).toBe("Aetna form 2");
+
+    // Nothing was written by recognizing anything.
+    expect(mock.state.sharedProposed.size).toBe(0);
+  });
+
+  it("TS-153b — the recognized form reports its capture state honestly", async () => {
+    await writePanelMode("train");
+    mock.state.sharedMaps = [
+      {
+        id: "s1",
+        orgId: null,
+        portalKey: "aetna_join",
+        selector: "#npi",
+        pageStep: "Page 1",
+        source: "token",
+        token: "provider.npi",
+        hardcodedValue: null,
+        status: "approved",
+      },
+      {
+        id: "s2",
+        orgId: null,
+        portalKey: "aetna_join",
+        selector: "#tin",
+        pageStep: "Page 2",
+        source: "manual",
+        token: null,
+        hardcodedValue: null,
+        status: "proposed",
+      },
+    ];
+    const maps = await listSharedFieldMaps("aetna_join");
+    expect(formCaptureState(maps)).toEqual({
+      pagesSeen: 2,
+      fieldsCaptured: 2,
+      mapped: 1,
+      undecided: 1,
+    });
+    mock.state.sharedMaps = [];
   });
 });
 

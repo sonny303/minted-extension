@@ -261,6 +261,29 @@ export async function createMockPanelApi(options = {}) {
     requests: [],
     completedSteps: new Set(),
     proposedMaps: new Map(),
+    // E6.9 shared tier: the global registry a trainer works against, the
+    // proposals it writes, and every x-org-id header those routes were sent
+    // (so a test can pin that training carries none).
+    sharedPortals: [
+      {
+        id: "shared-portal-1",
+        orgId: null,
+        portalKey: "aetna_join",
+        name: "Aetna — Request to Join",
+        payerId: "payer-aetna",
+        payerName: "Aetna",
+        formUrl: "https://payer.example/aetna/join/start",
+        isVerified: false,
+        lastVerifiedAt: null,
+        provenAt: null,
+        urlChangedAt: null,
+        createdAt: "2026-08-01T00:00:00Z",
+        updatedAt: "2026-08-01T00:00:00Z",
+      },
+    ],
+    sharedMaps: [],
+    sharedProposed: new Map(),
+    sharedOrgHeaders: [],
   };
 
   const server = createServer((req, res) => {
@@ -590,6 +613,55 @@ export async function createMockPanelApi(options = {}) {
             : { status_bump: "applied" };
       }
       return envelope(res, 201, touch, null, meta);
+    }
+
+    // --- E6.9 shared (org-free) training tier. Mirrors the panel: both routes
+    // run on the user-scoped guard, and the mock RECORDS the x-org-id header it
+    // was sent so a test can pin that training never carries one. ---
+    if (/^\/api\/shared-portals\/?$/.test(url.pathname)) {
+      if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
+      state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
+      return envelope(res, 200, state.sharedPortals, null, {
+        total: state.sharedPortals.length,
+      });
+    }
+    if (/^\/api\/shared-field-maps\/?$/.test(url.pathname)) {
+      state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
+      if (method === "GET") {
+        const portalKey = url.searchParams.get("portal_key");
+        let rows = state.sharedMaps;
+        if (portalKey) rows = rows.filter((r) => r.portalKey === portalKey);
+        return envelope(res, 200, rows, null, { total: rows.length });
+      }
+      if (method !== "POST") return envelope(res, 405, null, "Method not allowed");
+      const body = (await readBody(req)) ?? {};
+      if (typeof body.portal_key !== "string" || !body.portal_key.trim()) {
+        return envelope(res, 422, null, "portal_key is required");
+      }
+      if (typeof body.selector !== "string" || !body.selector.trim()) {
+        return envelope(res, 422, null, "selector is required");
+      }
+      const key = `${body.portal_key}:${body.selector}`;
+      let map = state.sharedProposed.get(key);
+      const created = map == null;
+      if (!map) {
+        map = {
+          id: `fm-shared-${state.sharedProposed.size + 1}`,
+          // The tier's defining property: never the caller's org.
+          orgId: null,
+          portalKey: body.portal_key,
+          selector: body.selector,
+          fieldLabel: String(body.field_label ?? "").trim().toLowerCase() || null,
+          formSection: body.form_section ?? null,
+          pageStep: body.page_step ?? null,
+          sortOrder: body.sort_order ?? null,
+          source: "manual",
+          token: null,
+          status: "proposed",
+        };
+        state.sharedProposed.set(key, map);
+      }
+      return envelope(res, created ? 201 : 200, { map });
     }
 
     // --- /api/portal-field-maps ---
