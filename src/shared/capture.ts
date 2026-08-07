@@ -25,6 +25,12 @@ export interface CaptureRow {
   chosenToken: string | null;
   /** Set once the row has been sent to the server as a proposal. */
   sent: boolean;
+  /** E6.9 F6.9.8 — the wizard page this row was scanned from, and its DOM
+   * position within that page. Both are shape facts, like the selector, and
+   * both ride the proposal so the editor can group and order a multi-page
+   * form the way it actually reads. Null on rows captured before E6.9. */
+  pageStep?: string | null;
+  sortOrder?: number | null;
 }
 
 export interface CaptureSession {
@@ -89,6 +95,8 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
       evidence: typeof r.evidence === "string" ? r.evidence : null,
       chosenToken: typeof r.chosenToken === "string" ? r.chosenToken : null,
       sent: r.sent === true,
+      pageStep: typeof r.pageStep === "string" ? r.pageStep : null,
+      sortOrder: typeof r.sortOrder === "number" ? r.sortOrder : null,
     });
   }
   return {
@@ -141,4 +149,47 @@ export function diffCapture(
 function pickDecision(prev: CaptureRow | undefined): Partial<CaptureRow> {
   if (!prev) return {};
   return { chosenToken: prev.chosenToken, sent: prev.sent };
+}
+
+/**
+ * Fold a fresh scan of ONE page into an existing capture of the same portal
+ * (E6.9 F6.9.8).
+ *
+ * Drift repair is per PAGE. `diffCapture` alone would be wrong for a multi-page
+ * wizard: scanning page 2 sees none of page 1's selectors, so every page-1 row
+ * would read as "removed" and be dropped — the trainer would walk five pages
+ * and keep only the fifth. Rows belonging to OTHER pages are therefore carried
+ * verbatim, and only the rows on the page being scanned are diffed, so a
+ * re-scan of page 2 still preserves the decisions already made there.
+ *
+ * Rows captured before pages existed (`pageStep` null) diff against an unnamed
+ * scan, which is exactly the old single-page behaviour.
+ */
+export function mergePageCapture(
+  previous: readonly CaptureRow[],
+  next: readonly CaptureRow[],
+  pageStep: string | null,
+): CaptureRow[] {
+  const samePage = (row: CaptureRow) => (row.pageStep ?? null) === pageStep;
+  const otherPages = previous.filter((row) => !samePage(row));
+  const diff = diffCapture(previous.filter(samePage), next);
+  return [...otherPages, ...diff.unchanged, ...diff.added];
+}
+
+/** The page names already used in this capture run — what `derivePageStep`
+ * needs so a second scan of an indistinguishable page does not silently merge
+ * into the first one's bucket. */
+export function usedPageNames(session: CaptureSession | null): string[] {
+  const names = new Set<string>();
+  for (const row of session?.rows ?? []) {
+    const page = row.pageStep?.trim();
+    if (page) names.add(page);
+  }
+  return [...names];
+}
+
+/** How many distinct pages this run has captured — the 1-based sequence the
+ * next page falls back to. */
+export function nextPageSequence(session: CaptureSession | null): number {
+  return usedPageNames(session).length + 1;
 }

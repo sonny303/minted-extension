@@ -4,7 +4,10 @@ import {
   canSendCapture,
   captureCounts,
   diffCapture,
+  mergePageCapture,
+  nextPageSequence,
   parseCaptureSession,
+  usedPageNames,
   recognitionSummary,
   restoredSummary,
   type CaptureRow,
@@ -122,3 +125,92 @@ describe("diffCapture (S5.4 — re-capture as drift repair)", () => {
     expect(kept.sent).toBe(true);
   });
 });
+
+describe("mergePageCapture (E6.9 multi-page)", () => {
+  const row = (selector: string, pageStep: string | null, over: Partial<CaptureRow> = {}) => ({
+    label: selector,
+    selector,
+    fieldType: "text" as const,
+    formSection: null,
+    suggestedToken: null,
+    evidence: null,
+    chosenToken: null,
+    sent: false,
+    pageStep,
+    sortOrder: null,
+    ...over,
+  });
+
+  it("keeps other pages' rows when a new page is scanned", () => {
+    // THE multi-page bug a plain diff would cause: scanning page 2 sees none of
+    // page 1's selectors, so every page-1 row reads as "removed" and is
+    // dropped — the trainer walks five pages and keeps only the fifth.
+    const previous = [row("#a", "Page 1"), row("#b", "Page 1")];
+    const merged = mergePageCapture(previous, [row("#c", "Page 2")], "Page 2");
+    expect(merged.map((r) => r.selector)).toEqual(["#a", "#b", "#c"]);
+  });
+
+  it("re-scanning the SAME page carries its decisions and drops vanished fields", () => {
+    const previous = [
+      row("#a", "Page 1", { chosenToken: "provider.npi", sent: true }),
+      row("#gone", "Page 1"),
+    ];
+    const merged = mergePageCapture(previous, [row("#a", "Page 1"), row("#new", "Page 1")], "Page 1");
+    expect(merged.map((r) => r.selector)).toEqual(["#a", "#new"]);
+    expect(merged[0]?.chosenToken).toBe("provider.npi");
+    expect(merged[0]?.sent).toBe(true);
+  });
+
+  it("re-scanning one page of a multi-page run leaves the other pages alone", () => {
+    const previous = [
+      row("#a", "Page 1", { chosenToken: "provider.npi" }),
+      row("#b", "Page 2", { chosenToken: "group.tin" }),
+    ];
+    const merged = mergePageCapture(previous, [row("#b2", "Page 2")], "Page 2");
+    expect(merged.map((r) => r.selector)).toEqual(["#a", "#b2"]);
+    expect(merged[0]?.chosenToken).toBe("provider.npi");
+  });
+
+  it("behaves like the old single-page diff for rows with no page", () => {
+    const previous = [row("#a", null, { chosenToken: "provider.npi" })];
+    const merged = mergePageCapture(previous, [row("#a", null)], null);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.chosenToken).toBe("provider.npi");
+  });
+});
+
+describe("usedPageNames / nextPageSequence", () => {
+  it("reports the distinct pages captured so far", () => {
+    const session = {
+      portalKey: "p",
+      templateStepId: null,
+      startedAt: "2026-08-07T00:00:00Z",
+      rows: [
+        { ...blankRow("#a"), pageStep: "Page 1" },
+        { ...blankRow("#b"), pageStep: "Page 1" },
+        { ...blankRow("#c"), pageStep: "Tax ID" },
+        { ...blankRow("#d"), pageStep: null },
+      ],
+    };
+    expect(usedPageNames(session)).toEqual(["Page 1", "Tax ID"]);
+    expect(nextPageSequence(session)).toBe(3);
+  });
+
+  it("starts at page 1 with no session", () => {
+    expect(usedPageNames(null)).toEqual([]);
+    expect(nextPageSequence(null)).toBe(1);
+  });
+});
+
+function blankRow(selector: string): CaptureRow {
+  return {
+    label: selector,
+    selector,
+    fieldType: "text",
+    formSection: null,
+    suggestedToken: null,
+    evidence: null,
+    chosenToken: null,
+    sent: false,
+  };
+}

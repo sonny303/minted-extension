@@ -13,6 +13,7 @@ import {
   getCaseContext,
   patchProviderField,
   proposeFieldMap,
+  proposeSharedFieldMap,
   recordCaqhAttestation,
   getNextBestAction,
   getProviderProfile,
@@ -21,6 +22,8 @@ import {
   listMyOrgs,
   listPortals,
   listProviders,
+  listSharedFieldMaps,
+  listSharedPortals,
   postSubmissionTouch,
   putViewPrefs,
   searchCases,
@@ -29,6 +32,7 @@ import {
 import { projectQuickCards, resolveLayout } from "../shared/quickCards";
 import { buildStructuredTouchBody, validateStructuredTouch } from "../shared/structuredTouch";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
+import { readPanelMode, writePanelMode } from "./mode";
 import { coveragePortal, fillPortal } from "./fill";
 import { ensureContentScript } from "./inject";
 import { buildSubmissionTouchBody } from "../shared/submission";
@@ -44,11 +48,12 @@ import {
 } from "./activeCase";
 import { resolveActiveCaseState } from "../shared/handoff";
 import {
-  diffCapture,
+  mergePageCapture,
   parseCaptureSession,
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
+import { assignSortOrder } from "../shared/trainForms";
 import type { CapturedField } from "../content/captureScan";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
@@ -308,7 +313,12 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         throw new Error(scanned?.error ?? "Could not read this form — reload the page and retry.");
       }
       const previous = await readCaptureSession();
-      const rows: CaptureRow[] = scanned.data.map((f) => ({
+      const samePortal = previous?.portalKey === request.portalKey;
+      // E6.9 F6.9.8 — stamp the wizard page and DOM order. The scan yields
+      // fields in document order, so sortOrder is positional within THIS page;
+      // pages themselves order by the sequence the trainer walked them.
+      const pageStep = request.pageStep?.trim() || null;
+      const rows: CaptureRow[] = assignSortOrder(scanned.data).map((f) => ({
         label: f.label,
         selector: f.selector,
         fieldType: f.fieldType,
@@ -317,17 +327,14 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
         evidence: null,
         chosenToken: null,
         sent: false,
+        pageStep,
+        sortOrder: f.sortOrder,
       }));
-      // Re-capturing the same portal is DRIFT REPAIR: carry prior decisions
-      // for selectors that are still there (diffCapture), so the human
-      // re-decides only what actually changed.
-      const merged =
-        previous?.portalKey === request.portalKey
-          ? (() => {
-              const diff = diffCapture(previous.rows, rows);
-              return [...diff.unchanged, ...diff.added];
-            })()
-          : rows;
+      // Re-capturing is DRIFT REPAIR, and it is PER PAGE: prior decisions on
+      // the page being scanned carry over, and the other pages of a multi-page
+      // run are kept verbatim (a plain diff would read them as removed and
+      // drop them — see mergePageCapture).
+      const merged = samePortal ? mergePageCapture(previous.rows, rows, pageStep) : rows;
       const session: CaptureSession = {
         portalKey: request.portalKey,
         templateStepId: request.templateStepId ?? null,
@@ -355,10 +362,32 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // Propose every not-yet-sent row. Each response carries the server's
       // learned suggestion (S5.3), which we fold back onto the row so the
       // review shows it with its evidence. Nothing is approved here.
+      // E6.9 F6.9.8: which tier the proposal lands in is decided by the JOB,
+      // not by the page. Training writes the SHARED library (`org_id IS NULL`)
+      // that every org inherits; case work keeps proposing under the caller's
+      // org exactly as before.
+      const mode = await readPanelMode();
       const rows: CaptureRow[] = [];
       for (const row of current.rows) {
         if (row.sent) {
           rows.push(row);
+          continue;
+        }
+        if (mode === "train") {
+          await proposeSharedFieldMap({
+            portal_key: current.portalKey,
+            selector: row.selector,
+            field_label: row.label,
+            form_section: row.formSection,
+            page_step: row.pageStep ?? null,
+            field_type: row.fieldType,
+            sort_order: row.sortOrder ?? null,
+          });
+          // The shared path returns the row itself, not a learned suggestion —
+          // suggestions are org-scoped memory (field_dictionary) and training
+          // has no org. Nothing to fold back; the trainer decides in the
+          // editor, which is where the whole registry now lives.
+          rows.push({ ...row, sent: true });
           continue;
         }
         const result = await proposeFieldMap({
@@ -378,6 +407,16 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       const next: CaptureSession = { ...current, rows };
       await writeCaptureSession(next);
       return next;
+    }
+    case "LIST_SHARED_PORTALS":
+      return listSharedPortals();
+    case "LIST_SHARED_FIELD_MAPS":
+      return listSharedFieldMaps(request.portalKey);
+    case "GET_PANEL_MODE":
+      return readPanelMode();
+    case "SET_PANEL_MODE": {
+      await writePanelMode(request.mode);
+      return null;
     }
     case "CLEAR_CAPTURE":
       await chrome.storage.session.remove(CAPTURE_KEY);

@@ -12,6 +12,7 @@ import type {
   SubmissionTouch,
   UserOrgMembership,
   QuickCardCatalogField,
+  PortalFieldMap,
   PortalRegistryRow,
   StatusBumpMeta,
 } from "./apiTypes";
@@ -20,6 +21,7 @@ import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
+import type { PanelMode } from "./panelMode";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -31,10 +33,20 @@ export type BgRequest =
   // (provider, case, facility, reports, active-case context) in the worker
   // before the new id is stored. null = single-org mode, no x-org-id header.
   | { type: "SET_ACTIVE_ORG"; orgId: string | null }
+  // E6.9 F6.9.7: which job the panel is doing. The worker owns it because the
+  // mode decides whether a request carries x-org-id at all (training writes
+  // the shared library and is org-free), so a mode switch must never race a
+  // call already in flight.
+  | { type: "GET_PANEL_MODE" }
+  | { type: "SET_PANEL_MODE"; mode: PanelMode }
   | { type: "LIST_PROVIDERS" }
   // S3.2: the DB-driven portal registry (own-org + global rows) — page
   // recognition and the PROVEN chip read from these, never a bundled list.
   | { type: "LIST_PORTALS" }
+  // E6.9 F6.9.9: the SHARED (global) registry + one form's shared field maps.
+  // Train forms has no org, so it cannot use the org-scoped reads above.
+  | { type: "LIST_SHARED_PORTALS" }
+  | { type: "LIST_SHARED_FIELD_MAPS"; portalKey: string }
   | { type: "LIST_CASES"; providerId: string }
   // E4.3 F4.3.5: the unified standalone search — the worker queries
   // GET /api/cases?q= and GET /api/providers?search= CONCURRENTLY and returns
@@ -49,7 +61,16 @@ export type BgRequest =
   // label; SEND proposes the undecided rows; the session survives a worker
   // restart in chrome.storage.session (nothing PHI-bearing is ever in it).
   | { type: "GET_CAPTURE" }
-  | { type: "START_CAPTURE"; tabId: number; portalKey: string; templateStepId?: string | null }
+  // E6.9 F6.9.8: `pageStep` names the wizard page this scan came from, and
+  // `used` are the page names already taken in this run, so a repeat falls
+  // through to the capture sequence instead of merging two pages' fields.
+  | {
+      type: "START_CAPTURE";
+      tabId: number;
+      portalKey: string;
+      templateStepId?: string | null;
+      pageStep?: string | null;
+    }
   | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
   | { type: "SEND_CAPTURE" }
   | { type: "CLEAR_CAPTURE" }
@@ -190,8 +211,12 @@ export interface BgResponseMap {
   LIST_MY_ORGS: UserOrgMembership[];
   GET_ACTIVE_ORG: string | null;
   SET_ACTIVE_ORG: null;
+  GET_PANEL_MODE: PanelMode;
+  SET_PANEL_MODE: null;
   LIST_PROVIDERS: ProviderListItem[];
   LIST_PORTALS: PortalRegistryRow[];
+  LIST_SHARED_PORTALS: PortalRegistryRow[];
+  LIST_SHARED_FIELD_MAPS: PortalFieldMap[];
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;

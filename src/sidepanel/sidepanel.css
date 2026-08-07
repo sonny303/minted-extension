@@ -1956,3 +1956,41 @@ button.link:hover {
   font-size: 11px;
   color: var(--mp-ink-secondary);
 }
+
+/* E6.9 F6.9.7 — the job chooser. Always visible so the current job is never
+   ambiguous, and switchable without signing out. A segmented pair rather than
+   a dropdown: there are exactly two jobs and which one you are in changes what
+   the whole panel does, so it should read at a glance. */
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 12px;
+  background: var(--mp-muted);
+  border: 1px solid var(--mp-border);
+  border-radius: 6px;
+}
+
+.mode-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mp-ink-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.mode-btn[aria-pressed="true"] {
+  background: var(--mp-card);
+  color: var(--mp-primary);
+}
+
+.mode-btn:focus-visible {
+  outline: 2px solid rgba(27, 77, 62, 0.35);
+  outline-offset: -2px;
+}

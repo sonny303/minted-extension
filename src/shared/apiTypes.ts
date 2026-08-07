@@ -46,6 +46,13 @@ export interface PortalFieldMap {
   fieldType: PortalFieldType;
   notes: string | null;
   status: PortalFieldMapStatus;
+  /** E6.9 registry presentation. Optional so an older server still parses:
+   * `displayLabel` is the admin's rename (the payer's own `fieldLabel` is
+   * never overwritten), `section` the admin's grouping, `sortOrder` the
+   * capture-derived position within its page. */
+  displayLabel?: string | null;
+  section?: string | null;
+  sortOrder?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,6 +120,10 @@ export interface PortalRegistryRow {
   portalKey: string;
   name: string;
   payerId: string | null;
+  /** The payer's display name, embedded by the /api projection (E6.9) so the
+   * Train-forms picker can group by payer without a payer endpoint of its own.
+   * Optional: a server that predates it degrades to an ungrouped list. */
+  payerName?: string | null;
   formUrl: string | null;
   isVerified: boolean;
   lastVerifiedAt: string | null;
