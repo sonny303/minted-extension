@@ -49,7 +49,9 @@ An eslint rule enforces the boundary: only `src/background/` may import
   mock harness: `src/harness/workbench.test.ts` drives the real background
   modules against `scripts/mock-panel-api.mjs`, an in-repo mirror of the
   panel /api contract — CI never touches a real portal or the real panel)
-- `npm run watch` — rebuild panel/background on change
+- `npm run watch` — rebuild panel, background AND content script on change
+  (`scripts/watch.mjs`: two Vite configs write into one `dist/`, and the main
+  config's `emptyOutDir` means every main rebuild has to re-emit `content.js`)
 
 ## Locked wire contracts with the panel (do not change unilaterally)
 

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build && vite build --config vite.content.config.ts",
-    "watch": "vite build --watch",
+    "watch": "node scripts/watch.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run"

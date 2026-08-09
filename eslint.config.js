@@ -6,6 +6,13 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Build/dev tooling runs in Node, not the extension sandbox.
+    files: ["scripts/**", "*.config.{js,ts}"],
+    languageOptions: {
+      globals: { console: "readonly", process: "readonly" },
+    },
+  },
+  {
     // Architecture guardrail: the background worker owns Supabase auth and all
     // API calls. Nothing else may import supabase-js — the side panel and
     // content script talk to the background over chrome runtime messaging only.
