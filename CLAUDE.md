@@ -275,4 +275,6 @@ portalUrl, portalKey?, facilityId? }` through
   supabase-js) and the no-tokens-in-messages rule intact.
 - The service-role key must never appear anywhere in this codebase; the
   committed `SUPABASE_ANON_KEY`/`API_BASE_URL` in `src/shared/config.ts` are
-  public by design.
+  public by design. Optional `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` /
+  `VITE_API_BASE_URL` overrides retarget a build without editing source
+  (3M Slice 5 / F13); unset keeps production defaults.

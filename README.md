@@ -265,6 +265,15 @@ Load it: `chrome://extensions` → Developer mode → **Load unpacked** → pick
 sets `openPanelOnActionClick`; there is no action popup). After code changes,
 rebuild and hit the extension's reload button.
 
+Optional build-time retarget (defaults stay production when unset):
+
+```sh
+VITE_API_BASE_URL=https://your-preview.vercel.app \
+VITE_SUPABASE_URL=https://….supabase.co \
+VITE_SUPABASE_ANON_KEY=eyJ… \
+npm run build
+```
+
 ## One-time backend config (owner does this manually)
 
 `API_CORS_ORIGINS` on the Vercel project must include the extension origin
