@@ -257,7 +257,7 @@ npm install
 npm run build        # dist/ = loadable extension
 npm run typecheck
 npm run lint
-npm run watch        # rebuild panel/background on change
+npm run watch        # rebuild panel, background AND content script on change
 ```
 
 Load it: `chrome://extensions` → Developer mode → **Load unpacked** → pick

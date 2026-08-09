@@ -1,4 +1,6 @@
-// Content script for the BCBS KS enrollment portal.
+// Content script for payer portal pages. It reaches ANY registry-listed portal,
+// not just the one the manifest statically matches: the worker injects this
+// bundle on demand (src/background/inject.ts) once the origin is granted.
 //
 // Boundary rules: this file never fetches, never stores anything, and never
 // sees tokens. It receives fully resolved fill values from the background
