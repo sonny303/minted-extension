@@ -498,7 +498,6 @@ describe("S4.1 — the fill report is a snapshot", () => {
     // The record carries the fill's OWN summary + completedAt. Nothing in the
     // restore path recomputes coverage — a field fixed after the run must not
     // retroactively change what the run reported.
-    // @ts-expect-error — node builtin, untyped in this browser-typed project
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
     const restore = source.slice(
@@ -575,7 +574,6 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
 
 describe("TS-103 — escape hatch preserves the portal tab", () => {
   it("the card's webapp link opens in a NEW tab (target=_blank in the panel markup)", async () => {
-    // @ts-expect-error — node builtin, untyped in this browser-typed project
     const { readFileSync } = await import("node:fs");
     const html = readFileSync("sidepanel.html", "utf8") as string;
     const anchor = html.match(/<a[^>]*id="open-in-panel"[^>]*>/)?.[0] ?? "";

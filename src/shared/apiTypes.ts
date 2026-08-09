@@ -13,6 +13,8 @@ export interface ApiMeta {
   // the client must ask the user to pick; the server never guesses.
   // snake_case is the wire contract (mintedpanel src/server/envelope.ts).
   needs_facility?: boolean;
+  // GET /api/portals: true when the registry returned zero rows.
+  registry_empty?: boolean;
 }
 
 export interface ApiEnvelope<T> {
