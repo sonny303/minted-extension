@@ -30,12 +30,7 @@ import type { ActiveCaseRecord } from "../shared/handoff";
 import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
-import {
-  attestationLine,
-  attestedOnFor,
-  buildCaqhPushOffer,
-  type CaqhGap,
-} from "../shared/caqh";
+import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/caqh";
 import {
   canSendCapture,
   captureCounts,
@@ -145,7 +140,6 @@ const dupPickup = el<HTMLElement>("dup-pickup");
 const caqhSection = el<HTMLElement>("caqh-section");
 const caqhHeadline = el<HTMLElement>("caqh-headline");
 const caqhAttested = el<HTMLElement>("caqh-attested");
-const caqhGaps = el<HTMLElement>("caqh-gaps");
 const caqhAttest = el<HTMLButtonElement>("caqh-attest");
 const caqhStatus = el<HTMLElement>("caqh-status");
 const portalRegistryEmpty = el<HTMLElement>("portal-registry-empty");
@@ -3155,46 +3149,6 @@ function renderCaqh(): void {
   caqhAttested.textContent = attestationLine(caqhOffer);
   // S6.2: a recently-attested profile de-emphasizes rather than nags.
   caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
-
-  // S6.3: the strip is OMITTED ENTIRELY when there are no gaps.
-  caqhGaps.replaceChildren();
-  caqhGaps.hidden = caqhGapRows.length === 0;
-  for (const gap of caqhGapRows) {
-    const row = document.createElement("div");
-    row.className = "caqh-gap";
-    const label = document.createElement("span");
-    label.className = "caqh-gap-label";
-    label.textContent = `${gap.label}: ${gap.portalValue}`;
-    const pull = document.createElement("button");
-    pull.type = "button";
-    pull.className = "link";
-    pull.textContent = "Add to Minted Panel";
-    pull.addEventListener("click", () => {
-      const providerId = selectedProviderId();
-      if (!providerId) return;
-      pull.disabled = true;
-      void (async () => {
-        const response = await sendToBackground({
-          type: "PULL_CAQH_FIELD",
-          providerId,
-          token: gap.token,
-          value: gap.portalValue,
-        });
-        if (!response.ok) {
-          pull.disabled = false;
-          setError(mainError, response.error);
-          return;
-        }
-        // The gap is closed — drop it and refetch so the card and the next
-        // fill count both reflect the new value immediately (S6.3).
-        caqhGapRows = caqhGapRows.filter((g) => g.token !== gap.token);
-        renderCaqh();
-        void loadFacilities(providerId, loadGeneration);
-      })();
-    });
-    row.append(label, pull);
-    caqhGaps.append(row);
-  }
 }
 
 caqhAttest.addEventListener("click", () => {
@@ -3239,21 +3193,27 @@ caqhAttest.addEventListener("click", () => {
 
 let captureSession: CaptureSession | null = null;
 
-// S6.3 — the CAQH EXCEPTION strip: fields CAQH holds where Minted Panel is
-// blank. The rendering, the pure `findCaqhGaps` reducer and the PULL_CAQH_FIELD
-// round trip are all built and unit-tested, but nothing populates this array,
-// so the strip never appears.
+// S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
+// blank) is QUARANTINED as of 3M Slice 2, not deleted.
 //
-// It is UNFINISHED, not broken, and the missing half is deliberate: populating
-// it means reading VALUES off the CAQH page, which is a different capability
-// from the S5.2 capture scan (that reads form SHAPE only — labels and
-// selectors, never values — and that boundary is load-bearing for PHI). Wiring
-// it needs a value-reading content script and a real CAQH account to verify
-// against; shipping a guess would be worse than shipping nothing.
+// The panel-side half of it — a `caqhGapRows: CaqhGap[]` that was only ever
+// `[]`, the row rendering that looped over it, the `#caqh-gaps` container and
+// its CSS — is REMOVED here. Nothing ever populated that array, so every one
+// of those branches was unreachable: the strip could not appear, and the code
+// read as shippable UI when it was a stub.
 //
-// Tracked so this reads as a known gap rather than a mystery. The push half of
-// S6.2 (offer + attestation) IS live.
-let caqhGapRows: CaqhGap[] = [];
+// What REMAINS, deliberately, is the finished and tested machinery the feature
+// would be rebuilt on: the pure `findCaqhGaps` reducer (shared/caqh.ts, with
+// its unit tests) and the PULL_CAQH_FIELD message + worker handler. Those are
+// correct; they just have no producer.
+//
+// The missing half is a PHI boundary decision, not an oversight: populating
+// gaps means reading VALUES off the CAQH page, whereas the S5.2 capture scan
+// reads form SHAPE only (labels and selectors, never values). Restoring the
+// strip means a value-reading content script and a real CAQH account to verify
+// against — a deliberate capability change, not a wiring task.
+//
+// The PUSH half of S6.2 (offer + attestation) is live and untouched.
 
 // Date-only today for the pure CAQH module (it never reads a clock itself).
 function localToday(): string {
