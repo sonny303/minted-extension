@@ -1929,25 +1929,6 @@ button.link:hover {
   font-size: 11px;
   color: var(--mp-ink-secondary);
 }
-.caqh-gaps {
-  margin-top: 8px;
-  padding: 6px 8px;
-  border-radius: var(--mp-radius-control);
-  background: #fef3c7;
-}
-.caqh-gap {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  color: #92400e;
-  padding: 2px 0;
-}
-.caqh-gap-label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
 .caqh-actions {
   margin-top: 8px;
 }
