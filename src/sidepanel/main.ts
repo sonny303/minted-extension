@@ -148,6 +148,7 @@ const caqhAttested = el<HTMLElement>("caqh-attested");
 const caqhGaps = el<HTMLElement>("caqh-gaps");
 const caqhAttest = el<HTMLButtonElement>("caqh-attest");
 const caqhStatus = el<HTMLElement>("caqh-status");
+const portalRegistryEmpty = el<HTMLElement>("portal-registry-empty");
 const portalAccess = el<HTMLElement>("portal-access");
 const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
@@ -1935,13 +1936,14 @@ async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
 
 // S3.2: fetch the portal registry for the resolved org, then re-run portal
 // detection — a page that wasn't recognized before the rows arrived becomes
-// recognized the moment they do. Failure degrades to an empty registry
-// (nothing recognized), never an error state: recognition is an enhancement,
-// the fill gate reports its own errors.
+// recognized the moment they do. A successful empty list is a loud empty-
+// state (not "wrong page"); a fetch failure keeps the banner hidden and
+// degrades recognition to nothing.
 async function loadPortalRegistry(generation: number): Promise<void> {
   const response = await sendToBackground({ type: "LIST_PORTALS" });
   if (!isCurrent(generation)) return;
   portalRows = response.ok ? response.data : [];
+  portalRegistryEmpty.hidden = !(response.ok && portalRows.length === 0);
   void detectPortal();
 }
 

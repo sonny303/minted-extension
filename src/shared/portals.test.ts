@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { portalOriginPatterns } from "./portals";
+import { matchPortalByUrl, portalOriginPatterns } from "./portals";
 import type { PortalRegistryRow } from "./apiTypes";
 
 function row(overrides: Partial<PortalRegistryRow>): PortalRegistryRow {
@@ -49,5 +49,24 @@ describe("portalOriginPatterns", () => {
 
   it("is empty for an empty registry", () => {
     expect(portalOriginPatterns([])).toEqual([]);
+  });
+});
+
+describe("matchPortalByUrl", () => {
+  it("returns null for an empty registry (not a page mismatch signal)", () => {
+    expect(matchPortalByUrl("https://provider.example.com/enroll", [])).toBeNull();
+  });
+
+  it("matches the longest formUrl prefix", () => {
+    const rows = [
+      row({ portalKey: "host", name: "Host", formUrl: "https://provider.example.com/" }),
+      row({
+        portalKey: "enroll",
+        name: "Enroll",
+        formUrl: "https://provider.example.com/enroll",
+      }),
+    ];
+    const hit = matchPortalByUrl("https://provider.example.com/enroll/step2?x=1", rows);
+    expect(hit?.key).toBe("enroll");
   });
 });
