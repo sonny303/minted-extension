@@ -44,12 +44,12 @@ import {
 import { accountGreeting } from "../shared/greeting";
 import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
 import {
-  candidatePortalName,
+  captureKeyAgreesWithTabUrl,
   captureStateSummary,
   derivePageStep,
   formCaptureState,
   pageUrlTail,
-  recognizeForm,
+  resolveTrainRecognition,
 } from "../shared/trainForms";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -1946,6 +1946,12 @@ async function loadPortalRegistry(generation: number): Promise<void> {
 }
 
 async function detectPortal(): Promise<void> {
+  // Train uses the shared registry + sticky selection messaging (TRAIN-DUAL).
+  // Do not overwrite `portal` from the Work `portalRows` list while training.
+  if (panelMode === "train") {
+    await refreshTrainRecognition();
+    return;
+  }
   const tab = await queryActiveTab();
   portal = matchPortalByUrl(tab?.url, portalRows);
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
@@ -3336,13 +3342,35 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   captureStart.disabled = true;
   captureNextPage.disabled = true;
   captureStart.textContent = "Reading the form…";
+  // TRAIN-DUAL: re-check the active tab at click time so a stale `portal`
+  // pointer cannot propose shared maps under a key the URL contradicts.
+  // CAP-05 keeps derivePageStep + captureMode for next-page captures.
+  const tab = await queryActiveTab();
+  const tabUrl = tab?.url ?? null;
+  const registry = panelMode === "train" ? sharedPortalRows : portalRows;
+  if (!captureKeyAgreesWithTabUrl(activePortal.key, tabUrl, registry)) {
+    captureStart.disabled = false;
+    captureNextPage.disabled = false;
+    captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+    if (panelMode === "train") {
+      await refreshTrainRecognition();
+    } else {
+      portal = matchPortalByUrl(tabUrl, portalRows);
+      portalTabId = portal ? tabId : null;
+      renderCapture();
+    }
+    setError(
+      mainError,
+      "This tab no longer matches the recognized form. Open the registered form URL and try again.",
+    );
+    return;
+  }
   // BITE-CAP-05 — the side panel always sends a fresh collision-free candidate
   // via derivePageStep; the background decides whether to reuse via
   // identifyCapturePage after the scan. CAP-HEAD: tab.title is not a wizard
   // heading — pass null until the content script can report form headings.
-  const tab = await queryActiveTab();
   const candidate = derivePageStep({
-    url: tab?.url ?? null,
+    url: tabUrl,
     heading: null,
     sequence: nextPageSequence(captureSession),
     used: usedPageNames(captureSession),
@@ -3354,7 +3382,7 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     tabId,
     portalKey: activePortal.key,
     pageStep: candidate,
-    pageUrlTail: pageUrlTail(tab?.url ?? null),
+    pageUrlTail: pageUrlTail(tabUrl),
     captureMode: mode,
   });
   captureStart.disabled = false;
@@ -3518,26 +3546,32 @@ function renderTrainPortals(): void {
 /**
  * What is the open page, and what does the system already know about it?
  *
- * A RECOGNIZED form is never silently changed (F6.9.9): the panel states what
- * it already has — pages seen, fields captured, mapped — and re-capturing is
- * the user's explicit choice, which is drift repair. An UNRECOGNIZED page is
- * greeted as new and gets a numbered candidate name the admin renames later;
- * capture never blocks on the name being right.
+ * Capture bind is URL-only (TRAIN-DUAL D-TD.1 C amended). The dropdown is
+ * sticky navigation/messaging — it never sets `portal`. A RECOGNIZED form
+ * shows pages/fields already mapped; re-capture is the user's choice. When a
+ * form is selected but the tab does not match (login / SSO / wizard redirect),
+ * copy says so and capture stays off — it must not claim a "new form".
  */
 async function refreshTrainRecognition(): Promise<void> {
   const tab = await queryActiveTab();
-  const recognition = recognizeForm(tab?.url, sharedPortalRows, trainPayer.value || null);
-  if (recognition.kind === "existing") {
-    portal = recognition.portal;
+  const view = resolveTrainRecognition({
+    url: tab?.url,
+    rows: sharedPortalRows,
+    payerName: trainPayer.value || null,
+    selectedPortalKey: trainPortal.value,
+  });
+
+  if (view.status === "matched") {
+    portal = view.portal;
     portalTabId = tab?.id ?? null;
     const maps = await sendToBackground({
       type: "LIST_SHARED_FIELD_MAPS",
-      portalKey: recognition.portal.key,
+      portalKey: view.portal.key,
     });
     trainFormMaps = maps.ok ? maps.data : [];
     const state = formCaptureState(trainFormMaps);
     trainRecognition.textContent =
-      `${recognition.portal.label} — already trained: ${captureStateSummary(state)}.`;
+      `${view.portal.label} — already trained: ${captureStateSummary(state)}.`;
     trainHint.textContent =
       state.undecided > 0
         ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
@@ -3546,12 +3580,8 @@ async function refreshTrainRecognition(): Promise<void> {
     portal = null;
     portalTabId = null;
     trainFormMaps = [];
-    const candidate = candidatePortalName(trainPayer.value || null, sharedPortalRows);
-    trainRecognition.textContent = tab?.url
-      ? `New form — nothing matches this page yet. It will be registered as “${candidate}”.`
-      : "Open the payer's form in this tab to train it.";
-    trainHint.textContent =
-      "Register the form in the web app first, then come back and capture each section of it here.";
+    trainRecognition.textContent = view.recognitionText;
+    trainHint.textContent = view.hintText;
   }
   renderTrainPortals();
   renderCapture();
@@ -3564,9 +3594,10 @@ trainPayer.addEventListener("change", () => {
 });
 trainPortal.addEventListener("change", () => {
   const row = sharedPortalRows.find((r) => r.portalKey === trainPortal.value);
+  // Sticky selection updates mismatch/match copy immediately; opening the
+  // form is how the trainer reaches the registered URL for capture bind.
+  void refreshTrainRecognition();
   if (!row?.formUrl) return;
-  // Opening the form is how a trainer gets onto the page they are about to
-  // capture; recognition then re-runs against the tab they land on.
   void chrome.tabs.create({ url: row.formUrl });
 });
 
