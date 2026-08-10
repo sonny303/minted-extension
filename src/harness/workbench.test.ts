@@ -32,8 +32,11 @@ import { readPanelMode, writePanelMode } from "../background/mode";
 import {
   assignSortOrder,
   candidatePortalName,
+  CAPTURE_TAB_MISMATCH_ERROR,
+  decideCaptureStart,
   formCaptureState,
   recognizeForm,
+  resolveTrainRecognition,
 } from "../shared/trainForms";
 import { coveragePortal } from "../background/fill";
 import {
@@ -748,6 +751,47 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       undecided: 1,
     });
     mock.state.sharedMaps = [];
+  });
+
+  it("TRAIN-DUAL — mismatched capture tab rejects START_CAPTURE (click-time gate)", async () => {
+    await writePanelMode("train");
+    const registry = await listSharedPortals();
+    // Helper: a login wall with a selected/stale portal key must not authorize
+    // START_CAPTURE — the shared-library poison case this bite closes.
+    const rejected = decideCaptureStart({
+      portalKey: "aetna_join",
+      tabId: 7,
+      tabUrl: "https://login.example/sso",
+      rows: registry,
+    });
+    expect(rejected).toEqual({ ok: false, reason: "key-mismatch" });
+    expect(mock.state.sharedProposed.size).toBe(0);
+
+    // Wiring: the sidepanel click handler must use decideCaptureStart, pass
+    // the *fresh* tab id into START_CAPTURE, restore via detectPortal on
+    // Work mismatch (not a stale portalTabId), and surface the shared error.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const click = source.slice(
+      source.indexOf('captureStart.addEventListener("click"'),
+      source.indexOf("captureSend.addEventListener"),
+    );
+    expect(click).toContain("decideCaptureStart(");
+    expect(click).toContain("decision.tabId");
+    expect(click).toContain("await detectPortal()");
+    expect(click).toContain("CAPTURE_TAB_MISMATCH_ERROR");
+    expect(click).not.toMatch(/portalTabId = portal \? tabId/);
+    expect(CAPTURE_TAB_MISMATCH_ERROR).toMatch(/no longer matches/);
+
+    // Selection sticky + mismatch copy still routes through resolveTrainRecognition.
+    const view = resolveTrainRecognition({
+      url: "https://login.example/sso",
+      rows: registry,
+      payerName: "Aetna",
+      selectedPortalKey: "aetna_join",
+    });
+    expect(view.status).toBe("mismatch");
+    expect(view.portal).toBeNull();
   });
 });
 

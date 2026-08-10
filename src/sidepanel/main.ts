@@ -36,6 +36,7 @@ import {
   captureCounts,
   nextPageSequence,
   recognitionSummary,
+  resolvePageStepForCapture,
   restoredSummary,
   usedPageNames,
   type CaptureRow,
@@ -44,8 +45,9 @@ import {
 import { accountGreeting } from "../shared/greeting";
 import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
 import {
-  captureKeyAgreesWithTabUrl,
+  CAPTURE_TAB_MISMATCH_ERROR,
   captureStateSummary,
+  decideCaptureStart,
   derivePageStep,
   formCaptureState,
   pageUrlTail,
@@ -3335,34 +3337,34 @@ function renderCaptureRow(row: CaptureRow): HTMLDivElement {
 }
 
 async function startCapture(mode: "auto" | "next-page"): Promise<void> {
-  const tabId = portalTabId;
+  // Early presence check only — do not capture portalTabId for START_CAPTURE.
+  // Re-query the active tab after awaits so a mid-click tab switch cannot pair
+  // a fresh URL with a stale tab id (TRAIN-DUAL review).
   const activePortal = portal;
-  if (tabId == null || activePortal == null) return;
+  if (portalTabId == null || activePortal == null) return;
   const generation = loadGeneration;
   captureStart.disabled = true;
   captureNextPage.disabled = true;
   captureStart.textContent = "Reading the form…";
-  // TRAIN-DUAL: re-check the active tab at click time so a stale `portal`
-  // pointer cannot propose shared maps under a key the URL contradicts.
-  // CAP-05 keeps derivePageStep + captureMode for next-page captures.
   const tab = await queryActiveTab();
   const tabUrl = tab?.url ?? null;
   const registry = panelMode === "train" ? sharedPortalRows : portalRows;
-  if (!captureKeyAgreesWithTabUrl(activePortal.key, tabUrl, registry)) {
+  const decision = decideCaptureStart({
+    portalKey: activePortal.key,
+    tabId: tab?.id ?? null,
+    tabUrl,
+    rows: registry,
+  });
+  if (!decision.ok) {
     captureStart.disabled = false;
     captureNextPage.disabled = false;
     captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
     if (panelMode === "train") {
       await refreshTrainRecognition();
     } else {
-      portal = matchPortalByUrl(tabUrl, portalRows);
-      portalTabId = portal ? tabId : null;
-      renderCapture();
+      await detectPortal();
     }
-    setError(
-      mainError,
-      "This tab no longer matches the recognized form. Open the registered form URL and try again.",
-    );
+    setError(mainError, CAPTURE_TAB_MISMATCH_ERROR);
     return;
   }
   // BITE-CAP-05 — the side panel always sends a fresh collision-free candidate
@@ -3379,8 +3381,8 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   const hadSession = captureSession != null;
   const response = await sendToBackground({
     type: "START_CAPTURE",
-    tabId,
-    portalKey: activePortal.key,
+    tabId: decision.tabId,
+    portalKey: decision.portalKey,
     pageStep: candidate,
     pageUrlTail: pageUrlTail(tabUrl),
     captureMode: mode,

@@ -7,6 +7,7 @@ import {
   captureKeyAgreesWithTabUrl,
   capturePortalKeyForUrl,
   captureStateSummary,
+  decideCaptureStart,
   derivePageStep,
   formCaptureState,
   recognizeForm,
@@ -315,5 +316,44 @@ describe("captureKeyAgreesWithTabUrl — shared-library invariant", () => {
     expect(
       captureKeyAgreesWithTabUrl("aetna_other", "https://payer.example/enroll/start", two),
     ).toBe(false);
+  });
+});
+
+describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
+  const rows = [portal()];
+
+  it("allows START_CAPTURE only when the fresh tab id+url agree with the key", () => {
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: 42,
+        tabUrl: "https://payer.example/enroll/start",
+        rows,
+      }),
+    ).toEqual({ ok: true, tabId: 42, portalKey: "aetna_join" });
+  });
+
+  it("rejects a mismatched tab without authorizing START_CAPTURE", () => {
+    // Stale portal pointer + login wall / switched tab: must not call
+    // START_CAPTURE (shared-library poison / wrong content-script target).
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: 99,
+        tabUrl: "https://login.example/sso",
+        rows,
+      }),
+    ).toEqual({ ok: false, reason: "key-mismatch" });
+  });
+
+  it("rejects a missing active tab id even if the key would match a URL", () => {
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: null,
+        tabUrl: "https://payer.example/enroll/start",
+        rows,
+      }),
+    ).toEqual({ ok: false, reason: "no-tab" });
   });
 });

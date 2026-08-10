@@ -313,3 +313,34 @@ export function captureKeyAgreesWithTabUrl(
   if (!key) return allowed == null;
   return allowed === key;
 }
+
+export type CaptureStartDecision =
+  | { ok: true; tabId: number; portalKey: string }
+  | { ok: false; reason: "no-tab" | "key-mismatch" };
+
+/**
+ * Click-time gate for START_CAPTURE: the portal key and the *current* tab
+ * (id + url) must agree. Callers must pass a freshly queried active tab —
+ * never a portalTabId captured before an await.
+ */
+export function decideCaptureStart(input: {
+  portalKey: string | null | undefined;
+  tabId: number | null | undefined;
+  tabUrl: string | null | undefined;
+  rows: readonly PortalRegistryRow[];
+}): CaptureStartDecision {
+  const tabId = input.tabId;
+  if (tabId == null || !Number.isFinite(tabId)) {
+    return { ok: false, reason: "no-tab" };
+  }
+  const portalKey = (input.portalKey ?? "").trim();
+  if (!portalKey || !captureKeyAgreesWithTabUrl(portalKey, input.tabUrl, input.rows)) {
+    return { ok: false, reason: "key-mismatch" };
+  }
+  return { ok: true, tabId, portalKey };
+}
+
+/** User-visible line when click-time capture bind disagrees with the tab. */
+export const CAPTURE_TAB_MISMATCH_ERROR =
+  "This tab no longer matches the recognized form. Open the registered form URL and try again.";
+
