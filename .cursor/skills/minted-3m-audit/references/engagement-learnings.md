@@ -33,8 +33,29 @@ Do **not** paste a full 3M audit into handoffs; bind this skill and cite paths.
 | **Keep `org_payer_assignments`** | locked closed | #274 prose “Slice 3 = drop assignments” ≠ live plan. Do not remove or bypass unless PM reopens. |
 | **Catalog DELETE** | #275 merged code | Hosted apply needs **second PM sign-off**. Never run purge SQL without it. |
 | **`create_payer` live signature** | #274 merged | App sends the hosted **10-arg** RPC. `p_assign_to_org` migration is `.superseded` — do not resurrect. |
-| **Slice 3 = SOP All-states** | spike #278 | Build **only after** PM acks D3.1–D3.7 in `docs/ops/slice-3-sop-all-states-spike.md`. Spike default D3.1 = Option A (`state='All'`). |
+| **Slice 3 = SOP All-states** | **#280** build (CI green); spike #278 | D3.1 A (`state='All'`); **D3.3-G** ranks state → group → ownership. TD-47 closed in #280. Do not resurrect E4.2 “org any-group beats global exact-group.” |
 | **Slice 5** | out | Generation-reason / sidepanel godfile work stays out unless asked. |
+
+## Slice 3 review + lessons (2026-08-10)
+
+**What shipped well**
+
+- US/AC written and PM-acked **before** product code (#278) — build PR mapped AC rows 1:1.
+- Schema already allowed `'All'` (state CHECK excluded SOP templates) → **no migration**.
+- Unit tests pinned D3.3-G **including** the intentional E4.2 break before UI trust.
+- Cherry-pick of open #279 onto #280 kept attach e2e green without waiting on merge.
+
+**What we got wrong first (and corrected)**
+
+- Early US-2 led with “org beats global.” Operational grain is **payer × group × state**; org is tenancy. PM flipped to **D3.3-G**.
+- Do not conflate **org↔payer adoption** (`org_payer_assignments`) with **group↔payer ops** (`payer_network_targets` / contracts / cases). Different jobs; keep both unless PM reopens.
+
+**Process lessons**
+
+1. When ranking/product stories feel off, ask “what is the case key?” before coding.
+2. Ranking changes that break prior unit tests need an **explicit PM flip** + rewritten tests in the same PR — not silent drift.
+3. Sibling CI hotfixes: cherry-pick or merge before relying on main; don’t leave the build PR red for an unrelated TS-110.
+4. Spike + US/AC PR can stay open while build lands; merge order: prefer #279 → #280 → #278 docs → skill twin.
 
 ## Findings that looked fixed but weren’t (mura traps)
 
@@ -49,6 +70,7 @@ Do **not** paste a full 3M audit into handoffs; bind this skill and cite paths.
 - **Global payer pile:** #275 ships guarded DELETE (ops-gated). Do not treat “still ~270 on hosted” as a code bug until the second PM sign-off + apply.
 - **`create_payer` PGRST202:** was hosted/app signature drift (#274). Re-probe live RPC args before inventing a new flag.
 - **Attach Save disabled:** zero-facility defaults (#277) — e2e must check the box or seed a facility; do not “fix” by auto-checking zero-facility again.
+- **`pickTemplate` ownership wall:** pre-Slice-3 E4.2 org-block-first is **obsolete**. Live truth is D3.3-G (#280). Docs/comments that still say “org override always beats global” are DOC-DRIFT until scrubbed (SCHEMA/CLAUDE leftovers).
 
 ## Failure modes to anticipate
 

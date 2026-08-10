@@ -128,8 +128,9 @@ Recommend **one next tranche** (2–5 bite-sized PRs max), not a new mega-engage
 8. **Don't silent-`.limit()` getCases** — needs pagination UX (TD-49).
 9. **Hosted ≠ repo** — DROP+CREATE RPCs on `main` are an S0 cliff until operator apply.
 10. **Engagement closed ≠ optimized** — always re-score the live system.
-11. **Corrected payer-setup locks** — Ready = checklist SOP; attach defaults only (not reverse E6.2); keep `org_payer_assignments`; no DELETE without second PM sign-off (#275); Slice 5 out unless asked. Slice 3 **build** only after PM acks D3.1–D3.7 in `docs/ops/slice-3-sop-all-states-spike.md`.
+11. **Corrected payer-setup locks** — Ready = checklist SOP; attach defaults only (not reverse E6.2); keep `org_payer_assignments`; no DELETE without second PM sign-off (#275); Slice 5 out unless asked. Slice 3 All-states = D3.1 A + **D3.3-G** (#280) — do not resurrect E4.2 org-block-first ranking.
 12. **Bind this skill; don’t paste the audit** into handoffs or PR bodies — cite the skill path + locked table in `engagement-learnings.md`.
+13. **Case grain first** — when debating match/attach/SOP stories, lead with `(payer, group, state)`; org is tenancy/adoption, not the payer’s primary attachment.
 
 ---
 
@@ -143,6 +144,8 @@ Recommend **one next tranche** (2–5 bite-sized PRs max), not a new mega-engage
 - Treating `useAuthoringPayers` or D6.4 API filter as bugs — they are intentional Slice 6 shapes; find *remaining* unevenness (e.g. browser list unfiltered)
 - Pasting a full prior audit transcript instead of binding `.cursor/skills/minted-3m-audit/`
 - Building SOP All-states / dropping `org_payer_assignments` without the current locked gate
+- Treating D3.3-G as optional or recommending “org any-group beats global exact-group” after #280
+- Confusing org↔payer adoption with group↔payer operational grain
 ---
 
 ## Response template

@@ -12,12 +12,12 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 | LISTPORTALS | Mura | extension | `chrome.storage` portals ignore D6.4 filter | Align with API visibility or remove browser list for fill |
 | CAPTURE-PHI | Muri | extension | Labels/values risk in capture path | Audit payload fields; redact; no value logging |
 | VAULT | Muri | panel/ops | E4.4 vault not verified hosted | Ops checklist only |
+| DOC-PICK | Mura | panel docs | SCHEMA/CLAUDE still describe pre–D3.3-G `pickTemplate` ownership wall | Truth scrub only (no behavior) after #280 merges |
 
 ## P1 — active muda / mura
 
 | ID | 3M | Area | Symptom | Likely bites |
 |---|---|---|---|---|
-| TD-47 | Mura | panel | Exact-state SOP only; multi-state payers duplicate or fall to fallback | Spike #278 → **PM ack D3.1–D3.7** → All-states build |
 | PAY-UNIVERSE | Mura | both | Three payer lists (ops / authoring / globals) confuse | Doc map + UI copy; then consolidate call sites |
 | GLOBAL-PAYERS | Muda | panel/db | Dead catalog rows (code path #275) | Ops apply after second PM sign-off — not a re-inventory |
 | ORPHAN-REPORTS | Muda | panel | `components/reports/*` after `/reporting` | Delete orphan modules + grep imports |
@@ -48,6 +48,7 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 - Payer create S0 (`create_payer` 10-arg converge) — #274
 - Ready = checklist SOP + attach facility-backed defaults — #277
 - Catalog purge **code** — #275 (hosted apply still OPS-PURGE)
+- **TD-47 / SOP All-states + D3.3-G `pickTemplate`** — #280 (spike #278)
 
 ## Canonical registers
 
@@ -56,5 +57,5 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 - `docs/ops/3m-slice-4-sowmya-audit.md` (historical)
 - `docs/ops/3m-slice-5-closeout.md`
 - `docs/ops/slice-6-platform-org-spike.md`
-- `docs/ops/slice-3-sop-all-states-spike.md` (payer-setup Slice 3 — build gated on PM ack)
+- `docs/ops/slice-3-sop-all-states-spike.md` (payer-setup Slice 3 — D3.1 A + D3.3-G locked; build #280)
 - `docs/ops/global-portal-payer-inventory.sql`

@@ -15,11 +15,12 @@ Workbench `/api` is for the **browser extension only**. Panel does not need Post
 
 - JWT / session carries **org membership** (`memberships`).
 - **Active org** in panel: Zustand auth-store `activeOrgId`.
-- Org ↔ payer adoption stays on **`org_payer_assignments`** (do not delete this layer unless PM reopens).
+- Org ↔ payer adoption stays on **`org_payer_assignments`** (do not delete this layer unless PM reopens). Group↔payer ops live on **`payer_network_targets` / contracts / cases** — different layer; neither replaces the other.
 - **`create_payer`:** live hosted signature is the **10-arg** form (#274). Creating a payer still upserts the caller org’s assignment in-RPC; the Slice 6 `p_assign_to_org` flag was **superseded** (do not reintroduce).
 - SOP library read-back: prefer migration `20260809120100` (global SOPs readable without assignment) — confirm hosted apply before trusting authoring of unadopted payers.
 - Authoring payer universe ≠ ops/filter universe — use `useAuthoringPayers` / `list_global_payers` in authoring UIs; ops/network lists stay assignment-scoped.
 - Payer Setup **Ready** = checklist SOP presence (#277), not form proven/drift. Attach review defaults are facility-backed only; E6.2 eligibility unchanged.
+- **SOP match (`pickTemplate`, #280 / D3.3-G):** sort **state specificity** (exact > `All`) → **group specificity** (exact > any) → **ownership** (org > global) → fallback. Sentinel `state='All'`. Do not use pre-Slice-3 “org block always beats global.”
 
 ## Case / contracting grain
 
