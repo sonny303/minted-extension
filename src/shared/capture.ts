@@ -174,7 +174,48 @@ export function mergePageCapture(
   const samePage = (row: CaptureRow) => (row.pageStep ?? null) === pageStep;
   const otherPages = previous.filter((row) => !samePage(row));
   const diff = diffCapture(previous.filter(samePage), next);
-  return [...otherPages, ...diff.unchanged, ...diff.added];
+  return orderCaptureRows([...otherPages, ...diff.unchanged, ...diff.added]);
+}
+
+/** Page names in the order they first appear in a capture walk. */
+export function capturePageOrder(rows: readonly CaptureRow[]): string[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const page = row.pageStep?.trim();
+    if (!page || seen.has(page)) continue;
+    seen.add(page);
+    order.push(page);
+  }
+  return order;
+}
+
+/**
+ * Order capture rows for display and propose: page walk sequence first, then
+ * DOM `sortOrder` within each page (nulls last). Rows with no pageStep follow
+ * every named page.
+ */
+export function orderCaptureRows(rows: readonly CaptureRow[]): CaptureRow[] {
+  const pageOrder = capturePageOrder(rows);
+  const pageRank = new Map(pageOrder.map((page, index) => [page, index]));
+  const unnamedPageRank = pageOrder.length;
+
+  const pageIndexOf = (row: CaptureRow): number => {
+    const page = row.pageStep?.trim();
+    if (!page) return unnamedPageRank + 1;
+    return pageRank.get(page) ?? unnamedPageRank;
+  };
+
+  const sortOrderOf = (row: CaptureRow): number =>
+    typeof row.sortOrder === "number" ? row.sortOrder : Number.MAX_SAFE_INTEGER;
+
+  return [...rows].sort((a, b) => {
+    const byPage = pageIndexOf(a) - pageIndexOf(b);
+    if (byPage !== 0) return byPage;
+    const byOrder = sortOrderOf(a) - sortOrderOf(b);
+    if (byOrder !== 0) return byOrder;
+    return a.selector.localeCompare(b.selector);
+  });
 }
 
 /** The page names already used in this capture run — what `derivePageStep`

@@ -49,6 +49,7 @@ import {
 import { resolveActiveCaseState } from "../shared/handoff";
 import {
   mergePageCapture,
+  orderCaptureRows,
   parseCaptureSession,
   type CaptureRow,
   type CaptureSession,
@@ -334,7 +335,9 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // the page being scanned carry over, and the other pages of a multi-page
       // run are kept verbatim (a plain diff would read them as removed and
       // drop them — see mergePageCapture).
-      const merged = samePortal ? mergePageCapture(previous.rows, rows, pageStep) : rows;
+      const merged = samePortal
+        ? mergePageCapture(previous.rows, rows, pageStep)
+        : orderCaptureRows(rows);
       const session: CaptureSession = {
         portalKey: request.portalKey,
         templateStepId: request.templateStepId ?? null,
@@ -368,7 +371,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // org exactly as before.
       const mode = await readPanelMode();
       const rows: CaptureRow[] = [];
-      for (const row of current.rows) {
+      for (const row of orderCaptureRows(current.rows)) {
         if (row.sent) {
           rows.push(row);
           continue;
@@ -395,7 +398,9 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
           selector: row.selector,
           field_label: row.label,
           form_section: row.formSection,
+          page_step: row.pageStep ?? null,
           field_type: row.fieldType,
+          sort_order: row.sortOrder ?? null,
         });
         rows.push({
           ...row,

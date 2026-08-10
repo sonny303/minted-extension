@@ -202,7 +202,9 @@ export async function proposeFieldMap(input: {
   selector: string;
   field_label?: string | null;
   form_section?: string | null;
+  page_step?: string | null;
   field_type?: string | null;
+  sort_order?: number | null;
 }): Promise<ProposeFieldResponse> {
   const { data } = await apiFetch<ProposeFieldResponse>("/api/portal-field-maps", {
     method: "POST",

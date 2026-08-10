@@ -5,6 +5,8 @@ import {
   captureCounts,
   diffCapture,
   mergePageCapture,
+  orderCaptureRows,
+  capturePageOrder,
   nextPageSequence,
   parseCaptureSession,
   resolvePageStepForCapture,
@@ -125,6 +127,75 @@ describe("diffCapture (S5.4 — re-capture as drift repair)", () => {
     expect(kept.chosenToken).toBe("provider.npi");
     expect(kept.sent).toBe(true);
   });
+
+  it("refreshes label and sortOrder from the new scan for unchanged selectors", () => {
+    const prev = [
+      row({ selector: "#npi", label: "Old label", sortOrder: 1, pageStep: "Page 1" }),
+    ];
+    const fresh = [
+      row({
+        selector: "#npi",
+        label: "New label",
+        sortOrder: 3,
+        pageStep: "Page 1",
+        formSection: "Identity",
+      }),
+    ];
+    const diff = diffCapture(prev, fresh);
+    const kept = diff.unchanged[0];
+    if (!kept) throw new Error("expected an unchanged row");
+    expect(kept.label).toBe("New label");
+    expect(kept.sortOrder).toBe(3);
+    expect(kept.formSection).toBe("Identity");
+  });
+});
+
+describe("orderCaptureRows (BITE-CAP-02)", () => {
+  const row = (selector: string, pageStep: string | null, sortOrder: number | null) => ({
+    label: selector,
+    selector,
+    fieldType: "text" as const,
+    formSection: null,
+    suggestedToken: null,
+    evidence: null,
+    chosenToken: null,
+    sent: false,
+    pageStep,
+    sortOrder,
+  });
+
+  it("orders by first-seen pageStep then sortOrder with nulls last", () => {
+    const rows = [
+      row("#b2", "Page 2", 2),
+      row("#a2", "Page 1", 2),
+      row("#b1", "Page 2", 1),
+      row("#a1", "Page 1", 1),
+      row("#orphan", null, 1),
+    ];
+    expect(orderCaptureRows(rows).map((r) => r.selector)).toEqual([
+      "#b1",
+      "#b2",
+      "#a1",
+      "#a2",
+      "#orphan",
+    ]);
+  });
+
+  it("uses capture walk order when pages are interleaved in storage", () => {
+    const rows = [
+      row("#p2a", "Page 2", 1),
+      row("#p1a", "Page 1", 1),
+      row("#p2b", "Page 2", 2),
+      row("#p1b", "Page 1", 2),
+    ];
+    expect(capturePageOrder(rows)).toEqual(["Page 2", "Page 1"]);
+    expect(orderCaptureRows(rows).map((r) => r.selector)).toEqual([
+      "#p2a",
+      "#p2b",
+      "#p1a",
+      "#p1b",
+    ]);
+  });
 });
 
 describe("mergePageCapture (E6.9 multi-page)", () => {
@@ -160,6 +231,22 @@ describe("mergePageCapture (E6.9 multi-page)", () => {
     expect(merged.map((r) => r.selector)).toEqual(["#a", "#new"]);
     expect(merged[0]?.chosenToken).toBe("provider.npi");
     expect(merged[0]?.sent).toBe(true);
+  });
+
+  it("returns rows in page-walk order then sortOrder", () => {
+    const previous = [
+      row("#b", "Tax ID", { sortOrder: 2 }),
+      row("#a", "Page 1", { sortOrder: 1 }),
+    ];
+    const merged = mergePageCapture(
+      previous,
+      [
+        row("#c", "Page 1", { sortOrder: 2 }),
+        row("#d", "Page 1", { sortOrder: 1 }),
+      ],
+      "Page 1",
+    );
+    expect(merged.map((r) => r.selector)).toEqual(["#b", "#d", "#c"]);
   });
 
   it("re-scanning one page of a multi-page run leaves the other pages alone", () => {
@@ -298,7 +385,10 @@ describe("re-capture same URL merges by selector (BITE-CAP-01)", () => {
     expect(pageStep).toBe("credentials");
     const merged = mergePageCapture(
       previous,
-      [row({ selector: "#npi", pageStep: "credentials" }), row({ selector: "#new", pageStep: "credentials" })],
+      [
+        row({ selector: "#npi", pageStep: "credentials", sortOrder: 1 }),
+        row({ selector: "#new", pageStep: "credentials", sortOrder: 2 }),
+      ],
       pageStep,
     );
     expect(merged.map((r) => r.selector)).toEqual(["#npi", "#new"]);

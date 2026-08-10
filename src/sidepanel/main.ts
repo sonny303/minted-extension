@@ -34,8 +34,10 @@ import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/ca
 import {
   canSendCapture,
   captureCounts,
+  orderCaptureRows,
   recognitionSummary,
   restoredSummary,
+  resolvePageStepForCapture,
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
@@ -46,7 +48,6 @@ import {
   formCaptureState,
   recognizeForm,
 } from "../shared/trainForms";
-import { resolvePageStepForCapture } from "../shared/capture";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -3250,7 +3251,7 @@ function renderCapture(): void {
   }
   if (captureSession == null) return;
 
-  for (const row of captureSession.rows) {
+  for (const row of orderCaptureRows(captureSession.rows)) {
     const item = document.createElement("div");
     item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
 
