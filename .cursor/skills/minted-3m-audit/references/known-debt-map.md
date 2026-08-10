@@ -6,7 +6,8 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 
 | ID | 3M | Area | Symptom | Likely bites |
 |---|---|---|---|---|
-| OPS-S6 | Muri | ops | Slice 6 migrations not on hosted; types regen; vault | Apply `20260809120000` + `20260809120100`; regen types; vault checklist |
+| OPS-S6 | Muri | ops | Slice 6 **SOP read** migration may still be unapplied; vault | Apply `20260809120100` only ( `20260809120000` is **superseded** by #274 ); regen types; vault checklist |
+| OPS-PURGE | Muri | ops | #275 catalog DELETE merged but not hosted | **Second PM sign-off** then apply; never agent-apply |
 | TRAIN-DUAL | Mura | extension | Train/capture vs recognition disagree on portal | Spike dual registry → single pointer → delete secondary |
 | LISTPORTALS | Mura | extension | `chrome.storage` portals ignore D6.4 filter | Align with API visibility or remove browser list for fill |
 | CAPTURE-PHI | Muri | extension | Labels/values risk in capture path | Audit payload fields; redact; no value logging |
@@ -16,8 +17,9 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 
 | ID | 3M | Area | Symptom | Likely bites |
 |---|---|---|---|---|
+| TD-47 | Mura | panel | Exact-state SOP only; multi-state payers duplicate or fall to fallback | Spike #278 → **PM ack D3.1–D3.7** → All-states build |
 | PAY-UNIVERSE | Mura | both | Three payer lists (ops / authoring / globals) confuse | Doc map + UI copy; then consolidate call sites |
-| GLOBAL-PAYERS | Muda | panel/db | ~270 globals, few assignments | Inventory spike → PM candidates → DELETE batches |
+| GLOBAL-PAYERS | Muda | panel/db | Dead catalog rows (code path #275) | Ops apply after second PM sign-off — not a re-inventory |
 | ORPHAN-REPORTS | Muda | panel | `components/reports/*` after `/reporting` | Delete orphan modules + grep imports |
 | DEAD-ADMIN | Muda | panel | Unused admin panels/routes | Grep + delete or route-hide per TD |
 | F13-REST | Mura | extension | Env incomplete (manifest/handoff/CORS) | One concern per bite |
@@ -43,6 +45,9 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 - F23/F24 platform filter + authoring (Slice 6)
 - Workflow doc + UAT checklist (Slice 0)
 - Postman skipped (D4)
+- Payer create S0 (`create_payer` 10-arg converge) — #274
+- Ready = checklist SOP + attach facility-backed defaults — #277
+- Catalog purge **code** — #275 (hosted apply still OPS-PURGE)
 
 ## Canonical registers
 
@@ -51,4 +56,5 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 - `docs/ops/3m-slice-4-sowmya-audit.md` (historical)
 - `docs/ops/3m-slice-5-closeout.md`
 - `docs/ops/slice-6-platform-org-spike.md`
+- `docs/ops/slice-3-sop-all-states-spike.md` (payer-setup Slice 3 — build gated on PM ack)
 - `docs/ops/global-portal-payer-inventory.sql`

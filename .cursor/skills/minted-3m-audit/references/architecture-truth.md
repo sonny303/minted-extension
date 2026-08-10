@@ -11,13 +11,15 @@ Read these before contradicting them. Prefer live code over stale docs; prefer t
 
 Workbench `/api` is for the **browser extension only**. Panel does not need Postman against it for product QA.
 
-## Org model (post–Slice 6)
+## Org model (post–Slice 6 + corrected payer-setup)
 
-- JWT / session carries **org membership** (`org_members`).
-- **Active org** in panel: Zustand `useOrgStore` / `activeOrgId`.
-- Assignment: `portal_org_assignments` (portal ↔ org). Inserts go through `p_assign_to_org` (SECURITY DEFINER) — PostgREST RLS alone cannot see cross-org portals on insert.
-- SOP library read-back: global + own-org + **assigned-portal** SOPs (migration `20260809120100`).
-- Authoring payer universe ≠ ops/filter universe — use `listAuthoringPayersForActiveOrg` / `useAuthoringPayers` in authoring UIs; ops lists stay assignment-scoped.
+- JWT / session carries **org membership** (`memberships`).
+- **Active org** in panel: Zustand auth-store `activeOrgId`.
+- Org ↔ payer adoption stays on **`org_payer_assignments`** (do not delete this layer unless PM reopens).
+- **`create_payer`:** live hosted signature is the **10-arg** form (#274). Creating a payer still upserts the caller org’s assignment in-RPC; the Slice 6 `p_assign_to_org` flag was **superseded** (do not reintroduce).
+- SOP library read-back: prefer migration `20260809120100` (global SOPs readable without assignment) — confirm hosted apply before trusting authoring of unadopted payers.
+- Authoring payer universe ≠ ops/filter universe — use `useAuthoringPayers` / `list_global_payers` in authoring UIs; ops/network lists stay assignment-scoped.
+- Payer Setup **Ready** = checklist SOP presence (#277), not form proven/drift. Attach review defaults are facility-backed only; E6.2 eligibility unchanged.
 
 ## Case / contracting grain
 
