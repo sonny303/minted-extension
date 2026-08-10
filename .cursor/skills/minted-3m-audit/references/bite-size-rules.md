@@ -13,42 +13,48 @@ A bite is mergeable by one reviewer in one sitting:
 ## Untangle patterns (use these templates)
 
 ### Godfile / god component
+
 - Bite A: extract pure helpers + unit tests (no UI change).
 - Bite B: extract one presentational chunk.
 - Bite C: extract data hook.
 - Bite D: behavior change.
-Never combine A–D.
+  Never combine A–D.
 
 ### Dual source of truth
+
 - Bite A: document the two paths + which is canonical (spike doc).
 - Bite B: make secondary read-only or warn.
 - Bite C: write only to canonical.
 - Bite D: delete secondary.
 
 ### API vs RLS drift
+
 - Bite A: add regression test or shared helper on one door.
 - Bite B: align the other door.
 - Bite C: remove dead endpoint/client.
 
 ### Large cleanup (e.g. delete N rows)
+
 - Bite 0: inventory SQL + keep rules + fan-out map (no DELETE).
 - Bite 1: candidate list artifact + PM sign-off.
 - Bite 2: backup + DELETE in batches behind maintenance window.
 - Bite 3: UI/empty-state verification.
 
 ### “Platform overhaul”
+
 Never one PR. Require a spike doc with D-decisions first (see Slice 6), then:
 
-1. Schema/RPC  
-2. Service/helper  
-3. UI wiring  
-4. Extension alignment (if needed)  
-5. Docs/TECH-DEBT close-out  
+1. Schema/RPC
+2. Service/helper
+3. UI wiring
+4. Extension alignment (if needed)
+5. Docs/TECH-DEBT close-out
 
 ## Recommendation shape (copy this)
 
 ```markdown
 ### BITE-<area>-<nn>: <title>
+
 - **3M:** Muri | Mura | Muda
 - **Repos:** panel | extension | both | ops
 - **Depends on:** none | BITE-…

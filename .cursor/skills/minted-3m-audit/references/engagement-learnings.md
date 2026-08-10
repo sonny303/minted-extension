@@ -13,28 +13,28 @@ Lessons that repeatedly bit us. Encode into recommendations and PR review.
 
 ## Product / architecture decisions that stuck
 
-| ID | Decision | Implication |
-|---|---|---|
-| D1=B | Slice 0–1 first | Sequencing: truth → UX empty states → orphans → watch → env → platform |
-| D2 | Slice 6 = platform/org overhaul | Not audit-docs-only |
-| D3 | F24 portal filter into Slice 6 | Shipped as `portalVisibility` + list filters |
-| D4 | Skip Postman (#265) | Extension door stays extension-only |
-| D6.1–D6.7 | Spike then build | Assignment RPC, SOP RLS, archive filter, authoring payers |
-| Sign-offs | Keep `archived_at`; D6.5 = all global SOPs; keep `useAuthoringPayers` | Do not “fix” these without PM |
+| ID        | Decision                                                              | Implication                                                            |
+| --------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| D1=B      | Slice 0–1 first                                                       | Sequencing: truth → UX empty states → orphans → watch → env → platform |
+| D2        | Slice 6 = platform/org overhaul                                       | Not audit-docs-only                                                    |
+| D3        | F24 portal filter into Slice 6                                        | Shipped as `portalVisibility` + list filters                           |
+| D4        | Skip Postman (#265)                                                   | Extension door stays extension-only                                    |
+| D6.1–D6.7 | Spike then build                                                      | Assignment RPC, SOP RLS, archive filter, authoring payers              |
+| Sign-offs | Keep `archived_at`; D6.5 = all global SOPs; keep `useAuthoringPayers` | Do not “fix” these without PM                                          |
 
 ## Corrected payer-setup plan (2026-08-10 — locked)
 
 Do **not** paste a full 3M audit into handoffs; bind this skill and cite paths.
 
-| Lock | Status | Implication |
-|---|---|---|
-| **Ready = checklist SOP** | #277 merged | ≥1 active global SOP with ≥1 task. Portal train/prove/drift = soft CTAs / autofill **badges**, not the Ready gate. Form mapper stays. |
-| **Attach: defaults only** | #277 merged | Keep E6.2 group-operating-state eligibility; zero-facility proposed states stay **visible** but **unchecked** by default. Do not reverse E6.2. |
-| **Keep `org_payer_assignments`** | locked closed | #274 prose “Slice 3 = drop assignments” ≠ live plan. Do not remove or bypass unless PM reopens. |
-| **Catalog DELETE** | #275 merged code | Hosted apply needs **second PM sign-off**. Never run purge SQL without it. |
-| **`create_payer` live signature** | #274 merged | App sends the hosted **10-arg** RPC. `p_assign_to_org` migration is `.superseded` — do not resurrect. |
-| **Slice 3 = SOP All-states** | **#280** build (CI green); spike #278 | D3.1 A (`state='All'`); **D3.3-G** ranks state → group → ownership. TD-47 closed in #280. Do not resurrect E4.2 “org any-group beats global exact-group.” |
-| **Slice 5** | out | Generation-reason / sidepanel godfile work stays out unless asked. |
+| Lock                              | Status                                | Implication                                                                                                                                               |
+| --------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ready = checklist SOP**         | #277 merged                           | ≥1 active global SOP with ≥1 task. Portal train/prove/drift = soft CTAs / autofill **badges**, not the Ready gate. Form mapper stays.                     |
+| **Attach: defaults only**         | #277 merged                           | Keep E6.2 group-operating-state eligibility; zero-facility proposed states stay **visible** but **unchecked** by default. Do not reverse E6.2.            |
+| **Keep `org_payer_assignments`**  | locked closed                         | #274 prose “Slice 3 = drop assignments” ≠ live plan. Do not remove or bypass unless PM reopens.                                                           |
+| **Catalog DELETE**                | #275 merged code                      | Hosted apply needs **second PM sign-off**. Never run purge SQL without it.                                                                                |
+| **`create_payer` live signature** | #274 merged                           | App sends the hosted **10-arg** RPC. `p_assign_to_org` migration is `.superseded` — do not resurrect.                                                     |
+| **Slice 3 = SOP All-states**      | **#280** build (CI green); spike #278 | D3.1 A (`state='All'`); **D3.3-G** ranks state → group → ownership. TD-47 closed in #280. Do not resurrect E4.2 “org any-group beats global exact-group.” |
+| **Slice 5**                       | out                                   | Generation-reason / sidepanel godfile work stays out unless asked.                                                                                        |
 
 ## Slice 3 review + lessons (2026-08-10)
 

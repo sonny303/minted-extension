@@ -4,9 +4,9 @@ Read these before contradicting them. Prefer live code over stale docs; prefer t
 
 ## Two doors (non-negotiable)
 
-| Surface | Path | Forbidden |
-|---|---|---|
-| **Webapp** (mintedpanel) | React → hooks → services → Supabase JS → **RLS** | Calling Workbench `/api` for panel data |
+| Surface                          | Path                                                                                  | Forbidden                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Webapp** (mintedpanel)         | React → hooks → services → Supabase JS → **RLS**                                      | Calling Workbench `/api` for panel data                         |
 | **Extension** (minted-extension) | Chrome → JWT (`Authorization: Bearer`) → Workbench `/api/*` → service-role → Postgres | Direct Supabase from content/sidepanel; inventing `/api/payers` |
 
 Workbench `/api` is for the **browser extension only**. Panel does not need Postman against it for product QA.

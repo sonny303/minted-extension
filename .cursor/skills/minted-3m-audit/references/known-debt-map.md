@@ -4,34 +4,34 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 
 ## P0 — correctness / security / hosted blockers
 
-| ID | 3M | Area | Symptom | Likely bites |
-|---|---|---|---|---|
-| OPS-S6 | Muri | ops | Slice 6 **SOP read** migration may still be unapplied; vault | Apply `20260809120100` only ( `20260809120000` is **superseded** by #274 ); regen types; vault checklist |
-| OPS-PURGE | Muri | ops | #275 catalog DELETE merged but not hosted | **Second PM sign-off** then apply; never agent-apply |
-| TRAIN-DUAL | Mura | extension | Train/capture vs recognition disagree on portal | Spike dual registry → single pointer → delete secondary |
-| LISTPORTALS | Mura | extension | `chrome.storage` portals ignore D6.4 filter | Align with API visibility or remove browser list for fill |
-| CAPTURE-PHI | Muri | extension | Labels/values risk in capture path | Audit payload fields; redact; no value logging |
-| VAULT | Muri | panel/ops | E4.4 vault not verified hosted | Ops checklist only |
-| DOC-PICK | Mura | panel docs | SCHEMA/CLAUDE still describe pre–D3.3-G `pickTemplate` ownership wall | Truth scrub only (no behavior) after #280 merges |
+| ID          | 3M   | Area       | Symptom                                                               | Likely bites                                                                                             |
+| ----------- | ---- | ---------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| OPS-S6      | Muri | ops        | Slice 6 **SOP read** migration may still be unapplied; vault          | Apply `20260809120100` only ( `20260809120000` is **superseded** by #274 ); regen types; vault checklist |
+| OPS-PURGE   | Muri | ops        | #275 catalog DELETE merged but not hosted                             | **Second PM sign-off** then apply; never agent-apply                                                     |
+| TRAIN-DUAL  | Mura | extension  | Train/capture vs recognition disagree on portal                       | Spike dual registry → single pointer → delete secondary                                                  |
+| LISTPORTALS | Mura | extension  | `chrome.storage` portals ignore D6.4 filter                           | Align with API visibility or remove browser list for fill                                                |
+| CAPTURE-PHI | Muri | extension  | Labels/values risk in capture path                                    | Audit payload fields; redact; no value logging                                                           |
+| VAULT       | Muri | panel/ops  | E4.4 vault not verified hosted                                        | Ops checklist only                                                                                       |
+| DOC-PICK    | Mura | panel docs | SCHEMA/CLAUDE still describe pre–D3.3-G `pickTemplate` ownership wall | Truth scrub only (no behavior) after #280 merges                                                         |
 
 ## P1 — active muda / mura
 
-| ID | 3M | Area | Symptom | Likely bites |
-|---|---|---|---|---|
-| PAY-UNIVERSE | Mura | both | Three payer lists (ops / authoring / globals) confuse | Doc map + UI copy; then consolidate call sites |
-| GLOBAL-PAYERS | Muda | panel/db | Dead catalog rows (code path #275) | Ops apply after second PM sign-off — not a re-inventory |
-| ORPHAN-REPORTS | Muda | panel | `components/reports/*` after `/reporting` | Delete orphan modules + grep imports |
-| DEAD-ADMIN | Muda | panel | Unused admin panels/routes | Grep + delete or route-hide per TD |
-| F13-REST | Mura | extension | Env incomplete (manifest/handoff/CORS) | One concern per bite |
-| TD-41/49/50 | Muda | panel | Per TECH-DEBT rows | Follow register; don’t reopen F23/F24 |
+| ID             | 3M   | Area      | Symptom                                               | Likely bites                                            |
+| -------------- | ---- | --------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| PAY-UNIVERSE   | Mura | both      | Three payer lists (ops / authoring / globals) confuse | Doc map + UI copy; then consolidate call sites          |
+| GLOBAL-PAYERS  | Muda | panel/db  | Dead catalog rows (code path #275)                    | Ops apply after second PM sign-off — not a re-inventory |
+| ORPHAN-REPORTS | Muda | panel     | `components/reports/*` after `/reporting`             | Delete orphan modules + grep imports                    |
+| DEAD-ADMIN     | Muda | panel     | Unused admin panels/routes                            | Grep + delete or route-hide per TD                      |
+| F13-REST       | Mura | extension | Env incomplete (manifest/handoff/CORS)                | One concern per bite                                    |
+| TD-41/49/50    | Muda | panel     | Per TECH-DEBT rows                                    | Follow register; don’t reopen F23/F24                   |
 
 ## P2 — maintainability
 
-| ID | 3M | Area | Symptom | Likely bites |
-|---|---|---|---|---|
+| ID            | 3M   | Area      | Symptom                         | Likely bites                        |
+| ------------- | ---- | --------- | ------------------------------- | ----------------------------------- |
 | SIDEPANEL-GOD | Muri | extension | Sidepanel size / mixed concerns | Extract helpers → hooks → UI chunks |
-| DOC-DRIFT | Mura | docs | README/ARCHITECTURE vs code | Truth PR only; no behavior change |
-| AUDIT-HIST | Muda | docs | Slice 4 audit read as live AC | Banner “historical” or archive path |
+| DOC-DRIFT     | Mura | docs      | README/ARCHITECTURE vs code     | Truth PR only; no behavior change   |
+| AUDIT-HIST    | Muda | docs      | Slice 4 audit read as live AC   | Banner “historical” or archive path |
 
 ## Closed in 3M (do not re-open as open F-items)
 
