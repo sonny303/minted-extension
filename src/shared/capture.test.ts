@@ -7,6 +7,7 @@ import {
   mergePageCapture,
   nextPageSequence,
   parseCaptureSession,
+  resolvePageStepForCapture,
   usedPageNames,
   recognitionSummary,
   restoredSummary,
@@ -176,6 +177,133 @@ describe("mergePageCapture (E6.9 multi-page)", () => {
     const merged = mergePageCapture(previous, [row("#a", null)], null);
     expect(merged).toHaveLength(1);
     expect(merged[0]?.chosenToken).toBe("provider.npi");
+  });
+});
+
+describe("resolvePageStepForCapture (BITE-CAP-01 — re-capture reuses pageStep)", () => {
+  const portalKey = "aetna_join";
+
+  it("derives a fresh name on first capture", () => {
+    expect(
+      resolvePageStepForCapture({
+        url: "https://payer.example/enroll/credentials",
+        heading: null,
+        session: null,
+        portalKey,
+      }),
+    ).toBe("credentials");
+  });
+
+  it("reuses the URL-tail pageStep when re-capturing the same URL", () => {
+    const existing: CaptureSession = {
+      portalKey,
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [row({ selector: "#npi", pageStep: "credentials", chosenToken: "provider.npi", sent: true })],
+    };
+    expect(
+      resolvePageStepForCapture({
+        url: "https://payer.example/enroll/credentials?session=volatile",
+        heading: null,
+        session: existing,
+        portalKey,
+      }),
+    ).toBe("credentials");
+  });
+
+  it("reuses the only pageStep when the URL gives no match", () => {
+    const existing: CaptureSession = {
+      portalKey,
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [
+        row({ selector: "#npi", pageStep: "Practice details" }),
+        row({ selector: "#tin", pageStep: "Practice details" }),
+      ],
+    };
+    expect(
+      resolvePageStepForCapture({
+        url: "https://payer.example/enroll/step2",
+        heading: null,
+        session: existing,
+        portalKey,
+      }),
+    ).toBe("Practice details");
+  });
+
+  it("reuses the most recently captured page when several exist", () => {
+    const existing: CaptureSession = {
+      portalKey,
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [
+        row({ selector: "#a", pageStep: "Page 1" }),
+        row({ selector: "#b", pageStep: "Tax ID" }),
+      ],
+    };
+    expect(
+      resolvePageStepForCapture({
+        url: "https://payer.example/enroll/ambiguous",
+        heading: null,
+        session: existing,
+        portalKey,
+      }),
+    ).toBe("Tax ID");
+  });
+
+  it("does not invent Page 3 on re-capture when heading and URL tail are used", () => {
+    const existing: CaptureSession = {
+      portalKey,
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [
+        row({ selector: "#a", pageStep: "Practice details" }),
+        row({ selector: "#b", pageStep: "credentials" }),
+      ],
+    };
+    const pageStep = resolvePageStepForCapture({
+      url: "https://payer.example/enroll/credentials",
+      heading: "Practice details",
+      session: existing,
+      portalKey,
+    });
+    expect(pageStep).toBe("credentials");
+    expect(pageStep).not.toBe("Page 3");
+  });
+});
+
+describe("re-capture same URL merges by selector (BITE-CAP-01)", () => {
+  it("carries decisions and sent state when pageStep is reused", () => {
+    const previous = [
+      row({
+        selector: "#npi",
+        pageStep: "credentials",
+        chosenToken: "provider.npi",
+        sent: true,
+      }),
+      row({ selector: "#gone", pageStep: "credentials" }),
+    ];
+    const existing: CaptureSession = {
+      portalKey: "aetna_join",
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: previous,
+    };
+    const pageStep = resolvePageStepForCapture({
+      url: "https://payer.example/enroll/credentials",
+      heading: null,
+      session: existing,
+      portalKey: "aetna_join",
+    });
+    expect(pageStep).toBe("credentials");
+    const merged = mergePageCapture(
+      previous,
+      [row({ selector: "#npi", pageStep: "credentials" }), row({ selector: "#new", pageStep: "credentials" })],
+      pageStep,
+    );
+    expect(merged.map((r) => r.selector)).toEqual(["#npi", "#new"]);
+    expect(merged[0]?.chosenToken).toBe("provider.npi");
+    expect(merged[0]?.sent).toBe(true);
   });
 });
 

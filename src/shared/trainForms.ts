@@ -20,7 +20,9 @@ export function sequencePageName(sequence: number): string {
   return `Page ${sequence}`;
 }
 
-function urlDiscriminator(url: string | null | undefined): string | null {
+/** The last non-empty URL path segment — stable page identity when headings
+ * are missing. Exported for re-capture page matching (BITE-CAP-01). */
+export function pageUrlTail(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
     const u = new URL(url);
@@ -64,7 +66,7 @@ export function derivePageStep(input: PageIdentityInput): string {
   const used = new Set(input.used);
   const heading = tidy(input.heading);
   if (heading && !used.has(heading)) return heading;
-  const tail = tidy(urlDiscriminator(input.url));
+  const tail = tidy(pageUrlTail(input.url));
   if (tail && !used.has(tail)) return tail;
   let sequence = input.sequence;
   let name = sequencePageName(sequence);

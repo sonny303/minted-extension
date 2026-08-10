@@ -43,11 +43,10 @@ import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
 import {
   candidatePortalName,
   captureStateSummary,
-  derivePageStep,
   formCaptureState,
   recognizeForm,
 } from "../shared/trainForms";
-import { nextPageSequence, usedPageNames } from "../shared/capture";
+import { resolvePageStepForCapture } from "../shared/capture";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -3290,16 +3289,16 @@ captureStart.addEventListener("click", () => {
   captureStart.disabled = true;
   captureStart.textContent = "Reading the form…";
   void (async () => {
-    // E6.9 F6.9.8 — name the wizard page this scan comes from. Heading first
-    // (what the trainer sees), then the URL tail, then the capture sequence;
-    // a name already used in this run falls through, so two indistinguishable
-    // pages never merge into one bucket. Capture never prompts for it — the
-    // admin renames pages in the editor.
-    const pageStep = derivePageStep({
-      url: (await queryActiveTab())?.url ?? null,
-      heading: (await queryActiveTab())?.title ?? null,
-      sequence: nextPageSequence(captureSession),
-      used: usedPageNames(captureSession),
+    // BITE-CAP-01 — re-capture reuses the session's pageStep so mergePageCapture
+    // diffs by selector; derivePageStep runs only on a true first capture.
+    // CAP-HEAD: tab.title is not a wizard heading — pass null until the content
+    // script can report form headings via SCAN_PAGE_META.
+    const tab = await queryActiveTab();
+    const pageStep = resolvePageStepForCapture({
+      url: tab?.url ?? null,
+      heading: null,
+      session: captureSession,
+      portalKey: activePortal.key,
     });
     const response = await sendToBackground({
       type: "START_CAPTURE",
