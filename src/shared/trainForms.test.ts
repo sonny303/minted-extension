@@ -4,11 +4,17 @@ import {
   assignSortOrder,
   candidatePortalKey,
   candidatePortalName,
+  captureKeyAgreesWithTabUrl,
+  capturePortalKeyForUrl,
   captureStateSummary,
+  decideCaptureStart,
   derivePageStep,
   formCaptureState,
   recognizeForm,
+  resolveTrainRecognition,
   sequencePageName,
+  TRAIN_MISMATCH_HINT,
+  trainMismatchRecognitionText,
 } from "./trainForms";
 
 function portal(over: Partial<PortalRegistryRow> = {}): PortalRegistryRow {
@@ -216,5 +222,138 @@ describe("formCaptureState", () => {
     expect(captureStateSummary({ pagesSeen: 5, fieldsCaptured: 23, mapped: 4, undecided: 19 })).toBe(
       "5 pages seen · 23 captured · 4 mapped",
     );
+  });
+});
+
+describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", () => {
+  const rows = [portal()];
+
+  it("binds capture to the URL-matched portal", () => {
+    const view = resolveTrainRecognition({
+      url: "https://payer.example/enroll/start?x=1",
+      rows,
+      payerName: "Aetna",
+      selectedPortalKey: "",
+    });
+    expect(view.status).toBe("matched");
+    if (view.status === "matched") expect(view.portal.key).toBe("aetna_join");
+  });
+
+  it("keeps sticky selection messaging on mismatch — never claims a new form", () => {
+    const view = resolveTrainRecognition({
+      url: "https://login.example/sso",
+      rows,
+      payerName: "Aetna",
+      selectedPortalKey: "aetna_join",
+    });
+    expect(view).toMatchObject({
+      status: "mismatch",
+      portal: null,
+      selectedName: "Aetna join",
+    });
+    if (view.status !== "mismatch") throw new Error("expected mismatch");
+    expect(view.recognitionText).toBe(trainMismatchRecognitionText("Aetna join"));
+    expect(view.recognitionText).not.toMatch(/New form/i);
+    expect(view.recognitionText).not.toMatch(/form 2/i);
+    expect(view.hintText).toBe(TRAIN_MISMATCH_HINT);
+  });
+
+  it("only greets a page as new when no form is selected", () => {
+    const view = resolveTrainRecognition({
+      url: "https://other.example/apply",
+      rows,
+      payerName: "Aetna",
+      selectedPortalKey: "",
+    });
+    expect(view.status).toBe("new");
+    if (view.status === "new") {
+      expect(view.candidateName).toBe("Aetna form 2");
+      expect(view.recognitionText).toContain("New form");
+      expect(view.portal).toBeNull();
+    }
+  });
+
+  it("asks for a tab when there is no URL", () => {
+    const view = resolveTrainRecognition({
+      url: null,
+      rows,
+      payerName: "Aetna",
+      selectedPortalKey: "aetna_join",
+    });
+    expect(view.status).toBe("no-tab");
+    if (view.status === "no-tab") expect(view.portal).toBeNull();
+  });
+});
+
+describe("captureKeyAgreesWithTabUrl — shared-library invariant", () => {
+  const rows = [portal()];
+
+  it("allows capture only under the URL-matched key", () => {
+    const url = "https://payer.example/enroll/start";
+    expect(capturePortalKeyForUrl(url, rows)).toBe("aetna_join");
+    expect(captureKeyAgreesWithTabUrl("aetna_join", url, rows)).toBe(true);
+  });
+
+  it("rejects a dropdown key that disagrees with the active tab", () => {
+    // Login wall / redirect: selection may still say aetna_join, but the tab
+    // does not match — capture must not send that key.
+    expect(captureKeyAgreesWithTabUrl("aetna_join", "https://login.example/sso", rows)).toBe(
+      false,
+    );
+    expect(capturePortalKeyForUrl("https://login.example/sso", rows)).toBeNull();
+  });
+
+  it("rejects a wrong key even when some other portal matches the URL", () => {
+    const two = [
+      portal(),
+      portal({
+        id: "p2",
+        portalKey: "aetna_other",
+        name: "Aetna other",
+        formUrl: "https://other.example/apply",
+      }),
+    ];
+    expect(
+      captureKeyAgreesWithTabUrl("aetna_other", "https://payer.example/enroll/start", two),
+    ).toBe(false);
+  });
+});
+
+describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
+  const rows = [portal()];
+
+  it("allows START_CAPTURE only when the fresh tab id+url agree with the key", () => {
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: 42,
+        tabUrl: "https://payer.example/enroll/start",
+        rows,
+      }),
+    ).toEqual({ ok: true, tabId: 42, portalKey: "aetna_join" });
+  });
+
+  it("rejects a mismatched tab without authorizing START_CAPTURE", () => {
+    // Stale portal pointer + login wall / switched tab: must not call
+    // START_CAPTURE (shared-library poison / wrong content-script target).
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: 99,
+        tabUrl: "https://login.example/sso",
+        rows,
+      }),
+    ).toEqual({ ok: false, reason: "key-mismatch" });
+  });
+
+  it("rejects a missing active tab id even if the key would match a URL", () => {
+    expect(
+      decideCaptureStart({
+        portalKey: "aetna_join",
+        tabId: null,
+        tabUrl: "https://payer.example/enroll/start",
+        rows,
+      }),
+    ).toEqual({ ok: false, reason: "no-tab" });
   });
 });

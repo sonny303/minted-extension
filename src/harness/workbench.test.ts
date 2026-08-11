@@ -32,8 +32,11 @@ import { readPanelMode, writePanelMode } from "../background/mode";
 import {
   assignSortOrder,
   candidatePortalName,
+  CAPTURE_TAB_MISMATCH_ERROR,
+  decideCaptureStart,
   formCaptureState,
   recognizeForm,
+  resolveTrainRecognition,
 } from "../shared/trainForms";
 import { coveragePortal } from "../background/fill";
 import {
@@ -748,6 +751,50 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       undecided: 1,
     });
     mock.state.sharedMaps = [];
+  });
+
+  it("TRAIN-DUAL — mismatched capture rejects START_CAPTURE (helper + source tripwire)", async () => {
+    await writePanelMode("train");
+    const registry = await listSharedPortals();
+    // Behavioral half (real): decideCaptureStart must refuse a login wall /
+    // stale key so START_CAPTURE is not authorized.
+    const rejected = decideCaptureStart({
+      portalKey: "aetna_join",
+      tabId: 7,
+      tabUrl: "https://login.example/sso",
+      rows: registry,
+    });
+    expect(rejected).toEqual({ ok: false, reason: "key-mismatch" });
+    expect(mock.state.sharedProposed.size).toBe(0);
+
+    // Wiring half is ONLY a source tripwire against retyping the stale
+    // portalTabId hand-patch — it does NOT click the button, mock
+    // chrome.tabs / sendToBackground, or prove the handler uses the decision.
+    // Full click-path coverage waits on TD-51 / TD-50 extract (see TECH-DEBT).
+    // CAP-05 moved the gate into async startCapture(); listeners only dispatch
+    // mode. Slice that function — not the thin click wrappers — for the tripwire.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const captureFn = source.slice(
+      source.indexOf("async function startCapture("),
+      source.indexOf("captureSend.addEventListener"),
+    );
+    expect(captureFn).toContain("decideCaptureStart(");
+    expect(captureFn).toContain("decision.tabId");
+    expect(captureFn).toContain("await detectPortal()");
+    expect(captureFn).toContain("CAPTURE_TAB_MISMATCH_ERROR");
+    expect(captureFn).not.toMatch(/portalTabId = portal \? tabId/);
+    expect(CAPTURE_TAB_MISMATCH_ERROR).toMatch(/no longer matches/);
+
+    // Selection sticky + mismatch copy still routes through resolveTrainRecognition.
+    const view = resolveTrainRecognition({
+      url: "https://login.example/sso",
+      rows: registry,
+      payerName: "Aetna",
+      selectedPortalKey: "aetna_join",
+    });
+    expect(view.status).toBe("mismatch");
+    expect(view.portal).toBeNull();
   });
 });
 

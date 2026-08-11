@@ -195,3 +195,152 @@ export function captureStateSummary(state: FormCaptureState): string {
       : `${state.pagesSeen} ${state.pagesSeen === 1 ? "page" : "pages"} seen`;
   return `${pages} · ${state.fieldsCaptured} captured · ${state.mapped} mapped`;
 }
+
+// ---------------------------------------------------------------------------
+// Train capture bind + mismatch copy (TRAIN-DUAL / D-TD.1 C amended + D-TD.3 C1)
+// ---------------------------------------------------------------------------
+
+/**
+ * What Train should show and bind for capture on the open tab.
+ *
+ * Capture bind is URL-only (shared-library poison guard). The dropdown is
+ * sticky navigation/messaging intent — it never auto-sets the capture key.
+ * When a form is selected and the URL does not match, copy must NOT claim a
+ * "new form" (login walls / SSO / wizard redirects are the real gap).
+ */
+export type TrainRecognitionView =
+  | { status: "matched"; portal: MatchedPortal }
+  | {
+      status: "mismatch";
+      portal: null;
+      selectedName: string;
+      recognitionText: string;
+      hintText: string;
+    }
+  | {
+      status: "new";
+      portal: null;
+      candidateName: string;
+      recognitionText: string;
+      hintText: string;
+    }
+  | { status: "no-tab"; portal: null; recognitionText: string; hintText: string };
+
+export interface TrainRecognitionInput {
+  url: string | null | undefined;
+  rows: readonly PortalRegistryRow[];
+  payerName: string | null;
+  /** Dropdown `portal_key` (empty string = none selected). */
+  selectedPortalKey: string;
+}
+
+/** Honest mismatch line when selection exists but the tab URL does not match. */
+export function trainMismatchRecognitionText(selectedName: string): string {
+  return `This page doesn’t match ${selectedName} — finish login or open the registered form URL.`;
+}
+
+export const TRAIN_MISMATCH_HINT =
+  "Capture stays off until this tab matches the selected form. Opening the form from the list navigates to the registered URL.";
+
+export const TRAIN_NEW_HINT =
+  "Register the form in the web app first, then come back and capture each section of it here.";
+
+export const TRAIN_NO_TAB_HINT = TRAIN_NEW_HINT;
+
+/**
+ * Resolve Train recognition UI + capture bind from URL + sticky selection.
+ *
+ * `portal` is non-null only on `matched` — the sole automatic capture bind.
+ */
+export function resolveTrainRecognition(input: TrainRecognitionInput): TrainRecognitionView {
+  const recognition = recognizeForm(input.url, input.rows, input.payerName);
+  if (recognition.kind === "existing") {
+    return { status: "matched", portal: recognition.portal };
+  }
+
+  if (!input.url) {
+    return {
+      status: "no-tab",
+      portal: null,
+      recognitionText: "Open the payer's form in this tab to train it.",
+      hintText: TRAIN_NO_TAB_HINT,
+    };
+  }
+
+  const selectedKey = input.selectedPortalKey.trim();
+  if (selectedKey) {
+    const selected = input.rows.find((r) => r.portalKey === selectedKey);
+    const selectedName = tidy(selected?.name) ?? selectedKey;
+    return {
+      status: "mismatch",
+      portal: null,
+      selectedName,
+      recognitionText: trainMismatchRecognitionText(selectedName),
+      hintText: TRAIN_MISMATCH_HINT,
+    };
+  }
+
+  const candidateName = recognition.candidateName;
+  return {
+    status: "new",
+    portal: null,
+    candidateName,
+    recognitionText: `New form — nothing matches this page yet. It will be registered as “${candidateName}”.`,
+    hintText: TRAIN_NEW_HINT,
+  };
+}
+
+/**
+ * Shared-library invariant: the only portal_key capture may send is the one
+ * `matchPortalByUrl` returns for the active tab. A dropdown selection that
+ * disagrees with the tab must never win automatically.
+ */
+export function capturePortalKeyForUrl(
+  url: string | null | undefined,
+  rows: readonly PortalRegistryRow[],
+): string | null {
+  return matchPortalByUrl(url, [...rows])?.key ?? null;
+}
+
+/** True when `portalKey` is exactly the URL-matched registry key (or both absent). */
+export function captureKeyAgreesWithTabUrl(
+  portalKey: string | null | undefined,
+  url: string | null | undefined,
+  rows: readonly PortalRegistryRow[],
+): boolean {
+  const allowed = capturePortalKeyForUrl(url, rows);
+  const key = (portalKey ?? "").trim();
+  if (!key) return allowed == null;
+  return allowed === key;
+}
+
+export type CaptureStartDecision =
+  | { ok: true; tabId: number; portalKey: string }
+  | { ok: false; reason: "no-tab" | "key-mismatch" };
+
+/**
+ * Click-time gate for START_CAPTURE: the portal key and the *current* tab
+ * (id + url) must agree. Callers must pass a freshly queried active tab —
+ * never a portalTabId captured before an await.
+ */
+export function decideCaptureStart(input: {
+  portalKey: string | null | undefined;
+  tabId: number | null | undefined;
+  tabUrl: string | null | undefined;
+  rows: readonly PortalRegistryRow[];
+}): CaptureStartDecision {
+  const tabId = input.tabId;
+  if (tabId == null || !Number.isFinite(tabId)) {
+    return { ok: false, reason: "no-tab" };
+  }
+  const portalKey = (input.portalKey ?? "").trim();
+  if (!portalKey || !captureKeyAgreesWithTabUrl(portalKey, input.tabUrl, input.rows)) {
+    return { ok: false, reason: "key-mismatch" };
+  }
+  return { ok: true, tabId, portalKey };
+}
+
+/** User-visible line when click-time capture bind disagrees with the tab. */
+export const CAPTURE_TAB_MISMATCH_ERROR =
+  "This tab no longer matches the recognized form. Open the registered form URL and try again.";
+
