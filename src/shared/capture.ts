@@ -8,6 +8,7 @@
 // question trivial rather than delicate: there is nothing PHI-bearing in a
 // capture session to leak.
 import type { PortalFieldType } from "./apiTypes";
+import { derivePageStep, pageUrlTail } from "./trainForms";
 
 /** A scanned field plus whatever the server suggested for it. */
 export interface CaptureRow {
@@ -192,4 +193,56 @@ export function usedPageNames(session: CaptureSession | null): string[] {
  * next page falls back to. */
 export function nextPageSequence(session: CaptureSession | null): number {
   return usedPageNames(session).length + 1;
+}
+
+export interface ResolvePageStepInput {
+  url: string | null;
+  /** Form heading from the page (shape only) — never `tab.title`. */
+  heading: string | null;
+  session: CaptureSession | null;
+  portalKey: string;
+}
+
+function tidyHeading(value: string | null | undefined): string | null {
+  const text = (value ?? "").trim().replace(/\s+/g, " ");
+  return text.length > 0 ? text : null;
+}
+
+function mostRecentlyUsedPageStep(session: CaptureSession): string {
+  for (let i = session.rows.length - 1; i >= 0; i -= 1) {
+    const page = session.rows[i]?.pageStep?.trim();
+    if (page) return page;
+  }
+  return usedPageNames(session)[0] ?? "Page 1";
+}
+
+/**
+ * Name the wizard page for this capture click.
+ *
+ * First capture (no session, or a different portal) derives a fresh name.
+ * Re-capture on the same portal REUSES an existing `pageStep` so
+ * `mergePageCapture` diffs by selector instead of appending a new page.
+ * Until a "Capture next page" affordance exists, re-capture always reuses —
+ * it never walks `derivePageStep`'s collision-avoidance ladder.
+ */
+export function resolvePageStepForCapture(input: ResolvePageStepInput): string {
+  const { url, heading, session, portalKey } = input;
+  if (session == null || session.portalKey !== portalKey) {
+    return derivePageStep({ url, heading, sequence: 1, used: [] });
+  }
+
+  const existing = usedPageNames(session);
+  if (existing.length === 0) {
+    return derivePageStep({ url, heading, sequence: 1, used: [] });
+  }
+
+  const tail = tidyHeading(pageUrlTail(url));
+  if (tail && existing.includes(tail)) return tail;
+
+  const pageHeading = tidyHeading(heading);
+  if (pageHeading && existing.includes(pageHeading)) return pageHeading;
+
+  if (existing.length === 1) return existing[0]!;
+
+  return mostRecentlyUsedPageStep(session);
 }
