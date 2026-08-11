@@ -22,6 +22,28 @@ export interface CapturedField {
 const FILLABLE =
   'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
 
+/** True when the control has a non-zero layout box (trainer can see it).
+ * JSF multi-panel forms leave inactive panels in the DOM with no rects. */
+function hasLayoutBox(el: Element): boolean {
+  if (el.getClientRects().length === 0) return false;
+  const { width, height } = el.getBoundingClientRect();
+  return width > 0 && height > 0;
+}
+
+/** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
+ * or an ancestor (or self) marked hidden / aria-hidden / display:none /
+ * visibility:hidden. Never reads a control's value. */
+export function isCapturableControl(el: Element): boolean {
+  if (!hasLayoutBox(el)) return false;
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden")) return false;
+    if (node.getAttribute("aria-hidden") === "true") return false;
+    const { display, visibility } = getComputedStyle(node);
+    if (display === "none" || visibility === "hidden") return false;
+  }
+  return true;
+}
+
 function controlType(el: Element): PortalFieldType {
   if (el instanceof HTMLSelectElement) return "select";
   if (el instanceof HTMLTextAreaElement) return "text";
@@ -82,15 +104,19 @@ function sectionFor(el: Element): string | null {
 
 /** Scan the page's fillable controls into capture rows.
  *
- * Radio groups collapse to ONE row per name: a payer's "Accepting new
- * patients: Yes/No" is one field to map, not two. Order is DOM order, which
- * is the order the human reads the form in. */
+ * Only VISIBLE controls are captured (no layout box, or hidden via attribute /
+ * display / visibility ancestors, are skipped) so JSF multi-panel forms do not
+ * flood the trainer with inactive-panel inputs. Radio groups collapse to ONE
+ * row per name among the visible set: a payer's "Accepting new patients:
+ * Yes/No" is one field to map, not two. Order is DOM order, which is the order
+ * the human reads the form in. */
 export function scanCapturableFields(): CapturedField[] {
   const seenRadioNames = new Set<string>();
   const fields: CapturedField[] = [];
   const controls = Array.from(document.querySelectorAll(FILLABLE));
 
   controls.forEach((el, index) => {
+    if (!isCapturableControl(el)) return;
     const type = controlType(el);
     if (type === "radio") {
       const name = (el as HTMLInputElement).name;
