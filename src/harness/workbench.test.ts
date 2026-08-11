@@ -771,17 +771,19 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     // portalTabId hand-patch — it does NOT click the button, mock
     // chrome.tabs / sendToBackground, or prove the handler uses the decision.
     // Full click-path coverage waits on TD-51 / TD-50 extract (see TECH-DEBT).
+    // CAP-05 moved the gate into async startCapture(); listeners only dispatch
+    // mode. Slice that function — not the thin click wrappers — for the tripwire.
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
-    const click = source.slice(
-      source.indexOf('captureStart.addEventListener("click"'),
+    const captureFn = source.slice(
+      source.indexOf("async function startCapture("),
       source.indexOf("captureSend.addEventListener"),
     );
-    expect(click).toContain("decideCaptureStart(");
-    expect(click).toContain("decision.tabId");
-    expect(click).toContain("await detectPortal()");
-    expect(click).toContain("CAPTURE_TAB_MISMATCH_ERROR");
-    expect(click).not.toMatch(/portalTabId = portal \? tabId/);
+    expect(captureFn).toContain("decideCaptureStart(");
+    expect(captureFn).toContain("decision.tabId");
+    expect(captureFn).toContain("await detectPortal()");
+    expect(captureFn).toContain("CAPTURE_TAB_MISMATCH_ERROR");
+    expect(captureFn).not.toMatch(/portalTabId = portal \? tabId/);
     expect(CAPTURE_TAB_MISMATCH_ERROR).toMatch(/no longer matches/);
 
     // Selection sticky + mismatch copy still routes through resolveTrainRecognition.

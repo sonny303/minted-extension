@@ -36,7 +36,6 @@ import {
   captureCounts,
   nextPageSequence,
   recognitionSummary,
-  resolvePageStepForCapture,
   restoredSummary,
   usedPageNames,
   type CaptureRow,
