@@ -217,12 +217,21 @@ portalUrl, portalKey?, facilityId? }` through
   whether a call carries `x-org-id`; the panel mirrors it. A `SET_ACTIVE_CASE`
   hand-off FORCES the mode to `case` on receipt — the chooser never stands
   between the webapp's launch and the case it launched.
-- **Capture is per PAGE (E6.9 F6.9.8).** `START_CAPTURE` carries a `pageStep`
-  derived by `derivePageStep` (heading → URL tail → capture sequence; a name
-  already used in the run falls through), and rows carry DOM-order
-  `sortOrder`. `mergePageCapture` folds a scan into the session PER PAGE —
-  a plain `diffCapture` would read every other page's rows as removed and
-  drop them, so a trainer walking five pages would keep only the fifth.
+- **Capture is per PAGE (E6.9 F6.9.8; page naming amended by BITE-CAP-01).**
+  `START_CAPTURE` carries a `pageStep` and rows carry DOM-order `sortOrder`.
+  `mergePageCapture` folds a scan into the session PER PAGE — a plain
+  `diffCapture` would read every other page's rows as removed and drop them,
+  so a trainer walking five pages would keep only the fifth. The name comes
+  from `resolvePageStepForCapture` (`src/shared/capture.ts`): a FIRST capture
+  (no session, or a different portal) derives it with `derivePageStep`
+  (heading → URL tail → capture sequence), and every later capture on the same
+  portal REUSES an existing page name so re-capture is drift repair rather than
+  an appended clone. The panel passes `heading: null` — `tab.title` is not a
+  wizard heading, so the heading rung is dormant until the content script
+  reports one. **Known limitation:** because reuse is unconditional, a trainer
+  who navigates to page 2 and captures again lands in page 1's bucket and
+  page 1's rows are diffed away; multi-page walks need a "capture next page"
+  affordance (or selector-overlap detection) before they work again.
 - **Recognition never blocks or guesses (E6.9 F6.9.9).** `recognizeForm` reuses
   the SAME `matchPortalByUrl` the fill engine uses, so trainer and filler can
   never disagree about which portal a page is. A recognized form reports what
