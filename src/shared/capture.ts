@@ -8,7 +8,6 @@
 // question trivial rather than delicate: there is nothing PHI-bearing in a
 // capture session to leak.
 import type { PortalFieldType } from "./apiTypes";
-import { derivePageStep, pageUrlTail } from "./trainForms";
 
 /** A scanned field plus whatever the server suggested for it. */
 export interface CaptureRow {
@@ -195,54 +194,131 @@ export function nextPageSequence(session: CaptureSession | null): number {
   return usedPageNames(session).length + 1;
 }
 
-export interface ResolvePageStepInput {
-  url: string | null;
-  /** Form heading from the page (shape only) — never `tab.title`. */
-  heading: string | null;
-  session: CaptureSession | null;
-  portalKey: string;
-}
-
-function tidyHeading(value: string | null | undefined): string | null {
+function tidyPageName(value: string | null | undefined): string | null {
   const text = (value ?? "").trim().replace(/\s+/g, " ");
   return text.length > 0 ? text : null;
 }
 
-function mostRecentlyUsedPageStep(session: CaptureSession): string {
-  for (let i = session.rows.length - 1; i >= 0; i -= 1) {
-    const page = session.rows[i]?.pageStep?.trim();
-    if (page) return page;
-  }
-  return usedPageNames(session)[0] ?? "Page 1";
+/** Stable page key for a row: a trimmed name, or `null` for the pre-E6.9
+ * unnamed bucket. */
+function rowPageKey(row: CaptureRow): string | null {
+  return tidyPageName(row.pageStep ?? null);
 }
 
 /**
- * Name the wizard page for this capture click.
- *
- * First capture (no session, or a different portal) derives a fresh name.
- * Re-capture on the same portal REUSES an existing `pageStep` so
- * `mergePageCapture` diffs by selector instead of appending a new page.
- * Until a "Capture next page" affordance exists, re-capture always reuses —
- * it never walks `derivePageStep`'s collision-avoidance ladder.
+ * Pages already present in the session, in first-seen order. Named pages
+ * come first; the legacy unnamed bucket (`pageStep` null) is appended once
+ * when any such row exists — it is not a name, but it IS an overlap target.
  */
-export function resolvePageStepForCapture(input: ResolvePageStepInput): string {
-  const { url, heading, session, portalKey } = input;
-  if (session == null || session.portalKey !== portalKey) {
-    return derivePageStep({ url, heading, sequence: 1, used: [] });
+function existingCapturePages(previous: readonly CaptureRow[]): Array<string | null> {
+  const named: string[] = [];
+  const seen = new Set<string>();
+  let hasUnnamed = false;
+  for (const row of previous) {
+    const key = rowPageKey(row);
+    if (key == null) {
+      hasUnnamed = true;
+      continue;
+    }
+    if (!seen.has(key)) {
+      seen.add(key);
+      named.push(key);
+    }
+  }
+  return hasUnnamed ? [...named, null] : named;
+}
+
+function selectorsOfPage(previous: readonly CaptureRow[], page: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const row of previous) {
+    if (rowPageKey(row) === page) out.add(row.selector);
+  }
+  return out;
+}
+
+/** Index of the last row belonging to `page` in `previous` (-1 if none). */
+function lastRowIndexOfPage(previous: readonly CaptureRow[], page: string | null): number {
+  for (let i = previous.length - 1; i >= 0; i -= 1) {
+    if (rowPageKey(previous[i]!) === page) return i;
+  }
+  return -1;
+}
+
+export interface IdentifyCapturePageInput {
+  /** Rows already in the session for this portal (empty on a first capture). */
+  previous: readonly CaptureRow[];
+  /** Selectors from the fresh scan, in DOM order. */
+  scanned: readonly string[];
+  /** Candidate name for a NEW page, from the side panel's derivePageStep. */
+  candidate: string;
+  /** Last non-empty URL path segment of the scanned tab, or null. */
+  urlTail: string | null;
+  /** Form heading reported by the page, or null. Still null today (CAP-HEAD). */
+  heading: string | null;
+  /** "next-page" = the trainer explicitly asked for a new page: never reuse. */
+  mode: "auto" | "next-page";
+}
+
+/**
+ * Decide which wizard page a fresh scan belongs to (BITE-CAP-05).
+ *
+ * Runs in the background AFTER `SCAN_FIELDS`, so the selector set is available.
+ * Returns an existing page name when there is evidence of a match, `null` when
+ * the match is the pre-E6.9 unnamed bucket, or `candidate` for a new page.
+ *
+ * Decision order (stop at the first hit): empty session → explicit next-page →
+ * URL-tail / heading name match → selector-overlap (≥ 0.5 of the smaller set)
+ * → new page. Ties on overlap count break toward the page whose rows appear
+ * last in `previous` (most recently worked).
+ */
+export function identifyCapturePage(input: IdentifyCapturePageInput): string | null {
+  const { previous, scanned, candidate, urlTail, heading, mode } = input;
+  const pages = existingCapturePages(previous);
+
+  // 1. Nothing captured yet for this portal → the side panel's candidate.
+  if (pages.length === 0) return candidate;
+
+  // 2. Trainer said "this is a new page" — never reuse, even on identical DOM.
+  if (mode === "next-page") return candidate;
+
+  // 3. URL tail matches an existing named page (drift repair after redesign).
+  const tail = tidyPageName(urlTail);
+  if (tail != null && pages.includes(tail)) return tail;
+
+  // 4. Heading matches an existing named page.
+  const pageHeading = tidyPageName(heading);
+  if (pageHeading != null && pages.includes(pageHeading)) return pageHeading;
+
+  // 5. Selector overlap — majority of the smaller set ⇒ same page.
+  const scannedSet = new Set(scanned);
+  let bestPage: string | null | undefined;
+  let bestOverlap = -1;
+  let bestLastIndex = -1;
+
+  for (const page of pages) {
+    const pageSelectors = selectorsOfPage(previous, page);
+    let overlap = 0;
+    for (const selector of scannedSet) {
+      if (pageSelectors.has(selector)) overlap += 1;
+    }
+    const denom = Math.min(scanned.length, pageSelectors.size);
+    if (denom === 0) continue;
+    if (overlap / denom < 0.5) continue;
+
+    const lastIndex = lastRowIndexOfPage(previous, page);
+    if (
+      bestPage === undefined ||
+      overlap > bestOverlap ||
+      (overlap === bestOverlap && lastIndex > bestLastIndex)
+    ) {
+      bestPage = page;
+      bestOverlap = overlap;
+      bestLastIndex = lastIndex;
+    }
   }
 
-  const existing = usedPageNames(session);
-  if (existing.length === 0) {
-    return derivePageStep({ url, heading, sequence: 1, used: [] });
-  }
+  if (bestPage !== undefined) return bestPage;
 
-  const tail = tidyHeading(pageUrlTail(url));
-  if (tail && existing.includes(tail)) return tail;
-
-  const pageHeading = tidyHeading(heading);
-  if (pageHeading && existing.includes(pageHeading)) return pageHeading;
-
-  if (existing.length === 1) return existing[0]!;
-
-  return mostRecentlyUsedPageStep(session);
+  // 6. Unrecognised scan → a new page (the CAP-01 unconditional-reuse fix).
+  return candidate;
 }

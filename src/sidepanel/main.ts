@@ -34,8 +34,11 @@ import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/ca
 import {
   canSendCapture,
   captureCounts,
+  nextPageSequence,
   recognitionSummary,
   restoredSummary,
+  usedPageNames,
+  type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
@@ -43,10 +46,11 @@ import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
 import {
   candidatePortalName,
   captureStateSummary,
+  derivePageStep,
   formCaptureState,
+  pageUrlTail,
   recognizeForm,
 } from "../shared/trainForms";
-import { resolvePageStepForCapture } from "../shared/capture";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -147,6 +151,7 @@ const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
+const captureNextPage = el<HTMLButtonElement>("capture-next-page");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -3191,6 +3196,9 @@ caqhAttest.addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 
 let captureSession: CaptureSession | null = null;
+/** Set when the last capture added a page to an existing session — drives the
+ * "· Page N of N" summary suffix (BITE-CAP-05). */
+let captureAddedPage = false;
 
 // S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
 // blank) is QUARANTINED as of 3M Slice 2, not deleted.
@@ -3232,10 +3240,20 @@ function renderCapture(): void {
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
-  captureSummary.textContent = captureSession
+  const pageCount = usedPageNames(captureSession).length;
+  let summary = captureSession
     ? recognitionSummary(counts)
     : "Not captured yet — read this form's fields into Minted Panel.";
+  if (captureSession && captureAddedPage && pageCount > 0) {
+    summary = `${summary} · Page ${pageCount} of ${pageCount}`;
+  }
+  captureSummary.textContent = summary;
   captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+  // "Capture next page" only makes sense when there is already a session to
+  // add a page to. Hidden in Work mode with the rest of the capture strip
+  // (the section itself is already gated above).
+  captureNextPage.hidden = captureSession == null;
+  captureNextPage.disabled = false;
 
   captureRows.replaceChildren();
   captureActions.hidden = !canSendCapture(captureSession);
@@ -3250,73 +3268,115 @@ function renderCapture(): void {
   }
   if (captureSession == null) return;
 
-  for (const row of captureSession.rows) {
-    const item = document.createElement("div");
-    item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
-
-    const label = document.createElement("span");
-    label.className = "capture-row-label";
-    label.textContent = row.label || row.selector;
-    item.append(label);
-
-    const value = document.createElement("span");
-    value.className = "capture-row-token mono";
-    value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
-    item.append(value);
-
-    if (row.evidence) {
-      const evidence = document.createElement("span");
-      evidence.className = "capture-row-evidence";
-      evidence.textContent = row.evidence;
-      item.append(evidence);
+  for (const group of groupCaptureRowsByPage(captureSession.rows)) {
+    if (group.page != null) {
+      const heading = document.createElement("p");
+      heading.className = "capture-page-heading";
+      heading.textContent = group.page;
+      captureRows.append(heading);
     }
-
-    if (row.sent) {
-      const chip = document.createElement("span");
-      chip.className = "pill";
-      chip.textContent = "Sent";
-      item.append(chip);
+    for (const row of group.rows) {
+      captureRows.append(renderCaptureRow(row));
     }
-    captureRows.append(item);
   }
 }
 
-captureStart.addEventListener("click", () => {
+/** Group rows by pageStep in the order pages were first walked. */
+function groupCaptureRowsByPage(
+  rows: readonly CaptureRow[],
+): Array<{ page: string | null; rows: CaptureRow[] }> {
+  const order: Array<string | null> = [];
+  const groups = new Map<string | null, CaptureRow[]>();
+  for (const row of rows) {
+    const page = row.pageStep?.trim() ? row.pageStep.trim() : null;
+    if (!groups.has(page)) {
+      order.push(page);
+      groups.set(page, []);
+    }
+    groups.get(page)!.push(row);
+  }
+  return order.map((page) => ({ page, rows: groups.get(page)! }));
+}
+
+function renderCaptureRow(row: CaptureRow): HTMLDivElement {
+  const item = document.createElement("div");
+  item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
+
+  const label = document.createElement("span");
+  label.className = "capture-row-label";
+  label.textContent = row.label || row.selector;
+  item.append(label);
+
+  const value = document.createElement("span");
+  value.className = "capture-row-token mono";
+  value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
+  item.append(value);
+
+  if (row.evidence) {
+    const evidence = document.createElement("span");
+    evidence.className = "capture-row-evidence";
+    evidence.textContent = row.evidence;
+    item.append(evidence);
+  }
+
+  if (row.sent) {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "Sent";
+    item.append(chip);
+  }
+  return item;
+}
+
+async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   const tabId = portalTabId;
   const activePortal = portal;
   if (tabId == null || activePortal == null) return;
   const generation = loadGeneration;
   captureStart.disabled = true;
+  captureNextPage.disabled = true;
   captureStart.textContent = "Reading the form…";
-  void (async () => {
-    // BITE-CAP-01 — re-capture reuses the session's pageStep so mergePageCapture
-    // diffs by selector; derivePageStep runs only on a true first capture.
-    // CAP-HEAD: tab.title is not a wizard heading — pass null until the content
-    // script can report form headings via SCAN_PAGE_META.
-    const tab = await queryActiveTab();
-    const pageStep = resolvePageStepForCapture({
-      url: tab?.url ?? null,
-      heading: null,
-      session: captureSession,
-      portalKey: activePortal.key,
-    });
-    const response = await sendToBackground({
-      type: "START_CAPTURE",
-      tabId,
-      portalKey: activePortal.key,
-      pageStep,
-    });
-    captureStart.disabled = false;
-    if (!isCurrent(generation)) return;
-    if (!response.ok) {
-      captureStart.textContent = "Capture this form";
-      setError(mainError, response.error);
-      return;
-    }
-    captureSession = response.data;
-    captureRestored.hidden = true;
-    renderCapture();
-  })();
+  // BITE-CAP-05 — the side panel always sends a fresh collision-free candidate
+  // via derivePageStep; the background decides whether to reuse via
+  // identifyCapturePage after the scan. CAP-HEAD: tab.title is not a wizard
+  // heading — pass null until the content script can report form headings.
+  const tab = await queryActiveTab();
+  const candidate = derivePageStep({
+    url: tab?.url ?? null,
+    heading: null,
+    sequence: nextPageSequence(captureSession),
+    used: usedPageNames(captureSession),
+  });
+  const pagesBefore = usedPageNames(captureSession).length;
+  const hadSession = captureSession != null;
+  const response = await sendToBackground({
+    type: "START_CAPTURE",
+    tabId,
+    portalKey: activePortal.key,
+    pageStep: candidate,
+    pageUrlTail: pageUrlTail(tab?.url ?? null),
+    captureMode: mode,
+  });
+  captureStart.disabled = false;
+  captureNextPage.disabled = false;
+  if (!isCurrent(generation)) return;
+  if (!response.ok) {
+    captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+    setError(mainError, response.error);
+    return;
+  }
+  captureSession = response.data;
+  captureAddedPage = hadSession && usedPageNames(captureSession).length > pagesBefore;
+  captureRestored.hidden = true;
+  renderCapture();
+}
+
+captureStart.addEventListener("click", () => {
+  void startCapture("auto");
+});
+
+captureNextPage.addEventListener("click", () => {
+  void startCapture("next-page");
 });
 
 captureSend.addEventListener("click", () => {
@@ -3341,6 +3401,7 @@ captureClear.addEventListener("click", () => {
   void (async () => {
     await sendToBackground({ type: "CLEAR_CAPTURE" });
     captureSession = null;
+    captureAddedPage = false;
     captureRestored.hidden = true;
     renderCapture();
   })();
@@ -3351,6 +3412,7 @@ captureClear.addEventListener("click", () => {
 async function restoreCapture(): Promise<void> {
   const response = await sendToBackground({ type: "GET_CAPTURE" });
   captureSession = response.ok ? response.data : null;
+  captureAddedPage = false;
   if (captureSession) {
     captureRestored.hidden = false;
     captureRestored.textContent = restoredSummary(captureSession);
