@@ -4,7 +4,7 @@
 // (scripts/mock-panel-api.mjs). No real payer portal and no real panel is
 // ever contacted; auth is mocked to a fixture JWT the mock server accepts.
 import { stub } from "./chromeStub";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error — the mock server is an untyped .mjs harness module,
 // deliberately outside the typechecked tree (it mirrors the panel repo's own
 // scripts/mock-api-server.mjs pattern).
@@ -748,6 +748,91 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       undecided: 1,
     });
     mock.state.sharedMaps = [];
+  });
+});
+
+describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => {
+  // Drives the real background START_CAPTURE handler against a stubbed
+  // SCAN_FIELDS reply — no real portal, no panel API needed beyond the
+  // existing mock server.
+  let scanPayload: Array<{
+    label: string;
+    selector: string;
+    fieldType: string;
+    formSection: string | null;
+  }>;
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+
+  beforeAll(async () => {
+    // Importing the worker registers messaging; handleRequest is the same
+    // path the onMessage listener uses.
+    await import("../background/index");
+  });
+
+  beforeEach(() => {
+    stub.reset();
+    scanPayload = [];
+    previousSendMessage = chrome.tabs.sendMessage;
+    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+      if (message?.type === "PING") return { ok: true };
+      if (message?.type === "SCAN_FIELDS") return { ok: true, data: scanPayload };
+      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+  });
+
+  it("keeps page 1 rows and decisions when a disjoint page 2 is scanned", async () => {
+    const { handleRequest } = await import("../background/index");
+    const { usedPageNames, captureCounts } = await import("../shared/capture");
+
+    scanPayload = [
+      { label: "First", selector: "#p1a", fieldType: "text", formSection: null },
+      { label: "Second", selector: "#p1b", fieldType: "text", formSection: null },
+    ];
+    const page1 = (await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      portalKey: "bcbs_ks_enrollment",
+      pageStep: "step1",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    })) as import("../shared/capture").CaptureSession;
+    expect(usedPageNames(page1)).toEqual(["step1"]);
+
+    await handleRequest({
+      type: "SET_CAPTURE_CHOICE",
+      selector: "#p1a",
+      token: "provider.firstName",
+    });
+
+    // Disjoint selectors + a different URL tail candidate — must become a
+    // second page, not collapse onto step1 (the CAP-01 unconditional-reuse
+    // regression that wiped page 1 via mergePageCapture).
+    scanPayload = [
+      { label: "TIN", selector: "#p2a", fieldType: "text", formSection: null },
+      { label: "NPI", selector: "#p2b", fieldType: "text", formSection: null },
+    ];
+    const page2 = (await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      portalKey: "bcbs_ks_enrollment",
+      pageStep: "step2",
+      pageUrlTail: "step2",
+      captureMode: "auto",
+    })) as import("../shared/capture").CaptureSession;
+
+    expect(usedPageNames(page2)).toEqual(["step1", "step2"]);
+    expect(captureCounts(page2).total).toBe(4);
+    const kept = page2.rows.find((r) => r.selector === "#p1a");
+    expect(kept?.pageStep).toBe("step1");
+    expect(kept?.chosenToken).toBe("provider.firstName");
+    expect(page2.rows.filter((r) => r.pageStep === "step2").map((r) => r.selector)).toEqual([
+      "#p2a",
+      "#p2b",
+    ]);
   });
 });
 

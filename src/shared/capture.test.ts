@@ -4,10 +4,10 @@ import {
   canSendCapture,
   captureCounts,
   diffCapture,
+  identifyCapturePage,
   mergePageCapture,
   nextPageSequence,
   parseCaptureSession,
-  resolvePageStepForCapture,
   usedPageNames,
   recognitionSummary,
   restoredSummary,
@@ -180,100 +180,186 @@ describe("mergePageCapture (E6.9 multi-page)", () => {
   });
 });
 
-describe("resolvePageStepForCapture (BITE-CAP-01 — re-capture reuses pageStep)", () => {
-  const portalKey = "aetna_join";
+describe("identifyCapturePage (BITE-CAP-05)", () => {
+  const base = {
+    candidate: "step2",
+    urlTail: null as string | null,
+    heading: null as string | null,
+    mode: "auto" as const,
+  };
 
-  it("derives a fresh name on first capture", () => {
+  it("returns the candidate when there are no previous rows", () => {
     expect(
-      resolvePageStepForCapture({
-        url: "https://payer.example/enroll/credentials",
-        heading: null,
-        session: null,
-        portalKey,
+      identifyCapturePage({
+        ...base,
+        previous: [],
+        scanned: ["#a", "#b"],
+      }),
+    ).toBe("step2");
+  });
+
+  it("mode next-page wins over an identical selector set", () => {
+    const previous = [row({ selector: "#a", pageStep: "step1" }), row({ selector: "#b", pageStep: "step1" })];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#a", "#b"],
+        candidate: "Page 2",
+        mode: "next-page",
+      }),
+    ).toBe("Page 2");
+  });
+
+  it("URL tail matching reuses that page even at 0 overlap", () => {
+    const previous = [
+      row({ selector: "#old1", pageStep: "credentials" }),
+      row({ selector: "#old2", pageStep: "credentials" }),
+    ];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#brand-new"],
+        candidate: "Page 2",
+        urlTail: "credentials",
       }),
     ).toBe("credentials");
   });
 
-  it("reuses the URL-tail pageStep when re-capturing the same URL", () => {
-    const existing: CaptureSession = {
-      portalKey,
-      templateStepId: null,
-      startedAt: "2026-07-28",
-      rows: [row({ selector: "#npi", pageStep: "credentials", chosenToken: "provider.npi", sent: true })],
-    };
+  it("heading matching reuses that page", () => {
+    const previous = [row({ selector: "#a", pageStep: "Practice details" })];
     expect(
-      resolvePageStepForCapture({
-        url: "https://payer.example/enroll/credentials?session=volatile",
-        heading: null,
-        session: existing,
-        portalKey,
-      }),
-    ).toBe("credentials");
-  });
-
-  it("reuses the only pageStep when the URL gives no match", () => {
-    const existing: CaptureSession = {
-      portalKey,
-      templateStepId: null,
-      startedAt: "2026-07-28",
-      rows: [
-        row({ selector: "#npi", pageStep: "Practice details" }),
-        row({ selector: "#tin", pageStep: "Practice details" }),
-      ],
-    };
-    expect(
-      resolvePageStepForCapture({
-        url: "https://payer.example/enroll/step2",
-        heading: null,
-        session: existing,
-        portalKey,
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#x"],
+        candidate: "Page 2",
+        heading: "Practice details",
       }),
     ).toBe("Practice details");
   });
 
-  it("reuses the most recently captured page when several exist", () => {
-    const existing: CaptureSession = {
-      portalKey,
-      templateStepId: null,
-      startedAt: "2026-07-28",
-      rows: [
-        row({ selector: "#a", pageStep: "Page 1" }),
-        row({ selector: "#b", pageStep: "Tax ID" }),
-      ],
-    };
+  it("identical selector set reuses the existing page (overlap = 1.0)", () => {
+    const previous = [
+      row({ selector: "#a", pageStep: "step1", chosenToken: "provider.npi", sent: true }),
+      row({ selector: "#b", pageStep: "step1" }),
+    ];
     expect(
-      resolvePageStepForCapture({
-        url: "https://payer.example/enroll/ambiguous",
-        heading: null,
-        session: existing,
-        portalKey,
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#a", "#b"],
+        candidate: "Page 2",
       }),
-    ).toBe("Tax ID");
+    ).toBe("step1");
   });
 
-  it("does not invent Page 3 on re-capture when heading and URL tail are used", () => {
-    const existing: CaptureSession = {
-      portalKey,
-      templateStepId: null,
-      startedAt: "2026-07-28",
-      rows: [
-        row({ selector: "#a", pageStep: "Practice details" }),
-        row({ selector: "#b", pageStep: "credentials" }),
-      ],
-    };
-    const pageStep = resolvePageStepForCapture({
-      url: "https://payer.example/enroll/credentials",
-      heading: "Practice details",
-      session: existing,
-      portalKey,
-    });
-    expect(pageStep).toBe("credentials");
-    expect(pageStep).not.toBe("Page 3");
+  it("12-of-20 shared selectors reuses the existing page (drift, ≥ 0.5)", () => {
+    const previous = Array.from({ length: 20 }, (_, i) =>
+      row({ selector: `#p${i}`, pageStep: "step1" }),
+    );
+    const scanned = [
+      ...Array.from({ length: 12 }, (_, i) => `#p${i}`),
+      ...Array.from({ length: 8 }, (_, i) => `#new${i}`),
+    ];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned,
+        candidate: "Page 2",
+      }),
+    ).toBe("step1");
+  });
+
+  it("6 shared of a 20-row page vs a 6-control scan reuses (min-set normalisation)", () => {
+    const previous = Array.from({ length: 20 }, (_, i) =>
+      row({ selector: `#p${i}`, pageStep: "step1" }),
+    );
+    const scanned = Array.from({ length: 6 }, (_, i) => `#p${i}`);
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned,
+        candidate: "Page 2",
+      }),
+    ).toBe("step1");
+  });
+
+  it("fully disjoint selector set returns the candidate (the multi-page regression)", () => {
+    // Reproduced against the CAP-01 unconditional reuse: a genuine second page
+    // must NOT collapse onto step1 and wipe its rows via mergePageCapture.
+    const previous = [
+      row({ selector: "#p1a", pageStep: "step1", chosenToken: "provider.npi", sent: true }),
+      row({ selector: "#p1b", pageStep: "step1" }),
+    ];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#p2a", "#p2b"],
+        candidate: "step2",
+        urlTail: "step2",
+      }),
+    ).toBe("step2");
+  });
+
+  it("two existing pages: overlap only with the second → the second", () => {
+    const previous = [
+      row({ selector: "#a1", pageStep: "pageA" }),
+      row({ selector: "#a2", pageStep: "pageA" }),
+      row({ selector: "#b1", pageStep: "pageB" }),
+      row({ selector: "#b2", pageStep: "pageB" }),
+    ];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#b1", "#b2", "#b3"],
+        candidate: "Page 3",
+      }),
+    ).toBe("pageB");
+  });
+
+  it("ties break toward the page whose rows appear last", () => {
+    const previous = [
+      row({ selector: "#shared", pageStep: "first" }),
+      row({ selector: "#only-first", pageStep: "first" }),
+      row({ selector: "#shared", pageStep: "second" }),
+      row({ selector: "#only-second", pageStep: "second" }),
+    ];
+    // scanned overlaps each page by exactly 1 of 2 → ratio 0.5 for both;
+    // tie on overlap count breaks toward "second" (rows appear last).
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#shared", "#brand-new"],
+        candidate: "Page 3",
+      }),
+    ).toBe("second");
+  });
+
+  it("legacy pageStep null with overlapping selectors returns null", () => {
+    const previous = [
+      row({ selector: "#a", pageStep: null, chosenToken: "provider.npi", sent: true }),
+      row({ selector: "#b", pageStep: null }),
+    ];
+    expect(
+      identifyCapturePage({
+        ...base,
+        previous,
+        scanned: ["#a", "#b"],
+        candidate: "Page 1",
+      }),
+    ).toBeNull();
   });
 });
 
-describe("re-capture same URL merges by selector (BITE-CAP-01)", () => {
-  it("carries decisions and sent state when pageStep is reused", () => {
+describe("re-capture same page merges by selector (BITE-CAP-05 preserves CAP-01)", () => {
+  it("carries decisions and sent state when identifyCapturePage reuses the page", () => {
     const previous = [
       row({
         selector: "#npi",
@@ -283,17 +369,13 @@ describe("re-capture same URL merges by selector (BITE-CAP-01)", () => {
       }),
       row({ selector: "#gone", pageStep: "credentials" }),
     ];
-    const existing: CaptureSession = {
-      portalKey: "aetna_join",
-      templateStepId: null,
-      startedAt: "2026-07-28",
-      rows: previous,
-    };
-    const pageStep = resolvePageStepForCapture({
-      url: "https://payer.example/enroll/credentials",
+    const pageStep = identifyCapturePage({
+      previous,
+      scanned: ["#npi", "#new"],
+      candidate: "Page 2",
+      urlTail: "credentials",
       heading: null,
-      session: existing,
-      portalKey: "aetna_join",
+      mode: "auto",
     });
     expect(pageStep).toBe("credentials");
     const merged = mergePageCapture(

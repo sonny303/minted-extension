@@ -61,15 +61,19 @@ export type BgRequest =
   // label; SEND proposes the undecided rows; the session survives a worker
   // restart in chrome.storage.session (nothing PHI-bearing is ever in it).
   | { type: "GET_CAPTURE" }
-  // E6.9 F6.9.8: `pageStep` names the wizard page this scan came from, and
-  // `used` are the page names already taken in this run, so a repeat falls
-  // through to the capture sequence instead of merging two pages' fields.
+  // E6.9 F6.9.8 / BITE-CAP-05: `pageStep` is the CANDIDATE name for a new
+  // page (from derivePageStep); the background may reuse an existing page
+  // instead via identifyCapturePage. `pageUrlTail` and `captureMode` are
+  // optional so an older side panel against a newer worker still behaves
+  // as today's auto.
   | {
       type: "START_CAPTURE";
       tabId: number;
       portalKey: string;
       templateStepId?: string | null;
       pageStep?: string | null;
+      pageUrlTail?: string | null;
+      captureMode?: "auto" | "next-page";
     }
   | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
   | { type: "SEND_CAPTURE" }

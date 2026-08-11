@@ -48,6 +48,7 @@ import {
 } from "./activeCase";
 import { resolveActiveCaseState } from "../shared/handoff";
 import {
+  identifyCapturePage,
   mergePageCapture,
   parseCaptureSession,
   type CaptureRow,
@@ -206,7 +207,8 @@ async function readFillReport(providerId: string): Promise<FillReportRecord | nu
   return records[0] ?? null;
 }
 
-async function handleRequest(request: BgRequest): Promise<unknown> {
+/** Exported for the TE-10 harness — the side panel talks over messaging. */
+export async function handleRequest(request: BgRequest): Promise<unknown> {
   switch (request.type) {
     case "GET_AUTH_STATE":
       return getAuthState();
@@ -314,10 +316,22 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       }
       const previous = await readCaptureSession();
       const samePortal = previous?.portalKey === request.portalKey;
+      // BITE-CAP-05 — identify the page AFTER the scan. The side panel sends a
+      // collision-free candidate; we reuse an existing page when URL/heading/
+      // selector-overlap evidence says so, so a genuine second page is not
+      // collapsed onto the first (and mergePageCapture does not wipe it).
+      const previousRows = samePortal && previous ? previous.rows : [];
+      const pageStep = identifyCapturePage({
+        previous: previousRows,
+        scanned: scanned.data.map((f) => f.selector),
+        candidate: request.pageStep?.trim() || "Page 1",
+        urlTail: request.pageUrlTail ?? null,
+        heading: null,
+        mode: request.captureMode ?? "auto",
+      });
       // E6.9 F6.9.8 — stamp the wizard page and DOM order. The scan yields
       // fields in document order, so sortOrder is positional within THIS page;
       // pages themselves order by the sequence the trainer walked them.
-      const pageStep = request.pageStep?.trim() || null;
       const rows: CaptureRow[] = assignSortOrder(scanned.data).map((f) => ({
         label: f.label,
         selector: f.selector,
@@ -334,7 +348,7 @@ async function handleRequest(request: BgRequest): Promise<unknown> {
       // the page being scanned carry over, and the other pages of a multi-page
       // run are kept verbatim (a plain diff would read them as removed and
       // drop them — see mergePageCapture).
-      const merged = samePortal ? mergePageCapture(previous.rows, rows, pageStep) : rows;
+      const merged = samePortal && previous ? mergePageCapture(previous.rows, rows, pageStep) : rows;
       const session: CaptureSession = {
         portalKey: request.portalKey,
         templateStepId: request.templateStepId ?? null,
