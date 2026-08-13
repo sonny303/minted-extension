@@ -89,6 +89,38 @@ describe("applyFill", () => {
     expect((document.getElementById("cb") as HTMLInputElement).checked).toBe(true);
   });
 
+  it("TS-162 — names the control and a bounded option sample when a dropdown misses", () => {
+    document.body.innerHTML = `
+      <select id="st">
+        <option value="">Select</option>
+        <option value="KS">Kansas</option>
+        <option value="MO">Missouri</option>
+        <option value="NE">Nebraska</option>
+        <option value="IA">Iowa</option>
+      </select>
+    `;
+    const result = applyFill([
+      instr({ label: "State", selector: "#st", fieldType: "select", value: "Kansas" }),
+    ]);
+    // "Kansas" matches the option TEXT, so this path is the unmatched code.
+    const miss = applyFill([
+      instr({ label: "State", selector: "#st", fieldType: "select", value: "Colorado" }),
+    ]);
+    expect(result.filled).toEqual(["State"]);
+    expect(miss.skipped[0]?.reason).toBe(
+      'dropdown: no option matches "Colorado" (KS, MO, NE; 1 more)',
+    );
+    expect(miss.skipped[0]?.reason).not.toBe("field not found on this page");
+  });
+
+  it("keeps selector-not-found wording distinct from a vocabulary miss", () => {
+    document.body.innerHTML = `<select id="st"><option value="KS">Kansas</option></select>`;
+    const gone = applyFill([instr({ label: "State", selector: "#gone", fieldType: "select", value: "KS" })]);
+    expect(gone.skipped).toEqual([
+      { label: "State", reason: "field not found on this page", mapId: "m1" },
+    ]);
+  });
+
   it("counts page fields for coverage denominator", () => {
     document.body.innerHTML = `
       <input type="text" />

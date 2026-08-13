@@ -31,6 +31,8 @@ export interface CaptureRow {
    * form the way it actually reads. Null on rows captured before E6.9. */
   pageStep?: string | null;
   sortOrder?: number | null;
+  /** E6.10 — captured option vocabulary. Shape-only; never a selected value. */
+  options?: { value: string; label: string }[];
 }
 
 export interface CaptureSession {
@@ -73,6 +75,18 @@ export function canSendCapture(session: CaptureSession | null): boolean {
   return (session?.rows.length ?? 0) > 0;
 }
 
+function parseCapturedOptions(raw: unknown): { value: string; label: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: { value: string; label: string }[] = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== "object") return undefined;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.value !== "string" || typeof rec.label !== "string") return undefined;
+    out.push({ value: rec.value, label: rec.label });
+  }
+  return out;
+}
+
 /** Restore a session from storage, dropping anything malformed. Returns null
  * rather than a half-session — a partial restore that silently lost rows would
  * be worse than starting over. */
@@ -86,6 +100,7 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
     if (item == null || typeof item !== "object") return null;
     const r = item as Record<string, unknown>;
     if (typeof r.label !== "string" || typeof r.selector !== "string") return null;
+    const parsedOptions = parseCapturedOptions(r.options);
     rows.push({
       label: r.label,
       selector: r.selector,
@@ -97,6 +112,7 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
       sent: r.sent === true,
       pageStep: typeof r.pageStep === "string" ? r.pageStep : null,
       sortOrder: typeof r.sortOrder === "number" ? r.sortOrder : null,
+      ...(parsedOptions !== undefined ? { options: parsedOptions } : {}),
     });
   }
   return {

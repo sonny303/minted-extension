@@ -518,11 +518,8 @@ export async function createMockPanelApi(options = {}) {
                   status: c.status,
                   payerReferenceId: c.payerReferenceId,
                   payerPipelineState: c.payerPipelineState ?? "not_started",
-<<<<<<< HEAD
                   facilityId: c.facilityId ?? null,
-=======
                   caseNumber: c.caseNumber ?? null,
->>>>>>> e647f62 (Search cases by C-#; hide terminated duplicate providers)
                 };
               }).filter((r) => {
                 const hay =
@@ -687,6 +684,7 @@ export async function createMockPanelApi(options = {}) {
       const key = `${body.portal_key}:${body.selector}`;
       let map = state.sharedProposed.get(key);
       const created = map == null;
+      const incomingOptions = Array.isArray(body.control_options) ? body.control_options : null;
       if (!map) {
         map = {
           id: `fm-shared-${state.sharedProposed.size + 1}`,
@@ -698,11 +696,15 @@ export async function createMockPanelApi(options = {}) {
           formSection: body.form_section ?? null,
           pageStep: body.page_step ?? null,
           sortOrder: body.sort_order ?? null,
+          fieldType: body.field_type ?? "text",
+          controlOptions: incomingOptions && incomingOptions.length > 0 ? incomingOptions : null,
           source: "manual",
           token: null,
           status: "proposed",
         };
         state.sharedProposed.set(key, map);
+      } else if (incomingOptions && incomingOptions.length > 0) {
+        map.controlOptions = incomingOptions;
       }
       return envelope(res, created ? 201 : 200, { map });
     }

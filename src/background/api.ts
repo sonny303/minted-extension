@@ -241,6 +241,7 @@ export async function proposeSharedFieldMap(input: {
   page_step?: string | null;
   field_type?: string | null;
   sort_order?: number | null;
+  control_options?: { value: string; label: string }[] | null;
 }): Promise<PortalFieldMap> {
   const { data } = await apiFetch<{ map: PortalFieldMap }>("/api/shared-field-maps", {
     method: "POST",

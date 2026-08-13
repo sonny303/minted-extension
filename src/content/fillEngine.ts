@@ -93,6 +93,28 @@ type ApplyOutcome = { ok: true } | { ok: false; reason: string };
 
 const TRUTHY = new Set(["true", "yes", "y", "1", "x", "on", "checked"]);
 
+/** Sample size for skip-reason lines (E6.10 F6.10.6 / OQ-3). */
+const OPTION_SAMPLE_SIZE = 3;
+
+function optionValuesSample(values: readonly string[]): string {
+  const nonempty = values.filter((v) => v !== "");
+  if (nonempty.length === 0) return "";
+  const shown = nonempty.slice(0, OPTION_SAMPLE_SIZE);
+  const extra = nonempty.length - shown.length;
+  const body = shown.join(", ");
+  return extra > 0 ? `${body}; ${extra} more` : body;
+}
+
+function vocabularyMismatchReason(
+  kind: "dropdown" | "radio",
+  attempted: string,
+  optionValues: readonly string[],
+): string {
+  const sample = optionValuesSample(optionValues);
+  const base = `${kind}: no option matches "${attempted}"`;
+  return sample ? `${base} (${sample})` : base;
+}
+
 function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   const want = normalize(value);
   const scope = el.form ?? document;
@@ -104,7 +126,16 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   const match = group.find(
     (radio) => normalize(radio.value) === want || normalize(labelTextOf(radio)) === want,
   );
-  if (!match) return { ok: false, reason: `no radio option matches "${value}"` };
+  if (!match) {
+    return {
+      ok: false,
+      reason: vocabularyMismatchReason(
+        "radio",
+        value,
+        group.map((radio) => radio.value),
+      ),
+    };
+  }
   if (!match.checked) match.click();
   return { ok: true };
 }
@@ -121,7 +152,16 @@ function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
     options.find((option) => option.value === value) ??
     options.find((option) => normalize(option.text) === normalize(value)) ??
     options.find((option) => normalize(option.value) === normalize(value));
-  if (!match) return { ok: false, reason: `no option matches "${value}"` };
+  if (!match) {
+    return {
+      ok: false,
+      reason: vocabularyMismatchReason(
+        "dropdown",
+        value,
+        options.map((option) => option.value),
+      ),
+    };
+  }
   if (el.value !== match.value) {
     el.value = match.value;
     fireChanged(el);
