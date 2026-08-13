@@ -52,6 +52,7 @@ import {
   pageUrlTail,
   resolveTrainRecognition,
 } from "../shared/trainForms";
+import { browseableProviders } from "../shared/browseProviders";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -1854,7 +1855,7 @@ async function loadProviders(generation: number): Promise<void> {
     setError(mainError, response.error);
     return;
   }
-  providers = response.data;
+  providers = browseableProviders(response.data);
 
   const selected = await sendToBackground({ type: "GET_SELECTED_PROVIDER" });
   if (!isCurrent(generation)) return;
@@ -2633,7 +2634,7 @@ async function selectCaseInPanel(
   if (!providers.some((p) => p.id === providerId)) {
     const response = await sendToBackground({ type: "LIST_PROVIDERS" });
     if (!isCurrent(generation)) return;
-    if (response.ok) providers = response.data;
+    if (response.ok) providers = browseableProviders(response.data);
   }
   renderProviderOptions(providerId);
   renderProviderCard(providers.find((p) => p.id === providerId) ?? null);
@@ -2657,7 +2658,13 @@ function renderSearchResults(data: SearchResults): void {
       button.className = "search-row";
       const title = document.createElement("span");
       title.className = "search-row-title";
-      title.textContent = `${row.providerName || "Unknown provider"} — ${row.payerName ?? "Unknown payer"} · ${row.state}`;
+      title.textContent = [
+        row.caseNumber != null ? `C-${row.caseNumber}` : null,
+        row.providerName || "Unknown provider",
+        `${row.payerName ?? "Unknown payer"} · ${row.state}`,
+      ]
+        .filter(Boolean)
+        .join(" — ");
       button.append(title);
       const meta = document.createElement("span");
       meta.className = "search-row-meta";

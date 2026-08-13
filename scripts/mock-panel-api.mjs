@@ -156,6 +156,7 @@ const CASES = [
     status: "Submitted",
     submittedDate: "2026-06-01",
     payerReferenceId: "REF-1001",
+    caseNumber: 1001,
     latestNote: { text: "Called payer, pending review", author: "Test Kansas", at: "2026-07-10T00:00:00Z" },
     lastSubmittedAt: null,
     payerPipelineState: "submitted",
@@ -195,6 +196,7 @@ const CASES = [
     status: "In Progress",
     submittedDate: null,
     payerReferenceId: null,
+    caseNumber: 1002,
     latestNote: null,
     lastSubmittedAt: null,
     payerPipelineState: "not_started",
@@ -501,6 +503,7 @@ export async function createMockPanelApi(options = {}) {
       }
       if (q != null) {
         const needle = q.trim().toLowerCase();
+        const caseDigits = /^(?:c-?)?(\d+)$/.exec(needle)?.[1] ?? null;
         const rows =
           needle === ""
             ? []
@@ -515,12 +518,20 @@ export async function createMockPanelApi(options = {}) {
                   status: c.status,
                   payerReferenceId: c.payerReferenceId,
                   payerPipelineState: c.payerPipelineState ?? "not_started",
+<<<<<<< HEAD
                   facilityId: c.facilityId ?? null,
+=======
+                  caseNumber: c.caseNumber ?? null,
+>>>>>>> e647f62 (Search cases by C-#; hide terminated duplicate providers)
                 };
               }).filter((r) => {
                 const hay =
                   `${r.providerName} ${r.payerName ?? ""} ${r.payerReferenceId ?? ""}`.toLowerCase();
-                return hay.includes(needle);
+                const digits = r.caseNumber != null ? String(r.caseNumber) : "";
+                return (
+                  hay.includes(needle) ||
+                  (caseDigits != null && digits !== "" && digits.includes(caseDigits))
+                );
               });
         return envelope(res, 200, rows, null, { total: rows.length });
       }
