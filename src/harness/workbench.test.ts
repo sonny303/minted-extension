@@ -360,8 +360,11 @@ describe("TS-100 — unified standalone search", () => {
     const byProvider = await searchCases("kay");
     expect(byProvider.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
     expect(byProvider[0]?.providerName).toBe("Kay One");
+    // Case search carries the case's facility so the panel can pre-select it.
+    expect(byProvider[0]?.facilityId).toBe(FIXTURES.FACILITY_ID);
     const byPayer = await searchCases("humana");
     expect(byPayer.map((r) => r.id)).toEqual([FIXTURES.CASE2_ID]);
+    expect(byPayer[0]?.facilityId).toBeNull();
     const byRef = await searchCases("REF-1001");
     expect(byRef.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
     expect(await searchCases("   ")).toEqual([]);

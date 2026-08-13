@@ -300,6 +300,8 @@ export interface CaseSearchRow {
   status: string | null;
   payerReferenceId: string | null;
   payerPipelineState: string;
+  /** Case practice location — mirrors panel CaseSearchRow.facilityId. */
+  facilityId?: string | null;
 }
 
 // GET /api/next-best-action — the queue top under the org's ranking config

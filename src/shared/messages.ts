@@ -83,7 +83,9 @@ export type BgRequest =
   | { type: "COMPLETE_TASK_STEP"; taskId: string; stepId: string }
   // The provider's facility set + the Quick Cards projection, from ONE
   // audited profile read — the panel never receives the raw token payload.
-  | { type: "GET_PROVIDER_FACILITIES"; providerId: string }
+  // Optional facilityId re-resolves facility.*/assignment.* tokens after the
+  // user (or case) picks a location among several.
+  | { type: "GET_PROVIDER_FACILITIES"; providerId: string; facilityId?: string | null }
   | { type: "GET_SELECTED_PROVIDER" }
   | { type: "SET_SELECTED_PROVIDER"; providerId: string | null }
   | { type: "GET_SELECTED_CASE"; providerId: string }

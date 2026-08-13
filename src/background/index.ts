@@ -472,9 +472,11 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Cards projection (E4.3 F4.3.5 / TE-12 — cards are a rendering of the
       // existing profile endpoint, never a second route). The raw token
       // payload stays in the worker; the panel receives display values only,
-      // held in memory (TE-14).
+      // held in memory (TE-14). When facilityId is set, facility.* tokens
+      // resolve for that location (multi-facility providers otherwise leave
+      // them unresolved behind meta.needs_facility).
       const [{ profile, meta }, { layout, catalog }] = await Promise.all([
-        getProviderProfile(request.providerId),
+        getProviderProfile(request.providerId, { facilityId: request.facilityId }),
         readCardLayout(),
       ]);
       const servedLabels = new Map(catalog.map((f) => [f.key, f.label]));
