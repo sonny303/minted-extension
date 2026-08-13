@@ -123,6 +123,34 @@
               Review the filled form after a successful dry run before marking it proven.
             </p>
           </div>
+
+          <!-- Capture lives under Train forms only (E6.9 two-job split).
+               Nesting it here keeps Work cases free of the trainer even if
+               a caller forgets to hide #capture-section. -->
+          <div id="capture-section" class="capture" hidden>
+            <div class="capture-head">
+              <p id="capture-summary" class="capture-summary"></p>
+              <div class="capture-head-actions">
+                <button id="capture-start" class="link" type="button">
+                  Capture this form
+                </button>
+                <button id="capture-next-page" class="link" type="button" hidden>
+                  Capture next page
+                </button>
+              </div>
+            </div>
+            <p id="capture-restored" class="capture-restored" hidden></p>
+            <div id="capture-rows" class="capture-rows"></div>
+            <div id="capture-actions" class="capture-actions" hidden>
+              <button id="capture-send" class="secondary" type="button">
+                Send for approval
+              </button>
+              <button id="capture-clear" class="link" type="button">
+                Discard
+              </button>
+            </div>
+            <p id="capture-sent" class="capture-sent" hidden></p>
+          </div>
         </section>
 
         <div id="org-field" class="field">
@@ -435,32 +463,6 @@
           <button id="portal-access-grant" class="secondary" type="button">
             Enable form capture &amp; fill
           </button>
-        </div>
-
-        <!-- S5.4: capture — turn a form we don't know into one we do. -->
-        <div id="capture-section" class="capture" hidden>
-          <div class="capture-head">
-            <p id="capture-summary" class="capture-summary"></p>
-            <div class="capture-head-actions">
-              <button id="capture-start" class="link" type="button">
-                Capture this form
-              </button>
-              <button id="capture-next-page" class="link" type="button" hidden>
-                Capture next page
-              </button>
-            </div>
-          </div>
-          <p id="capture-restored" class="capture-restored" hidden></p>
-          <div id="capture-rows" class="capture-rows"></div>
-          <div id="capture-actions" class="capture-actions" hidden>
-            <button id="capture-send" class="secondary" type="button">
-              Send for approval
-            </button>
-            <button id="capture-clear" class="link" type="button">
-              Discard
-            </button>
-          </div>
-          <p id="capture-sent" class="capture-sent" hidden></p>
         </div>
       </section>
     </main>

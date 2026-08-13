@@ -834,6 +834,8 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
   it("keeps page 1 rows and decisions when a disjoint page 2 is scanned", async () => {
     const { handleRequest } = await import("../background/index");
     const { usedPageNames, captureCounts } = await import("../shared/capture");
+    // Capture is Train-only; Work cases refuses START_CAPTURE.
+    await writePanelMode("train");
 
     scanPayload = [
       { label: "First", selector: "#p1a", fieldType: "text", formSection: null },
@@ -880,6 +882,22 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
       "#p2a",
       "#p2b",
     ]);
+  });
+
+  it("refuses START_CAPTURE in Work cases mode", async () => {
+    const { handleRequest } = await import("../background/index");
+    await writePanelMode("case");
+    scanPayload = [{ label: "First", selector: "#a", fieldType: "text", formSection: null }];
+    await expect(
+      handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        portalKey: "bcbs_ks_enrollment",
+        pageStep: "step1",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      }),
+    ).rejects.toThrow(/Train forms/);
   });
 });
 

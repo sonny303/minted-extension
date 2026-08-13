@@ -42,7 +42,7 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
-import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
+import { DEFAULT_PANEL_MODE, isCaptureMode, type PanelMode } from "../shared/panelMode";
 import {
   CAPTURE_TAB_MISMATCH_ERROR,
   captureStateSummary,
@@ -3243,13 +3243,12 @@ function localToday(): string {
 }
 
 function renderCapture(): void {
-  // Capture is offered whenever a recognized portal page is in the active tab.
-  // In CASE mode it additionally waits for the org to resolve, exactly as it
-  // did while it lived inside the provider section — a proposal there lands
-  // under that org. In TRAIN mode there is no org to wait for.
-  const training = panelMode === "train";
+  // Capture lives ONLY on Train forms (E6.9 two-job split). Work cases is the
+  // case workflow — never the field trainer. A leftover session from a prior
+  // Train visit stays in the worker but stays hidden here until Train is on.
+  const training = isCaptureMode(panelMode);
   captureSection.hidden =
-    portal == null || portalTabId == null || (!training && !orgResolved());
+    !training || portal == null || portalTabId == null;
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
@@ -3263,8 +3262,7 @@ function renderCapture(): void {
   captureSummary.textContent = summary;
   captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
   // "Capture next page" only makes sense when there is already a session to
-  // add a page to. Hidden in Work mode with the rest of the capture strip
-  // (the section itself is already gated above).
+  // add a page to.
   captureNextPage.hidden = captureSession == null;
   captureNextPage.disabled = false;
 
@@ -3273,11 +3271,10 @@ function renderCapture(): void {
   captureSend.disabled = false;
   captureSent.hidden = counts.sent === 0;
   if (counts.sent > 0) {
-    captureSent.textContent = training
-      ? // Training writes the SHARED library, so the review happens in the
-        // Submit-form task editor (D18) — say where, not just "approve them".
-        `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`
-      : `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
+    captureSent.textContent =
+      // Training writes the SHARED library, so the review happens in the
+      // Submit-form task editor (D18) — say where, not just "approve them".
+      `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`;
   }
   if (captureSession == null) return;
 
@@ -3459,12 +3456,11 @@ async function restoreCapture(): Promise<void> {
 // E6.9 F6.9.7 — the job chooser, and F6.9.9 — Train forms.
 // ---------------------------------------------------------------------------
 
-/** Show the sections that belong to the current job. Case work keeps every
- * surface it had; training hides the org, search and provider pickers outright
- * — not because they are noise, but because a training capture writes the
- * SHARED library and has no org at all (F6.9.8). Leaving an org selected while
- * training would suggest the capture lands under it, which is the exact
- * misunderstanding this split exists to end. */
+/** Show the sections that belong to the current job. Case work is org /
+ * provider / case / fill / touch — never capture. Training hides the org,
+ * search and provider pickers and owns Capture + Send for approval (and mock
+ * dry run / Mark proven). Leaving capture visible on Work cases reopened the
+ * dual-door confusion E6.9 closed. */
 function applyPanelMode(): void {
   const training = panelMode === "train";
   modeCaseBtn.setAttribute("aria-pressed", String(!training));

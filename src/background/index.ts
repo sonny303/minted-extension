@@ -12,7 +12,6 @@ import {
   completeTaskStep,
   getCaseContext,
   patchProviderField,
-  proposeFieldMap,
   proposeSharedFieldMap,
   recordCaqhAttestation,
   getNextBestAction,
@@ -140,18 +139,6 @@ async function readCaptureSession(): Promise<CaptureSession | null> {
 
 async function writeCaptureSession(session: CaptureSession): Promise<void> {
   await chrome.storage.session.set({ [CAPTURE_KEY]: session });
-}
-
-// The evidence wording is shared with the panel repo's labelLearning module;
-// mirrored here so the two products word it identically.
-function suggestionEvidenceText(s: {
-  portalCount: number;
-  fromDictionary: boolean;
-}): string | null {
-  if (s.portalCount > 0) {
-    return `Mapped this way on ${s.portalCount} other ${s.portalCount === 1 ? "payer" : "payers"}`;
-  }
-  return s.fromDictionary ? "Your organization mapped this label before" : null;
 }
 
 function fillReportKey(providerId: string, portalKey: string): string {
@@ -318,6 +305,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "GET_CAPTURE":
       return readCaptureSession();
     case "START_CAPTURE": {
+      // Capture is a Train-forms job only — Work cases never proposes maps.
+      if ((await readPanelMode()) !== "train") {
+        throw new Error("Switch to Train forms to capture a portal.");
+      }
       // Read the form's SHAPE from the bound tab (labels/selectors/types —
       // never a value), then ask the server what this org already knows about
       // each label so the review opens with suggestions, not a blank grid.
@@ -390,50 +381,32 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SEND_CAPTURE": {
       const current = await readCaptureSession();
       if (current == null) throw new Error("No capture in progress");
-      // Propose every not-yet-sent row. Each response carries the server's
-      // learned suggestion (S5.3), which we fold back onto the row so the
-      // review shows it with its evidence. Nothing is approved here.
-      // E6.9 F6.9.8: which tier the proposal lands in is decided by the JOB,
-      // not by the page. Training writes the SHARED library (`org_id IS NULL`)
-      // that every org inherits; case work keeps proposing under the caller's
-      // org exactly as before.
+      // Capture / send is Train-only: proposals always land in the SHARED
+      // library (`org_id IS NULL`). Work cases no longer proposes under an org.
       const mode = await readPanelMode();
+      if (mode !== "train") {
+        throw new Error("Switch to Train forms to send a capture.");
+      }
       const rows: CaptureRow[] = [];
       for (const row of current.rows) {
         if (row.sent) {
           rows.push(row);
           continue;
         }
-        if (mode === "train") {
-          await proposeSharedFieldMap({
-            portal_key: current.portalKey,
-            selector: row.selector,
-            field_label: row.label,
-            form_section: row.formSection,
-            page_step: row.pageStep ?? null,
-            field_type: row.fieldType,
-            sort_order: row.sortOrder ?? null,
-          });
-          // The shared path returns the row itself, not a learned suggestion —
-          // suggestions are org-scoped memory (field_dictionary) and training
-          // has no org. Nothing to fold back; the trainer decides in the
-          // editor, which is where the whole registry now lives.
-          rows.push({ ...row, sent: true });
-          continue;
-        }
-        const result = await proposeFieldMap({
+        await proposeSharedFieldMap({
           portal_key: current.portalKey,
           selector: row.selector,
           field_label: row.label,
           form_section: row.formSection,
+          page_step: row.pageStep ?? null,
           field_type: row.fieldType,
+          sort_order: row.sortOrder ?? null,
         });
-        rows.push({
-          ...row,
-          sent: true,
-          suggestedToken: result.suggestion?.token ?? row.suggestedToken,
-          evidence: result.suggestion ? suggestionEvidenceText(result.suggestion) : row.evidence,
-        });
+        // The shared path returns the row itself, not a learned suggestion —
+        // suggestions are org-scoped memory (field_dictionary) and training
+        // has no org. Nothing to fold back; the trainer decides in the
+        // editor, which is where the whole registry now lives.
+        rows.push({ ...row, sent: true });
       }
       const next: CaptureSession = { ...current, rows };
       await writeCaptureSession(next);

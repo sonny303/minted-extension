@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PANEL_MODE,
+  isCaptureMode,
   parsePanelMode,
   shouldSendOrgHeader,
   USER_SCOPED_PATHS,
@@ -19,6 +20,13 @@ describe("parsePanelMode", () => {
     // A hand-off is case work, and an unset/garbage mode must never strand one
     // in the trainer (where its calls would lose the org header).
     expect(DEFAULT_PANEL_MODE).toBe("case");
+  });
+});
+
+describe("isCaptureMode", () => {
+  it("is true only for Train forms — Work cases never shows capture", () => {
+    expect(isCaptureMode("train")).toBe(true);
+    expect(isCaptureMode("case")).toBe(false);
   });
 });
 
