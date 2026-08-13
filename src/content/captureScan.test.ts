@@ -2,7 +2,11 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { isCapturableControl, scanCapturableFields } from "./captureScan";
+import {
+  compareVisualPosition,
+  isCapturableControl,
+  scanCapturableFields,
+} from "./captureScan";
 
 // jsdom does not provide CSS.escape; captureScan uses it for ids/names.
 if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
@@ -17,17 +21,25 @@ if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
 }
 
 /** jsdom reports zero-size rects for every element; stub a visible box so
- * attribute / style hiding is what the tests exercise. */
-function stubVisibleBox(el: Element, size = { width: 120, height: 24 }): void {
+ * attribute / style hiding is what the tests exercise. Optional top/left
+ * place the control for visual-order assertions. */
+function stubVisibleBox(
+  el: Element,
+  size: { width?: number; height?: number; top?: number; left?: number } = {},
+): void {
+  const width = size.width ?? 120;
+  const height = size.height ?? 24;
+  const top = size.top ?? 0;
+  const left = size.left ?? 0;
   const rect = {
-    x: 0,
-    y: 0,
-    top: 0,
-    left: 0,
-    right: size.width,
-    bottom: size.height,
-    width: size.width,
-    height: size.height,
+    x: left,
+    y: top,
+    top,
+    left,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
     toJSON() {
       return this;
     },
@@ -155,5 +167,42 @@ describe("scanCapturableFields", () => {
       },
     ]);
     expect(valueReads).toBe(0);
+  });
+
+  it("orders by visual reading position, not DOM tree order (Aetna-style grid)", () => {
+    // DOM order: phone → fax → last → first (common when markup lists
+    // contact blocks before name inputs). Painted order: last/first on the
+    // first row, then phone/fax below — what the trainer sees.
+    document.body.innerHTML = `
+      <input id="phone" type="text" />
+      <input id="fax" type="text" />
+      <input id="last" type="text" />
+      <input id="first" type="text" />
+    `;
+    stubVisibleBox(document.getElementById("phone")!, { top: 80, left: 0 });
+    stubVisibleBox(document.getElementById("fax")!, { top: 80, left: 200 });
+    stubVisibleBox(document.getElementById("last")!, { top: 10, left: 0 });
+    stubVisibleBox(document.getElementById("first")!, { top: 10, left: 200 });
+
+    expect(scanCapturableFields().map((f) => f.selector)).toEqual([
+      "#last",
+      "#first",
+      "#phone",
+      "#fax",
+    ]);
+  });
+
+  it("treats near-equal tops as one row (left→right)", () => {
+    document.body.innerHTML = `
+      <input id="b" type="text" />
+      <input id="a" type="text" />
+    `;
+    stubVisibleBox(document.getElementById("b")!, { top: 12, left: 200 });
+    stubVisibleBox(document.getElementById("a")!, { top: 10, left: 0 });
+    expect(compareVisualPosition(
+      document.getElementById("a")!,
+      document.getElementById("b")!,
+    )).toBeLessThan(0);
+    expect(scanCapturableFields().map((f) => f.selector)).toEqual(["#a", "#b"]);
   });
 });
