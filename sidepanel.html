@@ -100,11 +100,29 @@
             <select id="train-payer"></select>
           </div>
           <div id="train-recognition" class="banner"></div>
+          <span id="train-proven-chip" class="pill proven-chip" hidden>PROVEN</span>
           <div class="field" id="train-portal-field" hidden>
             <label for="train-portal">Form</label>
             <select id="train-portal"></select>
           </div>
           <p id="train-hint" class="btn-note"></p>
+          <div id="train-dry-run" hidden>
+            <p class="btn-note">
+              The mock dry run fills this live tab with synthetic Sample values — no provider PHI.
+            </p>
+            <div class="train-actions">
+              <button id="run-mock-dry-run" class="secondary" type="button" disabled>
+                Run mock dry run
+              </button>
+              <button id="mark-portal-proven" class="secondary" type="button" disabled>
+                Mark proven
+              </button>
+            </div>
+            <p id="mock-dry-run-status" class="btn-note" hidden></p>
+            <p class="btn-note">
+              Review the filled form after a successful dry run before marking it proven.
+            </p>
+          </div>
         </section>
 
         <div id="org-field" class="field">

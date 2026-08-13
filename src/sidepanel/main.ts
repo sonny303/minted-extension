@@ -86,6 +86,11 @@ const trainRecognition = el<HTMLElement>("train-recognition");
 const trainPortalField = el<HTMLElement>("train-portal-field");
 const trainPortal = el<HTMLSelectElement>("train-portal");
 const trainHint = el<HTMLElement>("train-hint");
+const trainDryRunSection = el<HTMLElement>("train-dry-run");
+const trainProvenChip = el<HTMLElement>("train-proven-chip");
+const runMockDryRunBtn = el<HTMLButtonElement>("run-mock-dry-run");
+const markPortalProvenBtn = el<HTMLButtonElement>("mark-portal-proven");
+const mockDryRunStatus = el<HTMLElement>("mock-dry-run-status");
 const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
@@ -231,6 +236,7 @@ let sharedPortalRows: PortalRegistryRow[] = [];
 // The shared field maps of the recognized form, for the "what this form
 // already has" read-out. Empty for a form nothing has captured yet.
 let trainFormMaps: PortalFieldMap[] = [];
+let lastMockDryRunPortalKey: string | null = null;
 let lastFill: LastFill | null = null;
 // Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
 // selected case's portalTasks matched against the current page's portal. null =
@@ -3544,6 +3550,15 @@ function renderTrainPortals(): void {
   }
 }
 
+function renderTrainDryRun(): void {
+  const recognized = panelMode === "train" && portal != null && portalTabId != null;
+  trainDryRunSection.hidden = !recognized;
+  runMockDryRunBtn.disabled = !recognized;
+  markPortalProvenBtn.disabled = !recognized;
+  trainProvenChip.hidden = !recognized || portal?.proven !== true;
+  if (!recognized) mockDryRunStatus.hidden = true;
+}
+
 /**
  * What is the open page, and what does the system already know about it?
  *
@@ -3577,14 +3592,21 @@ async function refreshTrainRecognition(): Promise<void> {
       state.undecided > 0
         ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
         : "Re-capture only if the form changed — nothing here changes a mapping on its own.";
+    if (lastMockDryRunPortalKey !== view.portal.key) {
+      lastMockDryRunPortalKey = null;
+      mockDryRunStatus.hidden = true;
+    }
   } else {
     portal = null;
     portalTabId = null;
     trainFormMaps = [];
+    lastMockDryRunPortalKey = null;
+    mockDryRunStatus.hidden = true;
     trainRecognition.textContent = view.recognitionText;
     trainHint.textContent = view.hintText;
   }
   renderTrainPortals();
+  renderTrainDryRun();
   renderCapture();
   void refreshPortalAccessPrompt();
 }
@@ -3600,6 +3622,78 @@ trainPortal.addEventListener("change", () => {
   void refreshTrainRecognition();
   if (!row?.formUrl) return;
   void chrome.tabs.create({ url: row.formUrl });
+});
+
+runMockDryRunBtn.addEventListener("click", () => {
+  const activePortal = portal;
+  const activeTabId = portalTabId;
+  if (activePortal == null || activeTabId == null) return;
+  const generation = loadGeneration;
+  runMockDryRunBtn.disabled = true;
+  markPortalProvenBtn.disabled = true;
+  mockDryRunStatus.hidden = false;
+  mockDryRunStatus.textContent = "Filling the live form with synthetic Sample values…";
+  void (async () => {
+    const tab = await queryActiveTab();
+    const currentPortal = matchPortalByUrl(tab?.url, sharedPortalRows);
+    if (tab?.id == null || currentPortal?.key !== activePortal.key) {
+      await refreshTrainRecognition();
+      if (isCurrent(generation)) {
+        mockDryRunStatus.hidden = false;
+        mockDryRunStatus.textContent =
+          "This tab no longer matches the recognized form. Open the registered form and retry.";
+      }
+      return;
+    }
+    const response = await sendToBackground({
+      type: "RUN_MOCK_DRY_RUN",
+      tabId: tab.id,
+      portalKey: activePortal.key,
+    });
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      mockDryRunStatus.textContent = response.error;
+      renderTrainDryRun();
+      mockDryRunStatus.hidden = false;
+      return;
+    }
+    lastMockDryRunPortalKey = activePortal.key;
+    const { filled, skipped, gaps, pass } = response.data;
+    mockDryRunStatus.textContent = pass
+      ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
+      : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
+    renderTrainDryRun();
+    mockDryRunStatus.hidden = false;
+  })();
+});
+
+markPortalProvenBtn.addEventListener("click", () => {
+  const activePortal = portal;
+  if (activePortal == null) return;
+  const generation = loadGeneration;
+  markPortalProvenBtn.disabled = true;
+  mockDryRunStatus.hidden = false;
+  mockDryRunStatus.textContent = "Marking the shared form proven…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "MARK_PORTAL_PROVEN",
+      portalKey: activePortal.key,
+    });
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      mockDryRunStatus.textContent = response.error;
+      renderTrainDryRun();
+      mockDryRunStatus.hidden = false;
+      return;
+    }
+    const row = sharedPortalRows.find((candidate) => candidate.portalKey === activePortal.key);
+    if (row) row.provenAt = new Date().toISOString();
+    portal = { ...activePortal, proven: true };
+    mockDryRunStatus.textContent =
+      "Marked proven. This manual stamp records that you reviewed the filled form.";
+    renderTrainDryRun();
+    mockDryRunStatus.hidden = false;
+  })();
 });
 
 void (async () => {

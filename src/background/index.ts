@@ -25,6 +25,7 @@ import {
   listSharedFieldMaps,
   listSharedPortals,
   postSubmissionTouch,
+  proveSharedPortal,
   putViewPrefs,
   searchCases,
   searchProviders,
@@ -34,6 +35,7 @@ import { buildStructuredTouchBody, validateStructuredTouch } from "../shared/str
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { readPanelMode, writePanelMode } from "./mode";
 import { coveragePortal, fillPortal } from "./fill";
+import { fillMockPortal } from "./mockFill";
 import { ensureContentScript } from "./inject";
 import { buildSubmissionTouchBody } from "../shared/submission";
 import {
@@ -205,6 +207,21 @@ async function readFillReport(providerId: string): Promise<FillReportRecord | nu
     .filter(isFillReportRecord)
     .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
   return records[0] ?? null;
+}
+
+async function resolveMockTelemetryOrgId(): Promise<string> {
+  const memberships = await listMyOrgs();
+  if (memberships.length === 0) {
+    throw new Error("Choose an organization in Work cases before running a mock dry run.");
+  }
+  if (memberships.length === 1) return memberships[0]!.orgId;
+  const activeOrgId = await readActiveOrgId();
+  if (activeOrgId && memberships.some((membership) => membership.orgId === activeOrgId)) {
+    return activeOrgId;
+  }
+  throw new Error(
+    "This mock dry run needs an organization for telemetry. Choose an organization in Work cases, then retry.",
+  );
 }
 
 /** Exported for the TE-10 harness — the side panel talks over messaging. */
@@ -426,6 +443,18 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return listSharedPortals();
     case "LIST_SHARED_FIELD_MAPS":
       return listSharedFieldMaps(request.portalKey);
+    case "RUN_MOCK_DRY_RUN": {
+      const orgId = await resolveMockTelemetryOrgId();
+      await ensureContentScript(request.tabId);
+      return fillMockPortal({
+        tabId: request.tabId,
+        portalKey: request.portalKey,
+        orgId,
+      });
+    }
+    case "MARK_PORTAL_PROVEN":
+      await proveSharedPortal({ portalKey: request.portalKey });
+      return null;
     case "GET_PANEL_MODE":
       return readPanelMode();
     case "SET_PANEL_MODE": {

@@ -474,6 +474,20 @@ button.link:hover {
   text-align: center;
 }
 
+.train-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.train-actions button {
+  flex: 1;
+}
+
+#mock-dry-run-status {
+  margin-bottom: 0;
+  color: var(--mp-primary);
+}
+
 /* ---- status pill (case status from the cases response, bucket counts) ---- */
 
 .pill {

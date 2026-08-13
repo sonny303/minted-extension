@@ -22,6 +22,7 @@ import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
+import type { MockDryRunSummary } from "../background/mockFill";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -47,6 +48,8 @@ export type BgRequest =
   // Train forms has no org, so it cannot use the org-scoped reads above.
   | { type: "LIST_SHARED_PORTALS" }
   | { type: "LIST_SHARED_FIELD_MAPS"; portalKey: string }
+  | { type: "RUN_MOCK_DRY_RUN"; tabId: number; portalKey: string }
+  | { type: "MARK_PORTAL_PROVEN"; portalKey: string }
   | { type: "LIST_CASES"; providerId: string }
   // E4.3 F4.3.5: the unified standalone search — the worker queries
   // GET /api/cases?q= and GET /api/providers?search= CONCURRENTLY and returns
@@ -221,6 +224,8 @@ export interface BgResponseMap {
   LIST_PORTALS: PortalRegistryRow[];
   LIST_SHARED_PORTALS: PortalRegistryRow[];
   LIST_SHARED_FIELD_MAPS: PortalFieldMap[];
+  RUN_MOCK_DRY_RUN: MockDryRunSummary;
+  MARK_PORTAL_PROVEN: null;
   LIST_CASES: CaseListItem[];
   SEARCH: SearchResults;
   GET_CASE_CONTEXT: CaseContext;
