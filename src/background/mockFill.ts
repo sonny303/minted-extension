@@ -48,12 +48,12 @@ export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
   for (const map of maps) {
     const classification = classifyFieldMap(map);
     if (classification.decision === "human" || classification.decision === "stale") continue;
-    if (classification.needsDecision || classification.decision === "invalid") {
-      gaps.push(gapFor(map, classification.reason));
-      continue;
-    }
     if (map.fieldType === "file") {
       gaps.push(gapFor(map, "File fields must be attached manually", "file"));
+      continue;
+    }
+    if (classification.needsDecision || classification.decision === "invalid") {
+      gaps.push(gapFor(map, classification.reason));
       continue;
     }
     if (map.mapType !== "web") {
