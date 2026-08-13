@@ -518,11 +518,8 @@ export async function createMockPanelApi(options = {}) {
                   status: c.status,
                   payerReferenceId: c.payerReferenceId,
                   payerPipelineState: c.payerPipelineState ?? "not_started",
-<<<<<<< HEAD
                   facilityId: c.facilityId ?? null,
-=======
                   caseNumber: c.caseNumber ?? null,
->>>>>>> e647f62 (Search cases by C-#; hide terminated duplicate providers)
                 };
               }).filter((r) => {
                 const hay =

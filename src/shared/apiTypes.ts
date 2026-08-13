@@ -302,13 +302,10 @@ export interface CaseSearchRow {
   status: string | null;
   payerReferenceId: string | null;
   payerPipelineState: string;
-<<<<<<< HEAD
   /** Case practice location — mirrors panel CaseSearchRow.facilityId. */
   facilityId?: string | null;
-=======
   /** Globally-sequential case # shown as C-<n> on /cases; searchable via ?q=. */
   caseNumber?: number | null;
->>>>>>> e647f62 (Search cases by C-#; hide terminated duplicate providers)
 }
 
 // GET /api/next-best-action — the queue top under the org's ranking config
