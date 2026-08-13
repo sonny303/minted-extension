@@ -30,6 +30,26 @@ function hasLayoutBox(el: Element): boolean {
   return width > 0 && height > 0;
 }
 
+/** Same-row tolerance (px): tops within this band count as one reading row
+ * and sort left→right. CSS grids often place siblings a few px apart. */
+const SAME_ROW_TOLERANCE_PX = 8;
+
+/** Reading order: top→bottom, then left→right within a row. DOM tree order is
+ * NOT reading order on CSS grid/flex forms (Aetna RFP put submitter/phone
+ * ahead of last/first name in the tree while painting last/first first). */
+export function compareVisualPosition(a: Element, b: Element): number {
+  const ra = a.getBoundingClientRect();
+  const rb = b.getBoundingClientRect();
+  const topDelta = ra.top - rb.top;
+  if (Math.abs(topDelta) > SAME_ROW_TOLERANCE_PX) return topDelta < 0 ? -1 : 1;
+  const leftDelta = ra.left - rb.left;
+  if (leftDelta !== 0) return leftDelta < 0 ? -1 : 1;
+  const pos = a.compareDocumentPosition(b);
+  if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+  if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+  return 0;
+}
+
 /** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
  * or an ancestor (or self) marked hidden / aria-hidden / display:none /
  * visibility:hidden. Never reads a control's value. */
@@ -108,30 +128,41 @@ function sectionFor(el: Element): string | null {
  * display / visibility ancestors, are skipped) so JSF multi-panel forms do not
  * flood the trainer with inactive-panel inputs. Radio groups collapse to ONE
  * row per name among the visible set: a payer's "Accepting new patients:
- * Yes/No" is one field to map, not two. Order is DOM order, which is the order
- * the human reads the form in. */
+ * Yes/No" is one field to map, not two. Rows are ordered by VISUAL reading
+ * position (top→bottom, left→right), not DOM tree order — grid/flex forms
+ * often paint fields in a different sequence than `querySelectorAll`. The
+ * background stamps that sequence as `sort_order` for Form setup. */
 export function scanCapturableFields(): CapturedField[] {
   const seenRadioNames = new Set<string>();
   const fields: CapturedField[] = [];
-  const controls = Array.from(document.querySelectorAll(FILLABLE));
+  const controls = Array.from(document.querySelectorAll(FILLABLE)).map(
+    (el, index) => ({ el, index }),
+  );
 
-  controls.forEach((el, index) => {
-    if (!isCapturableControl(el)) return;
+  const visible = controls
+    .filter(({ el }) => isCapturableControl(el))
+    .sort(
+      (a, b) => compareVisualPosition(a.el, b.el) || a.index - b.index,
+    );
+
+  for (const { el, index } of visible) {
     const type = controlType(el);
     if (type === "radio") {
       const name = (el as HTMLInputElement).name;
       if (name) {
-        if (seenRadioNames.has(name)) return;
+        if (seenRadioNames.has(name)) continue;
         seenRadioNames.add(name);
       }
     }
     fields.push({
       label: labelFor(el),
+      // Keep the document-order index for nth-of-type fallbacks so a visual
+      // re-sort never rewrites an existing positional selector.
       selector: selectorFor(el, index),
       fieldType: type,
       formSection: sectionFor(el),
     });
-  });
+  }
 
   return fields;
 }
