@@ -68,3 +68,10 @@ export function shouldSendOrgHeader(
   if (mode === "train") return false;
   return !USER_SCOPED_PATHS.includes(pathname);
 }
+
+/** Capture / Send for approval is a Train-forms job only. Work cases is the
+ * fill + touch workflow — showing the trainer there re-opens the dual-door
+ * confusion E6.9 closed. */
+export function isCaptureMode(mode: PanelMode): boolean {
+  return mode === "train";
+}

@@ -57,7 +57,23 @@ export function labelForToken(token: string): string {
   return humanizeCamel(name);
 }
 
-// ISO date(-time) values render as "Jul 5, 2026" in the panel.
+// ISO date(-time) values render as MM/DD/YYYY in the extension (date-only
+// strings keep their calendar day — no timezone shift).
 export function looksLikeIsoDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}(T|$)/.test(value);
+}
+
+/** Format a date for display as MM/DD/YYYY.
+ * Date-only `YYYY-MM-DD` values are reformatted from the string parts so DOB /
+ * license / policy dates never shift by timezone. Full timestamps use the
+ * local calendar day. Returns "" for missing/unparseable so meta lines can drop. */
+export function formatDisplayDate(iso: string): string {
+  const trimmed = iso.trim();
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnly) return `${dateOnly[2]}/${dateOnly[3]}/${dateOnly[1]}`;
+  const at = new Date(trimmed);
+  if (Number.isNaN(at.getTime())) return "";
+  const mm = String(at.getMonth() + 1).padStart(2, "0");
+  const dd = String(at.getDate()).padStart(2, "0");
+  return `${mm}/${dd}/${at.getFullYear()}`;
 }

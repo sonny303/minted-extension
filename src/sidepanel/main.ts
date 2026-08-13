@@ -16,7 +16,7 @@ import type {
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
-import { looksLikeIsoDate } from "../shared/detailFields";
+import { formatDisplayDate, looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../shared/portals";
 import type {
   CaseContextTaskStep,
@@ -42,7 +42,7 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
-import { DEFAULT_PANEL_MODE, type PanelMode } from "../shared/panelMode";
+import { DEFAULT_PANEL_MODE, isCaptureMode, type PanelMode } from "../shared/panelMode";
 import {
   CAPTURE_TAB_MISMATCH_ERROR,
   captureStateSummary,
@@ -86,6 +86,11 @@ const trainRecognition = el<HTMLElement>("train-recognition");
 const trainPortalField = el<HTMLElement>("train-portal-field");
 const trainPortal = el<HTMLSelectElement>("train-portal");
 const trainHint = el<HTMLElement>("train-hint");
+const trainDryRunSection = el<HTMLElement>("train-dry-run");
+const trainProvenChip = el<HTMLElement>("train-proven-chip");
+const runMockDryRunBtn = el<HTMLButtonElement>("run-mock-dry-run");
+const markPortalProvenBtn = el<HTMLButtonElement>("mark-portal-proven");
+const mockDryRunStatus = el<HTMLElement>("mock-dry-run-status");
 const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
@@ -117,7 +122,6 @@ const providerName = el<HTMLElement>("provider-name");
 const providerDob = el<HTMLElement>("provider-dob");
 const providerIds = el<HTMLElement>("provider-ids");
 const openInPanelLink = el<HTMLAnchorElement>("open-in-panel");
-const licenseRow = el<HTMLElement>("license-row");
 const groupCard = el<HTMLElement>("group-card");
 const groupName = el<HTMLElement>("group-name");
 const groupIds = el<HTMLElement>("group-ids");
@@ -231,6 +235,7 @@ let sharedPortalRows: PortalRegistryRow[] = [];
 // The shared field maps of the recognized form, for the "what this form
 // already has" read-out. Empty for a form nothing has captured yet.
 let trainFormMaps: PortalFieldMap[] = [];
+let lastMockDryRunPortalKey: string | null = null;
 let lastFill: LastFill | null = null;
 // Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
 // selected case's portalTasks matched against the current page's portal. null =
@@ -414,7 +419,7 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
     const text = document.createElement("span");
     // Wrap, never truncate (S2.3) — long values break to the next line.
     text.className = "id-value mono wrap";
-    text.textContent = looksLikeIsoDate(field.value) ? fmtContextDate(field.value) : field.value;
+    text.textContent = looksLikeIsoDate(field.value) ? formatDisplayDate(field.value) : field.value;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "id-copy";
@@ -484,7 +489,7 @@ function renderGroupedDetails(
   }
 }
 
-// A structural row (license / malpractice): label: value triplet line with an
+// A structural row (malpractice): label: value triplet line with an
 // optional amber expiry badge (< 30 days) or red expired badge. Empty parts
 // render as muted em-dashes — never silently dropped.
 function structuralRow(
@@ -504,7 +509,7 @@ function structuralRow(
     value.className = part.value ? "qc-struct-value mono" : "qc-struct-value id-empty";
     value.textContent = part.value
       ? looksLikeIsoDate(part.value)
-        ? fmtContextDate(part.value)
+        ? formatDisplayDate(part.value)
         : part.value
       : "—";
     if (!part.value && part.reason) value.title = part.reason;
@@ -531,7 +536,6 @@ function renderQuickCards(cards: QuickCards | null): void {
   providerIds.hidden = cards == null;
   providerDob.hidden = cards == null;
   providerDob.textContent = "";
-  licenseRow.hidden = true;
   groupCard.hidden = true;
   if (cards == null) return;
 
@@ -541,16 +545,12 @@ function renderQuickCards(cards: QuickCards | null): void {
     providerName.textContent = providerDisplayName(cards.name, cards.credentials);
   }
   providerDob.textContent = cards.dateOfBirth
-    ? `DOB ${fmtContextDate(cards.dateOfBirth)}`
+    ? `DOB ${formatDisplayDate(cards.dateOfBirth)}`
     : "DOB —";
 
   renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
-  structuralRow(
-    licenseRow,
-    "License",
-    [cards.license.state, cards.license.number, cards.license.expiration],
-    cards.license.expiry,
-  );
+  // License facts live in the STATE LICENSE detail section from the layout —
+  // no concatenated structural row (that duplicated number/state/expiration).
 
   // Type 2: the group card, visually divided from Type 1.
   groupCard.hidden = false;
@@ -847,13 +847,9 @@ function renderCaseNote(): void {
   caseNote.replaceChildren(label, body);
 }
 
-// "Jul 5, 2026" for a case-context note/touch timestamp; "" for a missing or
-// unparseable value so the meta line just drops rather than showing "Invalid
-// Date".
+// Dates in the extension render as MM/DD/YYYY (see formatDisplayDate).
 function fmtContextDate(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  return at.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return formatDisplayDate(iso);
 }
 
 function contextRow(label: string): { row: HTMLDivElement; labelEl: HTMLSpanElement } {
@@ -1569,7 +1565,7 @@ function fieldList(
   box.replaceChildren(bucketDetails(heading, fields.length, rows));
 }
 
-// "9:42 PM" today, "Jul 5, 9:42 PM" on any other day — a restored report is
+// "9:42 PM" today, "07/05, 9:42 PM" on any other day — a restored report is
 // always labeled with when it ran so it can't pass for a fresh one.
 function fmtReportTime(iso: string): string {
   const at = new Date(iso);
@@ -1577,7 +1573,7 @@ function fmtReportTime(iso: string): string {
   const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return at.toDateString() === new Date().toDateString()
     ? time
-    : `${at.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+    : `${formatDisplayDate(iso)}, ${time}`;
 }
 
 // The review state: filled count, the skipped/manual lists, and the
@@ -3304,13 +3300,12 @@ function localToday(): string {
 }
 
 function renderCapture(): void {
-  // Capture is offered whenever a recognized portal page is in the active tab.
-  // In CASE mode it additionally waits for the org to resolve, exactly as it
-  // did while it lived inside the provider section — a proposal there lands
-  // under that org. In TRAIN mode there is no org to wait for.
-  const training = panelMode === "train";
+  // Capture lives ONLY on Train forms (E6.9 two-job split). Work cases is the
+  // case workflow — never the field trainer. A leftover session from a prior
+  // Train visit stays in the worker but stays hidden here until Train is on.
+  const training = isCaptureMode(panelMode);
   captureSection.hidden =
-    portal == null || portalTabId == null || (!training && !orgResolved());
+    !training || portal == null || portalTabId == null;
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
@@ -3324,8 +3319,7 @@ function renderCapture(): void {
   captureSummary.textContent = summary;
   captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
   // "Capture next page" only makes sense when there is already a session to
-  // add a page to. Hidden in Work mode with the rest of the capture strip
-  // (the section itself is already gated above).
+  // add a page to.
   captureNextPage.hidden = captureSession == null;
   captureNextPage.disabled = false;
 
@@ -3334,11 +3328,10 @@ function renderCapture(): void {
   captureSend.disabled = false;
   captureSent.hidden = counts.sent === 0;
   if (counts.sent > 0) {
-    captureSent.textContent = training
-      ? // Training writes the SHARED library, so the review happens in the
-        // Submit-form task editor (D18) — say where, not just "approve them".
-        `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`
-      : `${counts.sent} sent for approval. Approve them in Minted Panel — nothing fills until you do.`;
+    captureSent.textContent =
+      // Training writes the SHARED library, so the review happens in the
+      // Submit-form task editor (D18) — say where, not just "approve them".
+      `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`;
   }
   if (captureSession == null) return;
 
@@ -3520,12 +3513,11 @@ async function restoreCapture(): Promise<void> {
 // E6.9 F6.9.7 — the job chooser, and F6.9.9 — Train forms.
 // ---------------------------------------------------------------------------
 
-/** Show the sections that belong to the current job. Case work keeps every
- * surface it had; training hides the org, search and provider pickers outright
- * — not because they are noise, but because a training capture writes the
- * SHARED library and has no org at all (F6.9.8). Leaving an org selected while
- * training would suggest the capture lands under it, which is the exact
- * misunderstanding this split exists to end. */
+/** Show the sections that belong to the current job. Case work is org /
+ * provider / case / fill / touch — never capture. Training hides the org,
+ * search and provider pickers and owns Capture + Send for approval (and mock
+ * dry run / Mark proven). Leaving capture visible on Work cases reopened the
+ * dual-door confusion E6.9 closed. */
 function applyPanelMode(): void {
   const training = panelMode === "train";
   modeCaseBtn.setAttribute("aria-pressed", String(!training));
@@ -3611,6 +3603,15 @@ function renderTrainPortals(): void {
   }
 }
 
+function renderTrainDryRun(): void {
+  const recognized = panelMode === "train" && portal != null && portalTabId != null;
+  trainDryRunSection.hidden = !recognized;
+  runMockDryRunBtn.disabled = !recognized;
+  markPortalProvenBtn.disabled = !recognized;
+  trainProvenChip.hidden = !recognized || portal?.proven !== true;
+  if (!recognized) mockDryRunStatus.hidden = true;
+}
+
 /**
  * What is the open page, and what does the system already know about it?
  *
@@ -3644,14 +3645,21 @@ async function refreshTrainRecognition(): Promise<void> {
       state.undecided > 0
         ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
         : "Re-capture only if the form changed — nothing here changes a mapping on its own.";
+    if (lastMockDryRunPortalKey !== view.portal.key) {
+      lastMockDryRunPortalKey = null;
+      mockDryRunStatus.hidden = true;
+    }
   } else {
     portal = null;
     portalTabId = null;
     trainFormMaps = [];
+    lastMockDryRunPortalKey = null;
+    mockDryRunStatus.hidden = true;
     trainRecognition.textContent = view.recognitionText;
     trainHint.textContent = view.hintText;
   }
   renderTrainPortals();
+  renderTrainDryRun();
   renderCapture();
   void refreshPortalAccessPrompt();
 }
@@ -3667,6 +3675,78 @@ trainPortal.addEventListener("change", () => {
   void refreshTrainRecognition();
   if (!row?.formUrl) return;
   void chrome.tabs.create({ url: row.formUrl });
+});
+
+runMockDryRunBtn.addEventListener("click", () => {
+  const activePortal = portal;
+  const activeTabId = portalTabId;
+  if (activePortal == null || activeTabId == null) return;
+  const generation = loadGeneration;
+  runMockDryRunBtn.disabled = true;
+  markPortalProvenBtn.disabled = true;
+  mockDryRunStatus.hidden = false;
+  mockDryRunStatus.textContent = "Filling the live form with synthetic Sample values…";
+  void (async () => {
+    const tab = await queryActiveTab();
+    const currentPortal = matchPortalByUrl(tab?.url, sharedPortalRows);
+    if (tab?.id == null || currentPortal?.key !== activePortal.key) {
+      await refreshTrainRecognition();
+      if (isCurrent(generation)) {
+        mockDryRunStatus.hidden = false;
+        mockDryRunStatus.textContent =
+          "This tab no longer matches the recognized form. Open the registered form and retry.";
+      }
+      return;
+    }
+    const response = await sendToBackground({
+      type: "RUN_MOCK_DRY_RUN",
+      tabId: tab.id,
+      portalKey: activePortal.key,
+    });
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      mockDryRunStatus.textContent = response.error;
+      renderTrainDryRun();
+      mockDryRunStatus.hidden = false;
+      return;
+    }
+    lastMockDryRunPortalKey = activePortal.key;
+    const { filled, skipped, gaps, pass } = response.data;
+    mockDryRunStatus.textContent = pass
+      ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
+      : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
+    renderTrainDryRun();
+    mockDryRunStatus.hidden = false;
+  })();
+});
+
+markPortalProvenBtn.addEventListener("click", () => {
+  const activePortal = portal;
+  if (activePortal == null) return;
+  const generation = loadGeneration;
+  markPortalProvenBtn.disabled = true;
+  mockDryRunStatus.hidden = false;
+  mockDryRunStatus.textContent = "Marking the shared form proven…";
+  void (async () => {
+    const response = await sendToBackground({
+      type: "MARK_PORTAL_PROVEN",
+      portalKey: activePortal.key,
+    });
+    if (!isCurrent(generation)) return;
+    if (!response.ok) {
+      mockDryRunStatus.textContent = response.error;
+      renderTrainDryRun();
+      mockDryRunStatus.hidden = false;
+      return;
+    }
+    const row = sharedPortalRows.find((candidate) => candidate.portalKey === activePortal.key);
+    if (row) row.provenAt = new Date().toISOString();
+    portal = { ...activePortal, proven: true };
+    mockDryRunStatus.textContent =
+      "Marked proven. This manual stamp records that you reviewed the filled form.";
+    renderTrainDryRun();
+    mockDryRunStatus.hidden = false;
+  })();
 });
 
 void (async () => {

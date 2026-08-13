@@ -285,6 +285,7 @@ export async function createMockPanelApi(options = {}) {
     ],
     sharedMaps: [],
     sharedProposed: new Map(),
+    sharedTestFills: new Map(),
     sharedOrgHeaders: [],
   };
 
@@ -632,6 +633,29 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, state.sharedPortals, null, {
         total: state.sharedPortals.length,
       });
+    }
+    if (/^\/api\/shared-portals\/prove\/?$/.test(url.pathname)) {
+      state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
+      if (method !== "POST") return envelope(res, 405, null, "Method not allowed");
+      const body = (await readBody(req)) ?? {};
+      const portal = state.sharedPortals.find(
+        (row) => (typeof body.portalKey === "string" && row.portalKey === body.portalKey) ||
+          (typeof body.id === "string" && row.id === body.id),
+      );
+      if (!portal) return envelope(res, 404, null, "Shared portal not found");
+      portal.provenAt = new Date().toISOString();
+      return envelope(res, 200, { portal });
+    }
+    if (/^\/api\/shared-test-fills\/?$/.test(url.pathname)) {
+      state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
+      if (method !== "POST") return envelope(res, 405, null, "Method not allowed");
+      const body = (await readBody(req)) ?? {};
+      if (state.sharedTestFills.has(body.id)) {
+        return envelope(res, 200, { session: state.sharedTestFills.get(body.id) });
+      }
+      const session = { ...body, isTest: true, performedBy: FIXTURES.USER_ID };
+      state.sharedTestFills.set(body.id, session);
+      return envelope(res, 201, { session });
     }
     if (/^\/api\/shared-field-maps\/?$/.test(url.pathname)) {
       state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);

@@ -26,6 +26,7 @@ import { AuthRequiredError, forceRefresh, getAccessToken } from "./auth";
 import { readActiveOrgId } from "./orgState";
 import { readPanelMode } from "./mode";
 import { shouldSendOrgHeader } from "../shared/panelMode";
+import type { ReportedField } from "../shared/fill";
 
 export class ApiError extends Error {
   constructor(
@@ -258,6 +259,37 @@ export async function listSharedFieldMaps(portalKey: string): Promise<PortalFiel
     `/api/shared-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
   );
   return data;
+}
+
+// POST /api/shared-test-fills — record a Train-forms synthetic fill as an
+// is_test session. The route is user-scoped; orgId is body telemetry context
+// for multi-org callers and is omitted from the request header in train mode.
+export async function postSharedTestFill(body: {
+  id: string;
+  portalKey: string;
+  fieldsFilled: number;
+  fieldsSkipped: ReportedField[];
+  startedAt?: string;
+  completedAt?: string;
+  orgId?: string | null;
+  mockProfileVersion?: number;
+}): Promise<string> {
+  const { data } = await apiFetch<{ session: { id: string } }>("/api/shared-test-fills", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return data.session.id;
+}
+
+// POST /api/shared-portals/prove — the manual proven_at action. A dry-run
+// result never calls this endpoint.
+export async function proveSharedPortal(input: { portalKey: string } | { id: string }): Promise<void> {
+  await apiFetch("/api/shared-portals/prove", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 // PATCH /api/providers/:id — write ONE field (S6.3 gap pull). Deliberately
