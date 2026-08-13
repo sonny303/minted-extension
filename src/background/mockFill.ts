@@ -5,7 +5,7 @@
 // real fill; it never sees tokens or talks to the API.
 
 import type { PortalFieldMap } from "../shared/apiTypes";
-import type { FillInstruction, FillPageResult, ReportedField } from "../shared/fill";
+import type { FillInstruction, FillPageResult, MockDryRunSummary, ReportedField } from "../shared/fill";
 import { applyTransform } from "./fill";
 import { listSharedFieldMaps, postSharedTestFill } from "./api";
 import {
@@ -17,15 +17,6 @@ import { classifyFieldMap } from "../shared/fieldClassify";
 export interface MockDryRunPlan {
   instructions: FillInstruction[];
   gaps: ReportedField[];
-}
-
-export interface MockDryRunSummary {
-  pass: boolean;
-  filled: number;
-  skipped: ReportedField[];
-  gaps: ReportedField[];
-  fillSessionId: string;
-  mockProfileVersion: number;
 }
 
 function humanLabel(map: PortalFieldMap): string {

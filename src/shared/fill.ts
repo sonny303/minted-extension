@@ -40,6 +40,15 @@ export interface FillPageResult {
   pageFields: number;
 }
 
+export interface MockDryRunSummary {
+  pass: boolean;
+  filled: number;
+  skipped: ReportedField[];
+  gaps: ReportedField[];
+  fillSessionId: string;
+  mockProfileVersion: number;
+}
+
 // The read-only coverage sensor shown BEFORE a fill (Epic 3a): how many mapped
 // fields Minted Panel can supply (`available`) out of the total fillable mapped
 // fields (`total`, web + non-retired), plus the gap list — the same fields

@@ -16,13 +16,12 @@ import type {
   PortalRegistryRow,
   StatusBumpMeta,
 } from "./apiTypes";
-import type { FillCoverage, FillReportRecord, FillSummary } from "./fill";
+import type { FillCoverage, FillReportRecord, FillSummary, MockDryRunSummary } from "./fill";
 import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
-import type { MockDryRunSummary } from "../background/mockFill";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
