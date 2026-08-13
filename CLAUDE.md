@@ -182,9 +182,10 @@ portalUrl, portalKey?, facilityId? }` through
   null, idempotent on `(portal_key, selector)` — a re-capture returns the
   existing row with its decision untouched, which is what makes re-capture
   drift repair rather than a reset). The propose body adds `page_step` and
-  `sort_order` to the org route's shape and is still values-free. `PortalFieldMap`
-  gained optional `displayLabel`/`section`/`sortOrder`; `PortalRegistryRow`
-  gained optional `payerName`. Panel-side: `src/services/portals.ts`
+  `sort_order` to the org route's shape and is still values-free; E6.10 adds
+  optional `control_options: {value,label}[]` (empty lists are ignored on
+  re-capture). `PortalFieldMap` gained optional `displayLabel`/`section`/
+  `sortOrder`/`controlOptions`; `PortalRegistryRow` gained optional `payerName`. Panel-side: `src/services/portals.ts`
   `listSharedPortals`, `src/services/portalFieldMaps.ts` `listSharedFieldMaps` /
   `proposeSharedFieldMap`; gate assertions 22/22b/23 + the `sharedtier` leak
   mode. **The org header is keyed by MODE, not by path** (`shouldSendOrgHeader`
@@ -225,6 +226,14 @@ portalUrl, portalKey?, facilityId? }` through
   a scan into the session PER PAGE — a plain `diffCapture` would drop every
   other page's rows, so a trainer walking five pages would keep only the fifth.
   Rows carry DOM-order `sortOrder`.
+- **Structured controls capture their option vocabulary (E6.10 F6.10.1).**
+  `scanCapturableFields` records `{value,label}[]` for `<select>`, radio groups,
+  and checkboxes with a meaningful `value` attribute. Placeholder empty-value
+  options are omitted; a plain checkbox records an empty list. Capture still
+  never reads `selected`, `checked`, or a typed value. The list rides
+  `control_options` on `POST /api/shared-field-maps`. A vocabulary miss at fill
+  time names the control type and a bounded sample of live DOM options; the
+  selector-not-found reason (`field not found on this page`) is unchanged.
 - **Recognition never blocks or guesses (E6.9 F6.9.9).** `recognizeForm` reuses
   the SAME `matchPortalByUrl` the fill engine uses, so trainer and filler can
   never disagree about which portal a page is. A recognized form reports what

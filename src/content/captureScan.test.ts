@@ -138,6 +138,10 @@ describe("scanCapturableFields", () => {
     expect(fields).toHaveLength(2);
     expect(fields[1]?.fieldType).toBe("radio");
     expect(fields[1]?.formSection).toBe("Accepting");
+    expect(fields[1]?.options).toEqual([
+      { value: "y", label: "Yes" },
+      { value: "n", label: "No" },
+    ]);
   });
 
   it("does not read control values while scanning", () => {
@@ -167,6 +171,68 @@ describe("scanCapturableFields", () => {
       },
     ]);
     expect(valueReads).toBe(0);
+  });
+
+  it("captures select/radio/checkbox option vocabulary without reading selected or checked state", () => {
+    document.body.innerHTML = `
+      <label for="st">Practice State</label>
+      <select id="st">
+        <option value="">Select a state</option>
+        <option value="KS" selected>Kansas</option>
+        <option value="MO">Missouri</option>
+        <option value="NE">Nebraska</option>
+      </select>
+      <fieldset>
+        <legend>Entity</legend>
+        <label>Individual <input type="radio" name="entity" value="I" checked /></label>
+        <label>Group <input type="radio" name="entity" value="G" /></label>
+      </fieldset>
+      <label>I agree <input id="agree" type="checkbox" checked /></label>
+      <label>Plan <input id="plan" type="checkbox" value="PPO" /></label>
+    `;
+    const select = document.getElementById("st") as HTMLSelectElement;
+    stubVisibleBox(select);
+    for (const radio of document.querySelectorAll('input[type="radio"]')) stubVisibleBox(radio);
+    stubVisibleBox(document.getElementById("agree")!);
+    stubVisibleBox(document.getElementById("plan")!);
+
+    let selectedReads = 0;
+    let checkedReads = 0;
+    const selectValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.get!;
+    Object.defineProperty(select, "value", {
+      configurable: true,
+      get() {
+        selectedReads += 1;
+        return selectValue.call(this);
+      },
+    });
+    for (const input of document.querySelectorAll("input")) {
+      const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")!.get!;
+      Object.defineProperty(input, "checked", {
+        configurable: true,
+        get() {
+          checkedReads += 1;
+          return desc.call(this);
+        },
+      });
+    }
+
+    const fields = scanCapturableFields();
+    const byId = Object.fromEntries(fields.map((f) => [f.selector, f]));
+    expect(byId["#st"]?.options).toEqual([
+      { value: "KS", label: "Kansas" },
+      { value: "MO", label: "Missouri" },
+      { value: "NE", label: "Nebraska" },
+    ]);
+    expect(byId['input[name="entity"]']?.options).toEqual([
+      { value: "I", label: "Individual" },
+      { value: "G", label: "Group" },
+    ]);
+    expect(byId["#agree"]?.options).toEqual([]);
+    expect(byId["#plan"]?.options).toEqual([{ value: "PPO", label: "Plan" }]);
+    expect(JSON.stringify(fields)).not.toMatch(/selected|checked/i);
+    expect(selectedReads).toBe(0);
+    expect(checkedReads).toBe(0);
   });
 
   it("orders by visual reading position, not DOM tree order (Aetna-style grid)", () => {

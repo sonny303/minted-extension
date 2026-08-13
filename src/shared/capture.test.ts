@@ -88,6 +88,23 @@ describe("parseCaptureSession (S5.2 — survives a worker restart)", () => {
     expect(restored?.rows[0] ?? {}).not.toHaveProperty("value");
     expect(JSON.stringify(restored)).not.toContain("123-45-6789");
   });
+
+  it("restores captured option vocabulary and still drops a typed value", () => {
+    const restored = parseCaptureSession({
+      portalKey: "availity",
+      rows: [
+        {
+          label: "State",
+          selector: "#st",
+          fieldType: "select",
+          options: [{ value: "KS", label: "Kansas" }],
+          value: "Kansas",
+        },
+      ],
+    });
+    expect(restored?.rows[0]?.options).toEqual([{ value: "KS", label: "Kansas" }]);
+    expect(restored?.rows[0] ?? {}).not.toHaveProperty("value");
+  });
 });
 
 describe("restoredSummary (S5.2 — says what came back)", () => {

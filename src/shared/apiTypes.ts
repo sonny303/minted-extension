@@ -55,6 +55,8 @@ export interface PortalFieldMap {
   displayLabel?: string | null;
   section?: string | null;
   sortOrder?: number | null;
+  /** E6.10 — captured option vocabulary. Null/absent = never captured. */
+  controlOptions?: { value: string; label: string }[] | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -699,6 +699,74 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     expect(mock.state.sharedProposed.size).toBe(1);
   });
 
+  it("TS-158 — captured option vocabulary rides the shared propose, shape-only", async () => {
+    await writePanelMode("train");
+    const map = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#practice-state",
+      field_label: "Practice State",
+      field_type: "select",
+      sort_order: 1,
+      control_options: [
+        { value: "KS", label: "Kansas" },
+        { value: "MO", label: "Missouri" },
+        { value: "NE", label: "Nebraska" },
+      ],
+    });
+    expect(map.orgId).toBeNull();
+    expect(map.status).toBe("proposed");
+    expect(map.token).toBeNull();
+    expect(map.controlOptions).toEqual([
+      { value: "KS", label: "Kansas" },
+      { value: "MO", label: "Missouri" },
+      { value: "NE", label: "Nebraska" },
+    ]);
+    expect(JSON.stringify(map)).not.toMatch(/selected|checked/i);
+  });
+
+  it("TS-159 — re-capture refreshes a non-empty list and ignores an empty one", async () => {
+    await writePanelMode("train");
+    const first = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#practice-state",
+      field_label: "Practice State",
+      field_type: "select",
+      control_options: [
+        { value: "KS", label: "Kansas" },
+        { value: "MO", label: "Missouri" },
+      ],
+    });
+    const withNew = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#practice-state",
+      field_label: "Practice State",
+      field_type: "select",
+      control_options: [
+        { value: "KS", label: "Kansas" },
+        { value: "MO", label: "Missouri" },
+        { value: "NE", label: "Nebraska" },
+      ],
+    });
+    expect(withNew.id).toBe(first.id);
+    expect(withNew.status).toBe("proposed");
+    expect(withNew.token).toBeNull();
+    expect(withNew.controlOptions).toEqual([
+      { value: "KS", label: "Kansas" },
+      { value: "MO", label: "Missouri" },
+      { value: "NE", label: "Nebraska" },
+    ]);
+    const empty = await proposeSharedFieldMap({
+      portal_key: "aetna_join",
+      selector: "#practice-state",
+      field_label: "Practice State",
+      field_type: "select",
+      control_options: [],
+    });
+    expect(empty.id).toBe(first.id);
+    expect(empty.controlOptions).toEqual(withNew.controlOptions);
+    expect(mock.state.sharedProposed.size).toBe(1);
+  });
+
   it("TS-153 — a known form is recognized with what it already has; a new one is greeted", async () => {
     await writePanelMode("train");
     const registry = await listSharedPortals();

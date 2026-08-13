@@ -17,10 +17,17 @@ export interface CapturedField {
   fieldType: PortalFieldType;
   /** Nearest fieldset/section heading, when the form has one. */
   formSection: string | null;
+  /** E6.10 — the control's own choices. Never the selected/checked/typed
+   * value. Empty array = structured control with no options loaded; omitted
+   * on text/date/file. */
+  options?: { value: string; label: string }[];
 }
 
 const FILLABLE =
   'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
+
+/** Max options stored per field — matches the panel write-boundary cap. */
+const CONTROL_OPTIONS_CAP = 50;
 
 /** True when the control has a non-zero layout box (trainer can see it).
  * JSF multi-panel forms leave inactive panels in the DOM with no rects. */
@@ -122,6 +129,51 @@ function sectionFor(el: Element): string | null {
   return heading || null;
 }
 
+function capOptions(options: { value: string; label: string }[]): { value: string; label: string }[] {
+  return options.slice(0, CONTROL_OPTIONS_CAP);
+}
+
+/** Option vocabulary for a structured control. Reads each choice's declared
+ * `value` attribute and its visible label — never `selected`, `checked`, or a
+ * typed value. */
+function optionsFor(el: Element, type: PortalFieldType): { value: string; label: string }[] | undefined {
+  if (type === "select" && el instanceof HTMLSelectElement) {
+    const options: { value: string; label: string }[] = [];
+    for (const option of Array.from(el.options)) {
+      // `option.value` is the declared choice (value attr, else the text).
+      // That is not the select's selected state (`select.value` / `option.selected`).
+      const value = option.value;
+      if (value === "") continue;
+      options.push({ value, label: (option.textContent ?? "").trim() });
+    }
+    return capOptions(options);
+  }
+  if (type === "radio" && el instanceof HTMLInputElement) {
+    const scope = el.form ?? document;
+    const group = el.name
+      ? Array.from(
+          scope.querySelectorAll<HTMLInputElement>(
+            `input[type="radio"][name="${CSS.escape(el.name)}"]`,
+          ),
+        )
+      : [el];
+    const options: { value: string; label: string }[] = [];
+    for (const radio of group) {
+      if (!isCapturableControl(radio)) continue;
+      const value = radio.getAttribute("value") ?? "";
+      if (value === "") continue;
+      options.push({ value, label: labelFor(radio) || value });
+    }
+    return capOptions(options);
+  }
+  if (type === "checkbox" && el instanceof HTMLInputElement) {
+    const value = el.getAttribute("value");
+    if (value == null || value === "" || value === "on") return [];
+    return [{ value, label: labelFor(el) || value }];
+  }
+  return undefined;
+}
+
 /** Scan the page's fillable controls into capture rows.
  *
  * Only VISIBLE controls are captured (no layout box, or hidden via attribute /
@@ -154,6 +206,7 @@ export function scanCapturableFields(): CapturedField[] {
         seenRadioNames.add(name);
       }
     }
+    const options = optionsFor(el, type);
     fields.push({
       label: labelFor(el),
       // Keep the document-order index for nth-of-type fallbacks so a visual
@@ -161,6 +214,7 @@ export function scanCapturableFields(): CapturedField[] {
       selector: selectorFor(el, index),
       fieldType: type,
       formSection: sectionFor(el),
+      ...(options !== undefined ? { options } : {}),
     });
   }
 

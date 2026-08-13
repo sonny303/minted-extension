@@ -353,6 +353,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         sent: false,
         pageStep,
         sortOrder: f.sortOrder,
+        ...(f.options !== undefined ? { options: f.options } : {}),
       }));
       // Re-capturing is DRIFT REPAIR, and it is PER PAGE: prior decisions on
       // the page being scanned carry over, and the other pages of a multi-page
@@ -403,6 +404,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           page_step: row.pageStep ?? null,
           field_type: row.fieldType,
           sort_order: row.sortOrder ?? null,
+          control_options: row.options,
         });
         // The shared path returns the row itself, not a learned suggestion —
         // suggestions are org-scoped memory (field_dictionary) and training
