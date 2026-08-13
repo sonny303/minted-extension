@@ -356,7 +356,7 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
 });
 
 describe("TS-100 — unified standalone search", () => {
-  it("finds cases by provider name, payer name, and tracking ID", async () => {
+  it("finds cases by provider name, payer name, tracking ID, and case number", async () => {
     const byProvider = await searchCases("kay");
     expect(byProvider.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
     expect(byProvider[0]?.providerName).toBe("Kay One");
@@ -367,6 +367,8 @@ describe("TS-100 — unified standalone search", () => {
     expect(byPayer[0]?.facilityId).toBeNull();
     const byRef = await searchCases("REF-1001");
     expect(byRef.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
+    expect((await searchCases("C-1001")).map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
+    expect((await searchCases("1002")).map((r) => r.id)).toEqual([FIXTURES.CASE2_ID]);
     expect(await searchCases("   ")).toEqual([]);
   });
 

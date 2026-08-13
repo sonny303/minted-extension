@@ -56,6 +56,7 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import { assignSortOrder } from "../shared/trainForms";
+import { browseableProviders } from "../shared/browseProviders";
 import type { CapturedField } from "../content/captureScan";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
@@ -248,7 +249,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "LIST_PORTALS":
       return listPortals();
     case "LIST_PROVIDERS":
-      return listProviders();
+      return browseableProviders(await listProviders());
     case "LIST_CASES":
       return listCases(request.providerId);
     case "SEARCH": {
@@ -266,7 +267,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       ]);
       const results: SearchResults = {
         cases: casesRes.status === "fulfilled" ? casesRes.value : [],
-        providers: providersRes.status === "fulfilled" ? providersRes.value : [],
+        providers:
+          providersRes.status === "fulfilled" ? browseableProviders(providersRes.value) : [],
         casesError: casesRes.status === "rejected" ? failureMessage(casesRes.reason) : null,
         providersError:
           providersRes.status === "rejected" ? failureMessage(providersRes.reason) : null,
