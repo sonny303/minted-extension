@@ -16,7 +16,7 @@ import type {
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
 import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
-import { looksLikeIsoDate } from "../shared/detailFields";
+import { formatDisplayDate, looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../shared/portals";
 import type {
   CaseContextTaskStep,
@@ -122,7 +122,6 @@ const providerName = el<HTMLElement>("provider-name");
 const providerDob = el<HTMLElement>("provider-dob");
 const providerIds = el<HTMLElement>("provider-ids");
 const openInPanelLink = el<HTMLAnchorElement>("open-in-panel");
-const licenseRow = el<HTMLElement>("license-row");
 const groupCard = el<HTMLElement>("group-card");
 const groupName = el<HTMLElement>("group-name");
 const groupIds = el<HTMLElement>("group-ids");
@@ -416,7 +415,7 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
     const text = document.createElement("span");
     // Wrap, never truncate (S2.3) — long values break to the next line.
     text.className = "id-value mono wrap";
-    text.textContent = looksLikeIsoDate(field.value) ? fmtContextDate(field.value) : field.value;
+    text.textContent = looksLikeIsoDate(field.value) ? formatDisplayDate(field.value) : field.value;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "id-copy";
@@ -486,7 +485,7 @@ function renderGroupedDetails(
   }
 }
 
-// A structural row (license / malpractice): label: value triplet line with an
+// A structural row (malpractice): label: value triplet line with an
 // optional amber expiry badge (< 30 days) or red expired badge. Empty parts
 // render as muted em-dashes — never silently dropped.
 function structuralRow(
@@ -506,7 +505,7 @@ function structuralRow(
     value.className = part.value ? "qc-struct-value mono" : "qc-struct-value id-empty";
     value.textContent = part.value
       ? looksLikeIsoDate(part.value)
-        ? fmtContextDate(part.value)
+        ? formatDisplayDate(part.value)
         : part.value
       : "—";
     if (!part.value && part.reason) value.title = part.reason;
@@ -533,7 +532,6 @@ function renderQuickCards(cards: QuickCards | null): void {
   providerIds.hidden = cards == null;
   providerDob.hidden = cards == null;
   providerDob.textContent = "";
-  licenseRow.hidden = true;
   groupCard.hidden = true;
   if (cards == null) return;
 
@@ -543,16 +541,12 @@ function renderQuickCards(cards: QuickCards | null): void {
     providerName.textContent = providerDisplayName(cards.name, cards.credentials);
   }
   providerDob.textContent = cards.dateOfBirth
-    ? `DOB ${fmtContextDate(cards.dateOfBirth)}`
+    ? `DOB ${formatDisplayDate(cards.dateOfBirth)}`
     : "DOB —";
 
   renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
-  structuralRow(
-    licenseRow,
-    "License",
-    [cards.license.state, cards.license.number, cards.license.expiration],
-    cards.license.expiry,
-  );
+  // License facts live in the STATE LICENSE detail section from the layout —
+  // no concatenated structural row (that duplicated number/state/expiration).
 
   // Type 2: the group card, visually divided from Type 1.
   groupCard.hidden = false;
@@ -849,13 +843,9 @@ function renderCaseNote(): void {
   caseNote.replaceChildren(label, body);
 }
 
-// "Jul 5, 2026" for a case-context note/touch timestamp; "" for a missing or
-// unparseable value so the meta line just drops rather than showing "Invalid
-// Date".
+// Dates in the extension render as MM/DD/YYYY (see formatDisplayDate).
 function fmtContextDate(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  return at.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return formatDisplayDate(iso);
 }
 
 function contextRow(label: string): { row: HTMLDivElement; labelEl: HTMLSpanElement } {
@@ -1524,7 +1514,7 @@ function fieldList(
   box.replaceChildren(bucketDetails(heading, fields.length, rows));
 }
 
-// "9:42 PM" today, "Jul 5, 9:42 PM" on any other day — a restored report is
+// "9:42 PM" today, "07/05, 9:42 PM" on any other day — a restored report is
 // always labeled with when it ran so it can't pass for a fresh one.
 function fmtReportTime(iso: string): string {
   const at = new Date(iso);
@@ -1532,7 +1522,7 @@ function fmtReportTime(iso: string): string {
   const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return at.toDateString() === new Date().toDateString()
     ? time
-    : `${at.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+    : `${formatDisplayDate(iso)}, ${time}`;
 }
 
 // The review state: filled count, the skipped/manual lists, and the
