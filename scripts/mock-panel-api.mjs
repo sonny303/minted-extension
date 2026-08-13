@@ -150,6 +150,7 @@ const CASES = [
   {
     id: FIXTURES.CASE_ID,
     providerId: FIXTURES.PROVIDER_ID,
+    facilityId: FIXTURES.FACILITY_ID,
     payerName: "BCBS of Kansas",
     state: "KS",
     status: "Submitted",
@@ -188,6 +189,7 @@ const CASES = [
   {
     id: FIXTURES.CASE2_ID,
     providerId: FIXTURES.PROVIDER2_ID,
+    facilityId: null,
     payerName: "Humana",
     state: "KS",
     status: "In Progress",
@@ -512,6 +514,7 @@ export async function createMockPanelApi(options = {}) {
                   status: c.status,
                   payerReferenceId: c.payerReferenceId,
                   payerPipelineState: c.payerPipelineState ?? "not_started",
+                  facilityId: c.facilityId ?? null,
                 };
               }).filter((r) => {
                 const hay =
@@ -537,7 +540,12 @@ export async function createMockPanelApi(options = {}) {
         provider: p ? { id: p.id, name: `${p.firstName} ${p.lastName}` } : null,
         payer: { id: "payer-1", name: c.payerName },
         state: c.state,
-        selectedFacility: FACILITIES[0],
+        selectedFacility: (() => {
+          const id = c.facilityId;
+          if (!id) return null;
+          const facility = FACILITIES.find((f) => f.id === id);
+          return facility ?? null;
+        })(),
         openTasks: c.openTasks,
         latestNote: c.latestNote
           ? { content: c.latestNote.text, createdAt: c.latestNote.at, authorName: c.latestNote.author }

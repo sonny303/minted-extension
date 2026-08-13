@@ -256,6 +256,10 @@ let caseContextCaseId: string | null = null;
 // The last rendered case context — feeds the identity guard header and the
 // case-selected facility auto-pick. In-memory only, cleared with the case.
 let caseContextData: CaseContext | null = null;
+// When a case is freshly chosen (search / dropdown / NBA / handoff), the
+// case's facility_id wins over a remembered provider location. Cleared after
+// maybeApplyCaseFacility runs (or when the case has no facility).
+let preferCaseFacility = false;
 // E4.3 F4.3.1: the worker-owned active-case record as last read, and its
 // expiry status. The panel re-reads on open, on the worker's
 // ACTIVE_CASE_UPDATED broadcast, and on a slow poll (expiry has a clock).
@@ -918,18 +922,65 @@ function renderIdentityGuard(): void {
 // E4.3: the case explicitly selects a facility (credential_cases.facility_id,
 // resolved server-side — an explicit relationship, not a guess). When the
 // context carries one, it becomes the location pick unless the user already
-// picked; the needs-facility gate resolves with it.
+// picked; a fresh case selection (preferCaseFacility) overrides a remembered
+// provider location so search → case lands on the case's practice site.
 function maybeApplyCaseFacility(): void {
-  const facility = caseContextData?.selectedFacility ?? null;
-  if (facility == null || !facilitiesLoaded) return;
-  if (selectedFacilityId() != null) return;
-  if (!facilities.some((f) => f.id === facility.id)) return;
+  // Wait for both the facility list and case context — clearing preferCaseFacility
+  // here would race loadFacilities finishing before GET_CASE_CONTEXT returns.
+  if (!facilitiesLoaded || caseContextData == null) return;
+  const facility = caseContextData.selectedFacility ?? null;
+  if (facility == null) {
+    preferCaseFacility = false;
+    return;
+  }
+  if (!facilities.some((f) => f.id === facility.id)) {
+    preferCaseFacility = false;
+    return;
+  }
+  const current = selectedFacilityId();
+  const shouldApply = preferCaseFacility || current == null;
+  preferCaseFacility = false;
+  if (!shouldApply) return;
+  if (current === facility.id) {
+    // Already on the case location — still re-resolve cards so PRACTICE
+    // LOCATION isn't left "Not on file" from the needs_facility profile fetch.
+    const providerId = selectedProviderId();
+    if (providerId) void refreshFacilityCards(providerId, facility.id, loadGeneration);
+    return;
+  }
   facilitySelect.value = facility.id;
   const providerId = selectedProviderId();
   if (providerId) {
     void sendToBackground({ type: "SET_SELECTED_FACILITY", providerId, facilityId: facility.id });
+    void refreshFacilityCards(providerId, facility.id, loadGeneration);
   }
   renderFacilityAddress();
+  updateFillReady();
+}
+
+/** Re-fetch the profile with a chosen facilityId so facility.* / assignment.*
+ * quick-card tokens resolve. The initial multi-facility load intentionally
+ * omits facilityId (server sets needs_facility); without this refresh the
+ * PRACTICE LOCATION card stays "Not on file" even after a dropdown pick. */
+async function refreshFacilityCards(
+  providerId: string,
+  facilityId: string,
+  generation: number,
+): Promise<void> {
+  const response = await sendToBackground({
+    type: "GET_PROVIDER_FACILITIES",
+    providerId,
+    facilityId,
+  });
+  if (!isCurrent(generation)) return;
+  if (selectedProviderId() !== providerId) return;
+  if (selectedFacilityId() !== facilityId) return;
+  if (!response.ok) return;
+  needsFacility = response.data.needsFacility;
+  currentCatalog = response.data.catalog;
+  renderQuickCards(response.data.cards);
+  renderFacilityAddress();
+  renderIdentityGuard();
   updateFillReady();
 }
 
@@ -1783,6 +1834,13 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   maybeApplyCaseFacility();
   renderIdentityGuard();
   updateFillReady();
+  // Multi-facility: the first profile fetch left facility.* unresolved. Once
+  // a location is selected (remembered pick, case facility, or sole — sole
+  // already resolved server-side), re-fetch so PRACTICE LOCATION populates.
+  const selectedId = selectedFacilityId();
+  if (selectedId != null && facilities.length > 1) {
+    await refreshFacilityCards(providerId, selectedId, generation);
+  }
 }
 
 async function loadProviders(generation: number): Promise<void> {
@@ -2211,16 +2269,20 @@ providerSelect.addEventListener("change", () => {
 
 facilitySelect.addEventListener("change", () => {
   const providerId = selectedProviderId();
+  const facilityId = selectedFacilityId();
   if (providerId) {
     void sendToBackground({
       type: "SET_SELECTED_FACILITY",
       providerId,
-      facilityId: selectedFacilityId(),
+      facilityId,
     });
   }
   renderFacilityAddress();
   renderIdentityGuard();
   updateFillReady();
+  if (providerId && facilityId) {
+    void refreshFacilityCards(providerId, facilityId, loadGeneration);
+  }
 });
 
 // The one case-selection routine every entry path funnels into: the manual
@@ -2231,6 +2293,9 @@ facilitySelect.addEventListener("change", () => {
 // handoff record it is applying.
 function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
   const providerId = selectedProviderId();
+  // A case pick should land on that case's facility once context arrives —
+  // not a leftover remembered location from another case on the same provider.
+  preferCaseFacility = caseId != null;
   if (providerId) {
     void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
     if (recordEntry && caseId != null) {
@@ -2549,10 +2614,12 @@ async function selectCaseInPanel(
   // S3.5: the case's location from the C1 payload. Recorded BEFORE facilities
   // load so the picker opens already resolved — "zero dropdowns". Ignored when
   // the provider isn't actually assigned to it (loadFacilities validates the
-  // stored pick against the real set).
+  // stored pick against the real set). Also set from case-search rows that
+  // carry facilityId so search → case defaults to the case's practice site.
   preferredFacilityId?: string | null,
 ): Promise<void> {
   const generation = bumpGeneration();
+  preferCaseFacility = true;
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId });
   await sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
   if (recordEntry) {
@@ -2603,7 +2670,7 @@ function renderSearchResults(data: SearchResults): void {
       button.addEventListener("click", () => {
         hideSearchResults();
         searchInput.value = "";
-        void selectCaseInPanel(row.providerId, row.id, true);
+        void selectCaseInPanel(row.providerId, row.id, true, row.facilityId ?? null);
       });
       searchResults.append(button);
     }
