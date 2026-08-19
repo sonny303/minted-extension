@@ -68,6 +68,13 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
+    // 2026-08-19: /api/providers rows carry the provider's groups so a search
+    // can tell two same-named people apart. Two here, deliberately — the
+    // truncation and the "+N" both have something to act on.
+    groups: [
+      { id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true },
+      { id: "g-2", name: "Wellspring PT", isPrimary: false },
+    ],
     specialty: "Physical Therapy",
     email: "kay.one@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -84,6 +91,7 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
+    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
     specialty: "Physical Therapy",
     email: "pat.o@example.com",
     updatedAt: "2026-07-01T00:00:00Z",

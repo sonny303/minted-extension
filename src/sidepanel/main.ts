@@ -27,7 +27,12 @@ import type {
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import type { ActiveCaseRecord } from "../shared/handoff";
-import { providerWebappPath, type QuickCardField, type QuickCards } from "../shared/quickCards";
+import {
+  orderLayoutByCatalog,
+  providerWebappPath,
+  type QuickCardField,
+  type QuickCards,
+} from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
 import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/caqh";
@@ -42,7 +47,13 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import { accountGreeting } from "../shared/greeting";
-import { DEFAULT_PANEL_MODE, isCaptureMode, type PanelMode } from "../shared/panelMode";
+import {
+  canTrainForms,
+  DEFAULT_PANEL_MODE,
+  fallbackModeFor,
+  isCaptureMode,
+  type PanelMode,
+} from "../shared/panelMode";
 import {
   CAPTURE_TAB_MISMATCH_ERROR,
   captureStateSummary,
@@ -52,7 +63,11 @@ import {
   pageUrlTail,
   resolveTrainRecognition,
 } from "../shared/trainForms";
-import { browseableProviders } from "../shared/browseProviders";
+import {
+  browseableProviders,
+  providerGroupsLabel,
+  providerMatchesQuery,
+} from "../shared/browseProviders";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -79,6 +94,7 @@ const views = {
   main: el<HTMLElement>("view-main"),
 };
 // E6.9 F6.9.7 — the job chooser and the Train-forms module.
+const modeSearchBtn = el<HTMLButtonElement>("mode-search");
 const modeCaseBtn = el<HTMLButtonElement>("mode-case");
 const modeTrainBtn = el<HTMLButtonElement>("mode-train");
 const trainSection = el<HTMLElement>("train-section");
@@ -111,9 +127,11 @@ const handoffBanner = el<HTMLElement>("handoff-banner");
 const searchSection = el<HTMLElement>("search-section");
 const searchInput = el<HTMLInputElement>("search-input");
 const searchResults = el<HTMLElement>("search-results");
-const providerSection = el<HTMLElement>("provider-section");
 const refreshBtn = el<HTMLButtonElement>("refresh");
-const providerSelect = el<HTMLSelectElement>("provider-select");
+const caseWork = el<HTMLElement>("case-work");
+const providerBar = el<HTMLElement>("provider-bar");
+const providerBarName = el<HTMLElement>("provider-bar-name");
+const providerBarSwitch = el<HTMLButtonElement>("provider-bar-switch");
 const facilitySelect = el<HTMLSelectElement>("facility-select");
 const facilityHint = el<HTMLElement>("facility-hint");
 const facilityAddress = el<HTMLElement>("facility-address");
@@ -126,7 +144,6 @@ const openInPanelLink = el<HTMLAnchorElement>("open-in-panel");
 const groupCard = el<HTMLElement>("group-card");
 const groupName = el<HTMLElement>("group-name");
 const groupIds = el<HTMLElement>("group-ids");
-const malpracticeRow = el<HTMLElement>("malpractice-row");
 const activeCasesBox = el<HTMLElement>("active-cases");
 const activeCasesList = el<HTMLElement>("active-cases-list");
 const viewSettingsBtn = el<HTMLButtonElement>("view-settings-btn");
@@ -232,6 +249,15 @@ let portalRows: PortalRegistryRow[] = [];
 // against. The worker owns the mode — it decides whether a call carries
 // x-org-id — so the panel mirrors it rather than being its source of truth.
 let panelMode: PanelMode = DEFAULT_PANEL_MODE;
+
+// Has an org resolved? Every org-scoped surface (Search's results and all of
+// Work cases) stays hidden until it has — a single-org user resolves the
+// moment memberships load; a multi-org one after picking.
+let orgReady = false;
+// Have memberships (and therefore ROLES) arrived? Until they have, "may this
+// user train?" is unknown, and the honest render is to leave the Train button
+// as it was rather than flash it away and back.
+let membershipsLoaded = false;
 let sharedPortalRows: PortalRegistryRow[] = [];
 // The shared field maps of the recognized form, for the "what this form
 // already has" read-out. Empty for a form nothing has captured yet.
@@ -314,9 +340,21 @@ function setError(box: HTMLElement, message: string | null): void {
   box.textContent = message ?? "";
 }
 
+// The selected provider (2026-08-19). It used to BE the retired dropdown's
+// value; now it is plain panel state, set by a search pick, a case pick, a
+// hand-off, or the worker's remembered selection on load. Every generation
+// guard around it is unchanged — only the storage moved.
+let selectedProvider: string | null = null;
+
 function selectedProviderId(): string | null {
-  const value = providerSelect.value;
-  return UUID_RE.test(value) ? value : null;
+  return selectedProvider;
+}
+
+/** Set (or clear) the selection. Rejects a non-uuid the same way reading the
+ * dropdown's placeholder value used to. */
+function setSelectedProviderId(id: string | null): void {
+  selectedProvider = id != null && UUID_RE.test(id) ? id : null;
+  renderSelectedProvider();
 }
 
 function selectedCaseId(): string | null {
@@ -490,40 +528,6 @@ function renderGroupedDetails(
   }
 }
 
-// A structural row (malpractice): label: value triplet line with an
-// optional amber expiry badge (< 30 days) or red expired badge. Empty parts
-// render as muted em-dashes — never silently dropped.
-function structuralRow(
-  box: HTMLElement,
-  title: string,
-  parts: QuickCardField[],
-  expiry: "ok" | "expiring" | "expired" | null,
-): void {
-  box.replaceChildren();
-  box.hidden = false;
-  const label = document.createElement("span");
-  label.className = "qc-struct-label";
-  label.textContent = title;
-  box.append(label);
-  for (const part of parts) {
-    const value = document.createElement("span");
-    value.className = part.value ? "qc-struct-value mono" : "qc-struct-value id-empty";
-    value.textContent = part.value
-      ? looksLikeIsoDate(part.value)
-        ? formatDisplayDate(part.value)
-        : part.value
-      : "—";
-    if (!part.value && part.reason) value.title = part.reason;
-    box.append(value);
-  }
-  if (expiry === "expiring" || expiry === "expired") {
-    const badge = document.createElement("span");
-    badge.className = expiry === "expired" ? "badge badge-expired" : "badge badge-expiring";
-    badge.textContent = expiry === "expired" ? "Expired" : "Expires soon";
-    box.append(badge);
-  }
-}
-
 function renderQuickCards(cards: QuickCards | null): void {
   // A provider switch/sign-out clears the session copy marks — they are
   // per-provider (a copied NPI for Kay is not "copied" for Eric).
@@ -558,12 +562,9 @@ function renderQuickCards(cards: QuickCards | null): void {
   groupName.textContent = cards.groupName ?? "No group on file";
   groupName.classList.toggle("id-empty", cards.groupName == null);
   renderGroupedDetails(groupIds, cards.type2Fields, selectedProviderId());
-  structuralRow(
-    malpracticeRow,
-    "Malpractice",
-    [cards.malpractice.insurer, cards.malpractice.policyNumber, cards.malpractice.expiration],
-    cards.malpractice.expiry,
-  );
+  // No fixed Malpractice row: those groupInsurance.* fields are ordinary
+  // catalog fields now, so they render through the layout above like any
+  // other (removed 2026-08-19 — see the note on the QuickCards type).
 }
 
 function closeViewSettings(): void {
@@ -710,18 +711,14 @@ viewSettingsCancel.addEventListener("click", () => closeViewSettings());
 
 // Save the picked fields as the layout (PUT /api/me/view-prefs — server-side,
 // so it persists across machines and worker restarts, TS-102), then refetch
-// the profile so the cards re-project under the new layout. Order: the served
-// catalog's listing order for newly-picked fields, with the previously saved
-// relative order preserved for fields that were already in the layout.
+// the profile so the cards re-project under the new layout. Order = the served
+// catalog's listing order, i.e. exactly the order this picker shows.
 viewSettingsSave.addEventListener("click", () => {
   const providerId = selectedProviderId();
-  const cards = currentCards;
-  const kept = (cards?.layout ?? []).filter((key) => pickerSelection.has(key));
-  const keptSet = new Set(kept);
-  const added = currentCatalog
-    .map((f) => f.key)
-    .filter((key) => pickerSelection.has(key) && !keptSet.has(key));
-  const fields = [...kept, ...added];
+  // The saved order IS the picker's order (see orderLayoutByCatalog): a field
+  // ticked today lands where the list shows it, not appended after everything
+  // saved earlier — which is what used to put First name pages from Last name.
+  const fields = orderLayoutByCatalog(pickerSelection, currentCatalog);
   if (fields.length === 0) {
     setError(viewSettingsError, "Pick at least one field to show.");
     return;
@@ -1254,20 +1251,17 @@ function recentSubmissionPhrase(caseItem: CaseListItem | undefined): string | nu
   return whole === 1 ? "yesterday" : `${whole} days ago`;
 }
 
-function renderProviderOptions(selectedId: string | null): void {
-  providerSelect.replaceChildren();
-  const placeholder = new Option(
-    providers.length ? "Select a provider…" : "No providers found",
-    "",
-    true,
-    selectedId == null,
-  );
-  placeholder.disabled = providers.length > 0;
-  providerSelect.add(placeholder);
-  for (const p of providers) {
-    providerSelect.add(new Option(providerLabel(p), p.id, false, p.id === selectedId));
-  }
-  providerSelect.disabled = providers.length === 0;
+/** The "who am I working on, and how do I change it" line above the cards.
+ * With the dropdown retired, Search IS the switcher — so this states the
+ * current provider and offers one button back to it. */
+function renderSelectedProvider(): void {
+  const provider = providers.find((p) => p.id === selectedProvider) ?? null;
+  providerBar.hidden = panelMode !== "case";
+  providerBarName.textContent = provider
+    ? providerLabel(provider)
+    : "No provider selected";
+  providerBarName.classList.toggle("id-empty", provider == null);
+  providerBarSwitch.textContent = provider ? "Change" : "Find a provider";
 }
 
 function clearFillResults(): void {
@@ -1843,15 +1837,15 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
 async function loadProviders(generation: number): Promise<void> {
   setError(mainError, null);
   clearFillResults();
-  providerSelect.disabled = true;
-  providerSelect.replaceChildren(new Option("Loading providers…", ""));
   renderProviderCard(null);
 
+  // The roster is still loaded (search filters it locally, the card reads it,
+  // and a remembered selection is validated against it) — it just no longer
+  // fills a dropdown.
   const response = await sendToBackground({ type: "LIST_PROVIDERS" });
   // A newer org switch / refresh superseded this load — discard silently.
   if (!isCurrent(generation)) return;
   if (!response.ok) {
-    providerSelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
     return;
   }
@@ -1862,11 +1856,11 @@ async function loadProviders(generation: number): Promise<void> {
   const selectedId =
     selected.ok && providers.some((p) => p.id === selected.data) ? selected.data : null;
   // A remembered provider that isn't in the current org's list anymore is
-  // dropped silently — from storage too, not just the dropdown.
+  // dropped silently — from storage too, not just the panel.
   if (selected.ok && selected.data != null && selectedId == null) {
     void sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: null });
   }
-  renderProviderOptions(selectedId);
+  setSelectedProviderId(selectedId);
   const provider = providers.find((p) => p.id === selectedId) ?? null;
   renderProviderCard(provider);
   // Same generation flows down: if a switch lands during these loads they
@@ -1903,10 +1897,11 @@ async function loadOrgs(generation: number): Promise<void> {
   renderOrgContext();
   orgSelect.disabled = true;
   orgSelect.replaceChildren(new Option("Loading organizations…", ""));
-  providerSection.hidden = true;
   // F4.3.5: search operates under an EXPLICIT org — hidden until one resolves
-  // (the identity-guard rule applies to standalone mode too).
-  searchSection.hidden = true;
+  // (the identity-guard rule applies to standalone mode too). Nothing
+  // org-scoped shows until this load lands.
+  orgReady = false;
+  renderModeSurfaces();
   hideSearchResults();
   renderProviderCard(null);
   renderIdentityGuard();
@@ -1921,6 +1916,13 @@ async function loadOrgs(generation: number): Promise<void> {
     return;
   }
   orgs = response.data;
+  membershipsLoaded = true;
+  // Roles are only known now, so this is the first honest moment to check
+  // whether the stored job is still allowed. A session mode outlives a role
+  // change, and leaving someone pressed into Train forms with the button
+  // hidden would strand them on a surface they cannot leave.
+  await enforceModePermission();
+  if (!isCurrent(generation)) return;
 
   if (orgs.length === 0) {
     orgSelect.replaceChildren(new Option("No organizations", ""));
@@ -1938,8 +1940,8 @@ async function loadOrgs(generation: number): Promise<void> {
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
     if (!isCurrent(generation)) return;
     orgSelect.replaceChildren(new Option(orgLabel(sole), sole.orgId, true, true));
-    providerSection.hidden = false;
-    searchSection.hidden = false;
+    orgReady = true;
+    renderModeSurfaces();
     renderIdentityGuard();
     await loadProviders(generation);
     void loadPortalRegistry(generation);
@@ -1966,9 +1968,9 @@ async function loadOrgs(generation: number): Promise<void> {
   }
   orgSelect.disabled = false;
   renderIdentityGuard();
+  orgReady = activeOrgId != null;
+  renderModeSurfaces();
   if (activeOrgId != null) {
-    providerSection.hidden = false;
-    searchSection.hidden = false;
     await loadProviders(generation);
     void loadPortalRegistry(generation);
   } else {
@@ -2101,6 +2103,10 @@ function showMain(auth: AuthState): void {
     panelMode = modeResponse.ok ? modeResponse.data : DEFAULT_PANEL_MODE;
     applyPanelMode();
     if (panelMode === "train") {
+      // Training loads no org, but the ADMIN gate is a fact about memberships
+      // — so read them anyway (a user-scoped call, no org header) or a
+      // trainer's own tab would render with its button hidden.
+      void refreshTrainEligibility();
       await loadSharedRegistry();
       void restoreCapture();
       return;
@@ -2194,6 +2200,8 @@ signoutBtn.addEventListener("click", () => {
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
     orgs = [];
+    membershipsLoaded = false;
+    orgReady = false;
     activeOrgId = null;
     renderOrgContext();
     providers = [];
@@ -2241,8 +2249,8 @@ orgSelect.addEventListener("change", () => {
     if (!isCurrent(generation)) return;
     clearFillResults();
     hideSearchResults();
-    providerSection.hidden = false;
-    searchSection.hidden = false;
+    orgReady = true;
+    renderModeSurfaces();
     renderIdentityGuard();
     await loadProviders(generation);
     void loadPortalRegistry(generation);
@@ -2251,17 +2259,10 @@ orgSelect.addEventListener("change", () => {
   })();
 });
 
-providerSelect.addEventListener("change", () => {
-  const id = selectedProviderId();
-  // Bump synchronously so a slower in-flight case/facility load for the
-  // previous provider discards itself instead of rendering under this one.
-  const generation = bumpGeneration();
-  void sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: id });
-  renderProviderCard(providers.find((p) => p.id === id) ?? null);
-  if (id) {
-    void loadCases(id, generation);
-    void loadFacilities(id, generation);
-  }
+// The provider bar's one button: back to Search, which IS the switcher now.
+providerBarSwitch.addEventListener("click", () => {
+  void setPanelMode("search");
+  searchInput.focus();
 });
 
 facilitySelect.addEventListener("change", () => {
@@ -2594,7 +2595,7 @@ async function selectProviderInPanel(provider: ProviderListItem): Promise<void> 
   if (!providers.some((p) => p.id === provider.id)) providers.push(provider);
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: provider.id });
   if (!isCurrent(generation)) return;
-  renderProviderOptions(provider.id);
+  setSelectedProviderId(provider.id);
   renderProviderCard(providers.find((p) => p.id === provider.id) ?? null);
   await Promise.all([loadCases(provider.id, generation), loadFacilities(provider.id, generation)]);
 }
@@ -2636,10 +2637,24 @@ async function selectCaseInPanel(
     if (!isCurrent(generation)) return;
     if (response.ok) providers = browseableProviders(response.data);
   }
-  renderProviderOptions(providerId);
+  setSelectedProviderId(providerId);
   renderProviderCard(providers.find((p) => p.id === providerId) ?? null);
   await Promise.all([loadCases(providerId, generation), loadFacilities(providerId, generation)]);
   if (recordEntry && isCurrent(generation)) await refreshActiveCase(false);
+}
+
+/**
+ * Picking a search result IS the hand-off into Work cases (2026-08-19).
+ *
+ * The mode flips FIRST so the destination is already on screen while the
+ * provider/case load runs — landing on an empty Search pane and being moved
+ * afterwards reads as a glitch. `setPanelMode` between two org-scoped modes
+ * reloads nothing and does not bump the generation, so the selection in
+ * flight here survives it.
+ */
+async function openInCaseWork(selection: Promise<void>): Promise<void> {
+  await setPanelMode("case");
+  await selection;
 }
 
 function renderSearchResults(data: SearchResults): void {
@@ -2673,7 +2688,9 @@ function renderSearchResults(data: SearchResults): void {
       button.addEventListener("click", () => {
         hideSearchResults();
         searchInput.value = "";
-        void selectCaseInPanel(row.providerId, row.id, true, row.facilityId ?? null);
+        void openInCaseWork(
+          selectCaseInPanel(row.providerId, row.id, true, row.facilityId ?? null),
+        );
       });
       searchResults.append(button);
     }
@@ -2693,6 +2710,17 @@ function renderSearchResults(data: SearchResults): void {
       title.className = "search-row-title";
       title.textContent = `${p.lastName}, ${p.firstName}`;
       button.append(title);
+      // The GROUP is what tells two same-named providers apart, so it leads
+      // the meta line; the NPI follows as the exact identifier. A panel that
+      // sends no groups yields "" and the row reads as it always did.
+      const groups = providerGroupsLabel(p);
+      if (groups) {
+        const groupMeta = document.createElement("span");
+        groupMeta.className = "search-row-meta search-row-group";
+        groupMeta.textContent = groups;
+        groupMeta.title = groups;
+        button.append(groupMeta);
+      }
       if (p.npi) {
         const meta = document.createElement("span");
         meta.className = "search-row-meta mono";
@@ -2702,7 +2730,7 @@ function renderSearchResults(data: SearchResults): void {
       button.addEventListener("click", () => {
         hideSearchResults();
         searchInput.value = "";
-        void selectProviderInPanel(p);
+        void openInCaseWork(selectProviderInPanel(p));
       });
       searchResults.append(button);
     }
@@ -2720,7 +2748,28 @@ async function runSearch(query: string): Promise<void> {
     searchResults.hidden = false;
     return;
   }
-  renderSearchResults(response.data);
+  renderSearchResults(withGroupMatches(response.data, query));
+}
+
+/**
+ * Fold in providers the SERVER's search cannot find (2026-08-19).
+ *
+ * `/api/providers?search=` matches name / NPI / email — not group names. But
+ * the group is exactly what a user reaches for when two people share a name
+ * ("addie wellspring"), so we also narrow the roster the panel already holds
+ * and merge anything the server missed. Local-only, no extra request, and
+ * server rows keep their order and their position at the top: this ADDS
+ * reach, it never reorders or hides what the server decided.
+ *
+ * Skipped entirely when the provider half errored — presenting a locally
+ * filtered subset as if it were the answer would hide the failure.
+ */
+function withGroupMatches(data: SearchResults, query: string): SearchResults {
+  if (data.providersError != null) return data;
+  const seen = new Set(data.providers.map((p) => p.id));
+  const extra = providers.filter((p) => !seen.has(p.id) && providerMatchesQuery(p, query));
+  if (extra.length === 0) return data;
+  return { ...data, providers: [...data.providers, ...extra] };
 }
 
 searchInput.addEventListener("input", () => {
@@ -2847,8 +2896,8 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   if (!isCurrent(generation)) return;
   clearFillResults();
   hideSearchResults();
-  providerSection.hidden = false;
-  searchSection.hidden = false;
+  orgReady = true;
+  renderModeSurfaces();
   renderIdentityGuard();
   await selectCaseInPanel(record.providerId, record.caseId, true, record.facilityId);
   renderHandoffBanner();
@@ -3517,46 +3566,95 @@ async function restoreCapture(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// E6.9 F6.9.7 — the job chooser, and F6.9.9 — Train forms.
+// E6.9 F6.9.7 + 2026-08-19 — the job chooser (Search / Work cases / Train
+// forms), and F6.9.9 — Train forms.
 // ---------------------------------------------------------------------------
 
-/** Show the sections that belong to the current job. Case work is org /
- * provider / case / fill / touch — never capture. Training hides the org,
- * search and provider pickers and owns Capture + Send for approval (and mock
- * dry run / Mark proven). Leaving capture visible on Work cases reopened the
- * dual-door confusion E6.9 closed. */
-function applyPanelMode(): void {
+/**
+ * THE one place that decides what is on screen.
+ *
+ * Two inputs: the current job, and whether an org has resolved (everything
+ * org-scoped stays hidden until it has — the F4.3.5 rule, which now covers
+ * Search too since it reads org-scoped routes).
+ *
+ * It sets only the four top-level containers and never the individual cards
+ * inside #case-work. That is deliberate: those manage their own `hidden` as
+ * data arrives, and a mode switch that reached in would either reveal a card
+ * with nothing in it or clobber a state it did not set. Hiding the parent
+ * hides them regardless; showing it restores exactly what each had decided.
+ */
+function renderModeSurfaces(): void {
   const training = panelMode === "train";
-  modeCaseBtn.setAttribute("aria-pressed", String(!training));
+  const searching = panelMode === "search";
+
+  modeSearchBtn.setAttribute("aria-pressed", String(searching));
+  modeCaseBtn.setAttribute("aria-pressed", String(panelMode === "case"));
   modeTrainBtn.setAttribute("aria-pressed", String(training));
+  // Train forms is admin-only; a non-admin never sees the button at all.
+  // Before memberships land the answer is unknown, so leave it alone.
+  if (membershipsLoaded) modeTrainBtn.hidden = !canTrainForms(orgs);
+
   trainSection.hidden = !training;
+  // The org picker belongs to both org-scoped jobs and to neither of
+  // training's concerns.
   orgField.hidden = training;
-  if (training) {
-    searchSection.hidden = true;
-    providerSection.hidden = true;
-    hideSearchResults();
-    queueSection.hidden = true;
-    handoffBanner.hidden = true;
-  }
+  searchSection.hidden = !(searching && orgReady);
+  caseWork.hidden = training || searching || !orgReady;
+
+  if (training) hideSearchResults();
+  renderSelectedProvider();
   renderCapture();
   void refreshPortalAccessPrompt();
 }
 
+/** Kept as the pre-2026-08-19 name for the call sites that mean "the job
+ * changed, re-render". */
+function applyPanelMode(): void {
+  renderModeSurfaces();
+}
+
+/** Memberships for the admin gate ALONE — training itself is org-free, so
+ * this deliberately does not touch the org picker, providers or portals. */
+async function refreshTrainEligibility(): Promise<void> {
+  const response = await sendToBackground({ type: "LIST_MY_ORGS" });
+  if (!response.ok) return; // unknown stays unknown; the button keeps its state
+  orgs = response.data;
+  membershipsLoaded = true;
+  await enforceModePermission();
+  renderModeSurfaces();
+}
+
+/** Move a user off a job they may no longer do, worker-side too so the next
+ * panel open agrees. A no-op for everyone who is allowed to be where they are. */
+async function enforceModePermission(): Promise<void> {
+  const allowed = fallbackModeFor(panelMode, orgs);
+  if (allowed === panelMode) return;
+  panelMode = allowed;
+  await sendToBackground({ type: "SET_PANEL_MODE", mode: allowed });
+  renderModeSurfaces();
+}
+
 async function setPanelMode(mode: PanelMode): Promise<void> {
   if (panelMode === mode) return;
+  const previous = panelMode;
   panelMode = mode;
   await sendToBackground({ type: "SET_PANEL_MODE", mode });
-  applyPanelMode();
+  renderModeSurfaces();
   if (mode === "train") {
     await loadSharedRegistry();
-  } else {
-    // Returning to case work re-enters the normal load path, which restores
-    // the org pick and everything that hangs off it.
+    return;
+  }
+  // Search and Work cases are BOTH org-scoped and share every loaded cache,
+  // so switching between them is pure presentation — no reload, no generation
+  // bump (which would discard an in-flight pick made from a search result).
+  // Only coming back from training has to re-enter the org-scoped load path.
+  if (previous === "train") {
     void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
     void detectPortal();
   }
 }
 
+modeSearchBtn.addEventListener("click", () => void setPanelMode("search"));
 modeCaseBtn.addEventListener("click", () => void setPanelMode("case"));
 modeTrainBtn.addEventListener("click", () => void setPanelMode("train"));
 

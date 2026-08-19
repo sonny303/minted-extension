@@ -420,6 +420,16 @@ export interface SubmissionTouch {
   source: string;
 }
 
+// One group a provider works under, as carried on a list row. The grain is
+// M:N — the same human can be on two groups' rosters — which is exactly why
+// the search shows it: two rows reading "Jones, Addie" are otherwise
+// indistinguishable. Group names are not PHI.
+export interface ProviderGroupRef {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+}
+
 // GET /api/providers returns the PHI-safe list projection — no SSN, DOB, or
 // home address columns exist in this shape by construction.
 export interface ProviderListItem {
@@ -436,5 +446,9 @@ export interface ProviderListItem {
   groupId: string | null;
   specialty: string | null;
   email: string | null;
+  // OPTIONAL on the wire: a panel deployed before 2026-08-19 sends no `groups`
+  // key at all, and the row must still render — absent means "this server
+  // doesn't say", never "no groups".
+  groups?: ProviderGroupRef[];
   updatedAt: string;
 }

@@ -6,6 +6,7 @@ import {
   DEFAULT_QUICK_CARD_LAYOUT,
   expiryStatus,
   isType2Field,
+  orderLayoutByCatalog,
   projectQuickCards,
   providerWebappPath,
   resolveLayout,
@@ -127,11 +128,23 @@ describe("projectQuickCards (TS-101)", () => {
     expect(caqh?.reason).toBe("empty on provider");
   });
 
-  it("flags the license expiring inside 30 days and the lapsed malpractice", () => {
+  it("flags the license expiring inside 30 days", () => {
     expect(cards.license.expiry).toBe("expiring");
     expect(cards.license.number.value).toBe("KS-12345");
-    expect(cards.malpractice.expiry).toBe("expired");
-    expect(cards.malpractice.insurer.value).toBe("CoverWell Mutual");
+  });
+
+  it("carries NO fixed malpractice row — those are ordinary layout fields now", () => {
+    // Removed 2026-08-19: the hard-coded triplet duplicated catalog fields the
+    // picker already offers, and a user could not remove it. A malpractice
+    // field reaches a card only by being in the layout.
+    expect(cards).not.toHaveProperty("malpractice");
+    const withMalpractice = projectQuickCards(
+      tokens,
+      unresolved,
+      { fields: ["groupInsurance.insurerName"], source: "saved" },
+      TODAY,
+    );
+    expect(withMalpractice.type2Fields.map((f) => f.value)).toEqual(["CoverWell Mutual"]);
   });
 
   it("carries the group name and the layout provenance", () => {
@@ -164,5 +177,50 @@ describe("escape hatch (TS-103, TE-13)", () => {
   it("deep-links the provider id only — never PHI in the URL", () => {
     expect(providerWebappPath("abc-123")).toBe("/providers/abc-123");
     expect(providerWebappPath("a/b")).toBe("/providers/a%2Fb");
+  });
+});
+
+// 2026-08-19 — the saved layout follows the picker's own order, so related
+// fields (first/last name) stay together instead of drifting apart as they are
+// ticked over time.
+describe("orderLayoutByCatalog", () => {
+  const catalog = [
+    { key: "provider.firstName" },
+    { key: "provider.lastName" },
+    { key: "provider.npi" },
+    { key: "group.tin" },
+  ];
+
+  it("orders by the catalog, not by when a field was picked", () => {
+    // The old rule appended newly-ticked fields after the saved ones, which is
+    // exactly how First name ended up separated from Last name.
+    const picked = new Set(["provider.lastName", "provider.npi", "provider.firstName"]);
+    expect(orderLayoutByCatalog(picked, catalog)).toEqual([
+      "provider.firstName",
+      "provider.lastName",
+      "provider.npi",
+    ]);
+  });
+
+  it("drops nothing and duplicates nothing", () => {
+    const picked = ["group.tin", "provider.npi"];
+    const ordered = orderLayoutByCatalog(picked, catalog);
+    expect(ordered).toEqual(["provider.npi", "group.tin"]);
+    expect(new Set(ordered).size).toBe(ordered.length);
+  });
+
+  it("keeps a key the catalog no longer serves, at the end", () => {
+    // Discarding it silently would remove a field the user still sees ticked;
+    // the server is the one that rejects a stale key, at PUT time.
+    const ordered = orderLayoutByCatalog(["legacy.gone", "provider.npi"], catalog);
+    expect(ordered).toEqual(["provider.npi", "legacy.gone"]);
+  });
+
+  it("returns an empty list for an empty selection (the save guard's input)", () => {
+    expect(orderLayoutByCatalog([], catalog)).toEqual([]);
+  });
+
+  it("survives an empty catalog by preserving the caller's order", () => {
+    expect(orderLayoutByCatalog(["b", "a"], [])).toEqual(["b", "a"]);
   });
 });
