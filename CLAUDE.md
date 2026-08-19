@@ -159,6 +159,16 @@ portalUrl, portalKey?, facilityId? }` through
   (ids + display fields only); `GET /api/providers?search=` is the provider
   half, the PHI-minimized list projection. (Panel
   `src/services/providerCases.ts` `searchOrgCases`, `src/services/providers.ts`.)
+- **Provider groups on the list row (2026-08-19):** `/api/providers` rows carry
+  `groups: [{id, name, isPrimary}]` — every CURRENT group membership, primary
+  first then A→Z. The grain is M:N, so `groupId` (the frozen primary mirror)
+  could never answer "which Addie Jones is this?". OPTIONAL both ways: a panel
+  deployed before this sends no key and `providerGroupsLabel` renders nothing
+  rather than claiming the provider has no group. Group names are not PHI.
+  Panel side: `listProviders(ctx, filters, { withGroups: true })` (opt-in — a
+  second org-scoped read, so browser callers still issue exactly one query),
+  pure `indexProviderGroups`/`attachProviderGroups` in `src/lib/groupAssignments.ts`,
+  and gate assertions **27 / 27a** + the `providergroups` leak mode.
 - **View prefs = quick-card layout + SERVED catalog (2026-07-28, supersedes
   the TE-16 mirror):** `GET /api/me/view-prefs` (user-scoped) returns
   `{ fields: string[] | null, catalog: QuickCardCatalogField[] }` — the saved
@@ -208,16 +218,46 @@ portalUrl, portalKey?, facilityId? }` through
   mean reloading the unpacked extension.
 - **The extension never submits portal forms. Unchanged, forever.** The human
   submits; the extension logs. Never a case status change from here (v1).
-- **Two jobs, one panel (E6.9 F6.9.7).** After sign-in the panel asks which
-  job is being done: **Train forms** or **Work cases**. Training shows a payer
-  select → form find/select → capture and NOTHING else — no org, provider or
-  case picker, no quick cards, no touch logging — because a trained form has no
-  org and exists before any case for that payer does. Work cases is the
-  unchanged screen. The mode lives in the WORKER
+- **THREE jobs, one panel (E6.9 F6.9.7; widened 2026-08-19).** After sign-in
+  the panel asks which job is being done: **Search**, **Work cases**, or
+  **Train forms**. Training shows a payer select → form find/select → capture
+  and NOTHING else — no org, provider or case picker, no quick cards, no touch
+  logging — because a trained form has no org and exists before any case for
+  that payer does. Search is org-scoped (its routes are), and picking a result
+  lands in Work cases. The mode lives in the WORKER
   (`src/background/mode.ts`, `chrome.storage.session`) because it decides
-  whether a call carries `x-org-id`; the panel mirrors it. A `SET_ACTIVE_CASE`
+  whether a call carries `x-org-id`; the panel mirrors it. `shouldSendOrgHeader`
+  keys off the mode: only `train` suppresses the header. A `SET_ACTIVE_CASE`
   hand-off FORCES the mode to `case` on receipt — the chooser never stands
   between the webapp's launch and the case it launched.
+- **Train forms is ADMIN-only (2026-08-19).** `canTrainForms(memberships)` =
+  admin in ANY org, since the shared library belongs to no org and the mode
+  carries none; non-admins never see the button. It is an AFFORDANCE, not the
+  wall — the shared-tier routes run on the panel's user-scoped guard and accept
+  any authenticated caller today (panel TD-42). `fallbackModeFor` moves a user
+  whose role changed off a job they may no longer do (worker-side too), so a
+  stored session mode can never strand someone on hidden UI. Roles are only
+  known once `/api/me/orgs` lands, so the button holds its state until then
+  rather than flashing away and back — and TRAIN mode boots that read on its
+  own (`refreshTrainEligibility`), since it otherwise loads no memberships.
+- **Search replaced the Browse-providers dropdown (2026-08-19).** The dropdown
+  could not show which group a provider belongs to, so two same-named
+  providers were indistinguishable in it. Search rows name the group
+  (`providerGroupsLabel`, primary first, "+N" past two) from the new
+  `groups` field on `/api/providers`, and `providerMatchesQuery` folds in
+  roster rows the SERVER's search cannot reach — it matches name/NPI/email,
+  never group names. The selected provider is now plain panel state
+  (`selectedProviderId`), not a `<select>` value; `#provider-bar` states who is
+  loaded and its one button returns to Search, which IS the switcher.
+- **`renderModeSurfaces` is the ONE place that decides what is on screen**,
+  from (mode, orgReady). It toggles four top-level containers —
+  `#train-section`, `#org-field`, `#search-section`, `#case-work` — and never
+  the individual cards inside `#case-work`: those manage their own `hidden` as
+  data arrives, so reaching in would either reveal an empty card or clobber
+  state it did not set. `src/sidepanel/panelMarkup.test.ts` pins the markup
+  contract (every `el()` id resolves, no duplicate ids, every case-work
+  surface really is inside `#case-work`) — main.ts throws at import on a
+  missing id, which means a blank panel, and nothing else would catch it.
 - **Capture is per PAGE (E6.9 F6.9.8 / BITE-CAP-05).** The side panel sends a
   collision-free `pageStep` candidate from `derivePageStep` (heading → URL
   tail → capture sequence); the background names the page AFTER the scan via

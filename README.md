@@ -146,20 +146,29 @@ writes are the existing manual touch POST and the user-scoped layout PUT.
   `GET /api/next-best-action` and renders the ONE server-ranked item — or an
   honest "Queue clear" — with a Work-this-case handback and a webapp deep
   link.
-- **Standalone search & quick cards (F4.3.5):** with no active case the panel
-  is a search-first ad-hoc tool: one input queries cases and providers
-  concurrently (each half degrades independently). A provider opens the
-  read-only Type 1 / Type 2 quick cards — name + DOB header; monospace,
-  hover-copy IDs (defaults: NPI, CAQH, License # / group NPI, TIN); license
-  and malpractice rows with amber <30-day expiry badges (red when lapsed);
-  honest em-dash empties carrying the profile's unresolved reason. "Open in
-  Minted Panel ↗" deep-links `/providers/:id` in a NEW tab (portal session
-  preserved). Edit Layout picks any fields from the
-  SERVED schema-derived catalog (117 fields riding `GET /api/me/view-prefs` —
-  no local mirror, no field cap; `provider.ssnLast4` is offered as of
-  2026-07-28, the full SSN has no token to name) and persists
-  via `PUT /api/me/view-prefs`; a missing/invalid stored layout degrades to
-  the default. The provider's active cases list under the cards.
+- **Search & quick cards (F4.3.5; the Search JOB since 2026-08-19):** Search
+  is one of the panel's three modes and the ONLY way to pick a provider or
+  case — one free-text input queries cases and providers concurrently (each
+  half degrades independently). Rows name the provider's **group** beside the
+  name, because the same human can be on two groups' rosters and the name
+  alone cannot tell them apart; typing a group name narrows locally over the
+  loaded roster, which the server's name/NPI/email search does not cover.
+  Picking a result lands in Work cases with that provider/case loaded. A
+  provider opens the read-only Type 1 / Type 2 quick cards — name + DOB
+  header; monospace, hover-copy IDs (defaults: NPI, CAQH, License # / group
+  NPI, TIN); a license row with amber <30-day expiry badges (red when
+  lapsed); honest em-dash empties carrying the profile's unresolved reason.
+  There is no fixed malpractice row (removed 2026-08-19): those
+  `groupInsurance.*` fields are ordinary picker fields, so they appear only
+  when the layout asks for them. "Open in Minted Panel ↗" deep-links
+  `/providers/:id` in a NEW tab (portal session preserved). Edit Layout picks
+  any fields from the SERVED schema-derived catalog (117 fields riding
+  `GET /api/me/view-prefs` — no local mirror, no field cap;
+  `provider.ssnLast4` is offered as of 2026-07-28, the full SSN has no token
+  to name) and persists via `PUT /api/me/view-prefs`; the saved order is the
+  PICKER's order, so related fields stay together instead of drifting apart
+  as they are ticked. A missing/invalid stored layout degrades to the
+  default. The provider's active cases list under the cards.
 - **PHI discipline (TE-3/TE-14):** card values, tokens, and context live in
   memory only — never `chrome.storage`, IndexedDB, logs, or HTTP cache — and
   clear on org/case change, sign-out, tab close, and context expiry. The

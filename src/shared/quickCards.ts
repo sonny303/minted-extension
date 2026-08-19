@@ -110,13 +110,6 @@ export interface QuickCardLicense {
   expiry: ExpiryStatus | null;
 }
 
-export interface QuickCardMalpractice {
-  insurer: QuickCardField;
-  policyNumber: QuickCardField;
-  expiration: QuickCardField;
-  expiry: ExpiryStatus | null;
-}
-
 export interface QuickCards {
   // Type 1 header: full name + DOB (bold, compact).
   name: string;
@@ -128,7 +121,12 @@ export interface QuickCards {
   // Fixed structural rows (always rendered, honest when empty).
   license: QuickCardLicense;
   groupName: string | null;
-  malpractice: QuickCardMalpractice;
+  // NB there is deliberately NO fixed `malpractice` row (removed 2026-08-19).
+  // It hard-coded three groupInsurance.* fields onto every card, which the
+  // served catalog already offers as ordinary pickable fields — so a user who
+  // did not want them could not remove them, and one who did got them twice.
+  // Malpractice now reaches a card only through the layout, like every other
+  // field. The license row stays fixed because its expiry badge is structural.
   // The layout the grid reflects, and where it came from (TS-102).
   layout: string[];
   layoutSource: "saved" | "default";
@@ -193,7 +191,6 @@ export function projectQuickCards(
   }
 
   const licenseExpiration = field("license.expirationDate");
-  const malpracticeExpiration = field("groupInsurance.policyEndDate");
   const name = [asDisplay(values.get("provider.firstName")), asDisplay(values.get("provider.lastName"))]
     .filter(Boolean)
     .join(" ");
@@ -211,15 +208,42 @@ export function projectQuickCards(
       expiry: expiryStatus(licenseExpiration.value, today),
     },
     groupName: asDisplay(values.get("group.name")),
-    malpractice: {
-      insurer: field("groupInsurance.insurerName"),
-      policyNumber: field("groupInsurance.policyNumber"),
-      expiration: malpracticeExpiration,
-      expiry: expiryStatus(malpracticeExpiration.value, today),
-    },
     layout: layout.fields,
     layoutSource: layout.source,
   };
+}
+
+/**
+ * Order a picked field set the way the Edit-layout picker lists it
+ * (2026-08-19).
+ *
+ * The layout used to be saved as "the fields you already had, in their old
+ * order, then whatever you just ticked" — so ticking First name on a layout
+ * that already had Last name appended it at the END, and the two rendered
+ * pages apart. The picker's own order is the one the user is looking at while
+ * choosing, so it is the only order that can't surprise them; adopting it also
+ * groups related fields (first/last name, address parts) automatically, since
+ * the served catalog lists them together.
+ *
+ * A key the catalog no longer serves keeps its relative order at the END
+ * rather than being dropped: a stale saved key is the server's business at PUT
+ * time (it 422s), and silently discarding a field the user can still see
+ * checked would be the worse failure.
+ */
+export function orderLayoutByCatalog(
+  picked: Iterable<string>,
+  catalog: readonly { key: string }[],
+): string[] {
+  const wanted = new Set(picked);
+  const ordered: string[] = [];
+  for (const field of catalog) {
+    if (wanted.delete(field.key)) ordered.push(field.key);
+  }
+  // Whatever the catalog didn't name, in the caller's own order.
+  for (const key of picked) {
+    if (wanted.delete(key)) ordered.push(key);
+  }
+  return ordered;
 }
 
 /** The 1-to-many escape hatch (F4.3.5 3.4, PM Q3): "Open in Minted Panel ↗" →

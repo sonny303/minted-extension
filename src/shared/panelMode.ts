@@ -14,11 +14,14 @@
 // was the F6.9.8 criterion), with the pre-existing user-scoped routes named as
 // a contract set rather than an inline string compare.
 
-export type PanelMode = "train" | "case";
+export type PanelMode = "search" | "train" | "case";
 
-export const PANEL_MODES: readonly PanelMode[] = ["train", "case"];
+// Listed in the order the panel renders them (2026-08-19): find the work,
+// then do it; training is the separate, admin-only job.
+export const PANEL_MODES: readonly PanelMode[] = ["search", "case", "train"];
 
 export const PANEL_MODE_LABELS: Readonly<Record<PanelMode, string>> = {
+  search: "Search",
   train: "Train forms",
   case: "Work cases",
 };
@@ -29,7 +32,41 @@ export const PANEL_MODE_LABELS: Readonly<Record<PanelMode, string>> = {
 export const DEFAULT_PANEL_MODE: PanelMode = "case";
 
 export function parsePanelMode(raw: unknown): PanelMode | null {
-  return raw === "train" || raw === "case" ? raw : null;
+  return raw === "search" || raw === "train" || raw === "case" ? raw : null;
+}
+
+/**
+ * Train forms is ADMIN-only (2026-08-19).
+ *
+ * Training writes the GLOBAL shared library every organization inherits, so
+ * the question "may this person train?" is not answerable per-org — and the
+ * mode itself carries no org at all. The honest signal available to the panel
+ * is the caller's memberships: admin anywhere ⇒ the trainer is offered.
+ *
+ * This is an AFFORDANCE, not the security boundary. The shared-tier routes run
+ * on the panel's user-scoped guard and accept any authenticated caller today
+ * (panel TD-42); if that must become a real restriction, it belongs in the
+ * panel's guard, not here.
+ */
+export const ADMIN_ROLE = "admin";
+
+export function canTrainForms(memberships: readonly { role: string }[]): boolean {
+  return memberships.some((m) => m.role?.trim().toLowerCase() === ADMIN_ROLE);
+}
+
+/** The modes to render for this user, in PANEL_MODES order. */
+export function visiblePanelModes(memberships: readonly { role: string }[]): PanelMode[] {
+  const canTrain = canTrainForms(memberships);
+  return PANEL_MODES.filter((mode) => mode !== "train" || canTrain);
+}
+
+/** Where a user who may not train (or whose admin role was revoked mid-session)
+ * lands instead. Never leave them on a mode whose UI is hidden. */
+export function fallbackModeFor(
+  mode: PanelMode,
+  memberships: readonly { role: string }[],
+): PanelMode {
+  return mode === "train" && !canTrainForms(memberships) ? DEFAULT_PANEL_MODE : mode;
 }
 
 /**
@@ -53,8 +90,10 @@ export const USER_SCOPED_PATHS: readonly string[] = [
  * Should this request carry `x-org-id`?
  *
  * Training mode sends NO org header at all — including for multi-org users —
- * because nothing it touches is org-scoped. Case mode sends one whenever an org
- * has been resolved, except on the user-scoped routes above.
+ * because nothing it touches is org-scoped. Case AND search modes send one
+ * whenever an org has been resolved, except on the user-scoped routes above:
+ * search reads `/api/cases?q=` and `/api/providers?search=`, which are
+ * org-scoped exactly like the case work they feed.
  *
  * `orgId == null` is the single-org case: the server resolves the sole
  * membership and no header is needed.
@@ -74,4 +113,11 @@ export function shouldSendOrgHeader(
  * confusion E6.9 closed. */
 export function isCaptureMode(mode: PanelMode): boolean {
   return mode === "train";
+}
+
+/** Search and Work cases both operate inside one organization; Train forms
+ * does not. This is the ONE predicate that decides whether the org picker and
+ * everything hanging off it applies. */
+export function isOrgScopedMode(mode: PanelMode): boolean {
+  return mode !== "train";
 }

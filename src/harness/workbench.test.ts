@@ -20,6 +20,7 @@ import {
   postSubmissionTouch,
   putViewPrefs,
   searchCases,
+  listProviders,
   searchProviders,
   completeTaskStep,
   proposeFieldMap,
@@ -52,6 +53,7 @@ import {
 } from "../background/activeCase";
 import { buildStructuredTouchBody } from "../shared/structuredTouch";
 import { projectQuickCards, resolveLayout } from "../shared/quickCards";
+import { providerGroupsLabel } from "../shared/browseProviders";
 import { ACTIVE_CASE_IDLE_MS, type ActiveCaseRecord } from "../shared/handoff";
 import type { PortalFieldMap, PortalRegistryRow } from "../shared/apiTypes";
 
@@ -378,6 +380,21 @@ describe("TS-100 — unified standalone search", () => {
     expect(rows[0]).not.toHaveProperty("ssnLast4");
     expect(rows[0]).not.toHaveProperty("dateOfBirth");
   });
+
+  // 2026-08-19 — the row carries the provider's groups, so a search result can
+  // name the group beside the person. Group names are not PHI; this asserts
+  // the field survives the real fetch layer, not just the pure formatter.
+  it("carries every group a provider works under, primary first", async () => {
+    const rows = await listProviders();
+    const kay = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
+    expect(kay?.groups?.map((g) => g.name)).toEqual([
+      "Kansas Fitness Physio Group",
+      "Wellspring PT",
+    ]);
+    expect(kay?.groups?.[0]?.isPrimary).toBe(true);
+    // The formatter the panel actually renders, over that same wire shape.
+    expect(providerGroupsLabel(kay!)).toBe("Kansas Fitness Physio Group · Wellspring PT");
+  });
 });
 
 describe("TS-101 — quick cards from the live profile endpoint", () => {
@@ -393,8 +410,6 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     expect(caqh?.reason).toBe("empty on provider");
     // The fixture license expires 20 days out — inside the amber window.
     expect(cards.license.expiry).toBe("expiring");
-    // Malpractice is 200 days out — no badge.
-    expect(cards.malpractice.expiry).toBe("ok");
     expect(cards.groupName).toBe("Kansas Fitness Physio Group");
   });
 });

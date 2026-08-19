@@ -1282,6 +1282,8 @@ button.link:hover {
 }
 
 .search-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1291,6 +1293,16 @@ button.link:hover {
   flex: none;
   font-size: 11px;
   color: var(--mp-ink-600);
+}
+
+/* The group name: informative but never at the expense of the person's name,
+   so it is the part that shrinks and ellipsizes first. */
+.search-row-group {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .search-empty {
@@ -1333,24 +1345,22 @@ button.link:hover {
   opacity: 1;
 }
 
-.qc-struct {
+/* Work cases' "who is loaded" line. Search is the switcher now, so this
+   states the current provider and offers one button back to it. */
+.provider-bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--mp-line-100);
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.qc-struct-label {
-  font: 600 11px/1.4 var(--mp-font);
+.provider-bar-name {
+  overflow: hidden;
+  font: 600 12px/1.4 var(--mp-font);
   color: var(--mp-ink-900);
-}
-
-.qc-struct-value {
-  font: 500 12px var(--mp-mono);
-  color: var(--mp-ink-900);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .qc-type2 {
@@ -1970,7 +1980,11 @@ button.link:hover {
    the whole panel does, so it should read at a glance. */
 .mode-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Auto columns, not a fixed 1fr 1fr: Train forms is admin-only and hidden
+     (display:none) for everyone else, so the row has to size itself to two
+     buttons or three without a second rule. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 2px;
   padding: 2px;
   margin-bottom: 12px;
