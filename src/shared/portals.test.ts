@@ -23,10 +23,19 @@ function row(overrides: Partial<PortalRegistryRow>): PortalRegistryRow {
 describe("portalOriginPatterns", () => {
   it("returns a host match pattern per https form origin", () => {
     const patterns = portalOriginPatterns([
-      row({ portalKey: "aetna", formUrl: "https://www.aetna.com/join/network?step=1" }),
-      row({ portalKey: "bcbsks", formUrl: "https://provider.bcbsks.com/form/x.faces" }),
+      row({
+        portalKey: "aetna",
+        formUrl: "https://www.aetna.com/join/network?step=1",
+      }),
+      row({
+        portalKey: "bcbsks",
+        formUrl: "https://provider.bcbsks.com/form/x.faces",
+      }),
     ]);
-    expect(patterns).toEqual(["https://www.aetna.com/*", "https://provider.bcbsks.com/*"]);
+    expect(patterns).toEqual([
+      "https://www.aetna.com/*",
+      "https://provider.bcbsks.com/*",
+    ]);
   });
 
   it("collapses many rows on one host to a single pattern", () => {
@@ -54,19 +63,47 @@ describe("portalOriginPatterns", () => {
 
 describe("matchPortalByUrl", () => {
   it("returns null for an empty registry (not a page mismatch signal)", () => {
-    expect(matchPortalByUrl("https://provider.example.com/enroll", [])).toBeNull();
+    expect(
+      matchPortalByUrl("https://provider.example.com/enroll", []),
+    ).toBeNull();
   });
 
   it("matches the longest formUrl prefix", () => {
     const rows = [
-      row({ portalKey: "host", name: "Host", formUrl: "https://provider.example.com/" }),
+      row({
+        portalKey: "host",
+        name: "Host",
+        formUrl: "https://provider.example.com/",
+      }),
       row({
         portalKey: "enroll",
         name: "Enroll",
         formUrl: "https://provider.example.com/enroll",
       }),
     ];
-    const hit = matchPortalByUrl("https://provider.example.com/enroll/step2?x=1", rows);
+    const hit = matchPortalByUrl(
+      "https://provider.example.com/enroll/step2?x=1",
+      rows,
+    );
     expect(hit?.key).toBe("enroll");
+  });
+});
+
+describe("matched portal identity", () => {
+  it("carries the payer id through, so a finished capture can link to its editor", () => {
+    // The panel hands a sent capture to the payer's template editor in the web
+    // app. Dropping the id here would leave the trainer with the instruction
+    // and no way to follow it.
+    const matched = matchPortalByUrl("https://p.example.com/form", [
+      row({ formUrl: "https://p.example.com/form", payerId: "payer-1" }),
+    ]);
+    expect(matched?.payerId).toBe("payer-1");
+  });
+
+  it("is null for a registry row that names no payer", () => {
+    const matched = matchPortalByUrl("https://p.example.com/form", [
+      row({ formUrl: "https://p.example.com/form" }),
+    ]);
+    expect(matched?.payerId).toBeNull();
   });
 });

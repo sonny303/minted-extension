@@ -12,81 +12,90 @@ import { applyFill, clearPortalForm } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
 import {
   cancelElementPick,
-  countSelectorMatches,
-  highlightSelector,
+  describeSelectorMatches,
+  highlightSelectorReport,
   startElementPick,
 } from "./elementPicker";
 
-chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResponse) => {
-  if (message?.type === "PING") {
-    sendResponse({ ok: true, data: "pong" });
-    return false;
-  }
-  if (message?.type === "SCAN_FIELDS") {
-    // Capture reads the form's shape only: labels, selectors, control types.
-    // No control's VALUE is ever read, so nothing here can carry PHI.
-    try {
-      sendResponse({ ok: true, data: scanCapturableFields() });
-    } catch (error) {
-      sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : "Could not read this form",
-      });
+chrome.runtime.onMessage.addListener(
+  (message: ContentRequest, _sender, sendResponse) => {
+    if (message?.type === "PING") {
+      sendResponse({ ok: true, data: "pong" });
+      return false;
     }
-    return false;
-  }
-  if (message?.type === "PICK_ELEMENT") {
-    // ASYNC: the pick resolves only when the human clicks or cancels, so this
-    // branch returns true to hold the message channel open. Every other branch
-    // answers synchronously and returns false.
-    startElementPick()
-      .then((outcome) => sendResponse({ ok: true, data: outcome }))
-      .catch((error) =>
+    if (message?.type === "SCAN_FIELDS") {
+      // Capture reads the form's shape only: labels, selectors, control types.
+      // No control's VALUE is ever read, so nothing here can carry PHI.
+      try {
+        sendResponse({ ok: true, data: scanCapturableFields() });
+      } catch (error) {
         sendResponse({
           ok: false,
-          error: error instanceof Error ? error.message : "Could not pick a field",
-        }),
-      );
-    return true;
-  }
-  if (message?.type === "CANCEL_PICK") {
-    cancelElementPick();
-    sendResponse({ ok: true, data: null });
-    return false;
-  }
-  if (message?.type === "MATCH_SELECTOR") {
-    // Shape question only: how many elements does this selector hit? Never
-    // reads what any of them contain. `highlight` also flashes them green so
-    // the trainer can SEE which control they just described.
-    sendResponse({
-      ok: true,
-      data: message.highlight
-        ? highlightSelector(message.selector)
-        : countSelectorMatches(message.selector),
-    });
-    return false;
-  }
-  if (message?.type === "CLEAR_FORM") {
-    try {
-      sendResponse({ ok: true, data: clearPortalForm() });
-    } catch (error) {
+          error:
+            error instanceof Error ? error.message : "Could not read this form",
+        });
+      }
+      return false;
+    }
+    if (message?.type === "PICK_ELEMENT") {
+      // ASYNC: the pick resolves only when the human clicks or cancels, so this
+      // branch returns true to hold the message channel open. Every other branch
+      // answers synchronously and returns false.
+      startElementPick()
+        .then((outcome) => sendResponse({ ok: true, data: outcome }))
+        .catch((error) =>
+          sendResponse({
+            ok: false,
+            error:
+              error instanceof Error ? error.message : "Could not pick a field",
+          }),
+        );
+      return true;
+    }
+    if (message?.type === "CANCEL_PICK") {
+      cancelElementPick();
+      sendResponse({ ok: true, data: null });
+      return false;
+    }
+    if (message?.type === "MATCH_SELECTOR") {
+      // Shape question only: how many elements does this selector hit, how many
+      // of those could the engine fill, and are they one radio group? Never
+      // reads what any of them contain. `highlight` also flashes them green so
+      // the trainer can SEE which controls they just described.
       sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : "Could not clear this form",
+        ok: true,
+        data: message.highlight
+          ? highlightSelectorReport(message.selector)
+          : describeSelectorMatches(message.selector),
       });
+      return false;
+    }
+    if (message?.type === "CLEAR_FORM") {
+      try {
+        sendResponse({ ok: true, data: clearPortalForm() });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not clear this form",
+        });
+      }
+      return false;
+    }
+    if (message?.type === "APPLY_FILL") {
+      try {
+        sendResponse({ ok: true, data: applyFill(message.instructions ?? []) });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error:
+            error instanceof Error ? error.message : "Fill failed on the page",
+        });
+      }
+      return false;
     }
     return false;
-  }
-  if (message?.type === "APPLY_FILL") {
-    try {
-      sendResponse({ ok: true, data: applyFill(message.instructions ?? []) });
-    } catch (error) {
-      sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : "Fill failed on the page",
-      });
-    }
-    return false;
-  }
-  return false;
-});
+  },
+);

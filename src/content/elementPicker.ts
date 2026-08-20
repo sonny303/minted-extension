@@ -12,7 +12,12 @@
 // `describeControl` the scanner uses — and never its value. Pointing at a box
 // that already contains an NPI captures "there is a text box here called NPI",
 // never the digits.
-import { describeControl, nearestCapturableControl, type CapturedField } from "./captureScan";
+import type { SelectorMatchReport } from "../shared/selectorMatch";
+import {
+  describeControl,
+  nearestCapturableControl,
+  type CapturedField,
+} from "./captureScan";
 
 /** What the pick produced. `cancelled` is a first-class outcome, not an error:
  * pressing Escape is a normal thing to do and must not surface as a failure. */
@@ -170,16 +175,62 @@ export function startElementPick(): Promise<PickOutcome> {
   });
 }
 
-/** How many elements a selector currently matches on this page — the
- * "re-test selector" answer. 1 is healthy; 0 means it will never fill, and >1
- * means it is ambiguous and may fill the wrong box. An invalid selector counts
- * as 0 rather than throwing across the messaging boundary. */
-export function countSelectorMatches(selector: string): number {
-  try {
-    return document.querySelectorAll(selector).length;
-  } catch {
-    return 0;
+/** Can the fill engine write to this element? Mirrors `bySelector` in
+ * `fillEngine.ts` EXACTLY — a selector the workshop calls healthy and the
+ * engine then skips is worse than no verdict at all, so the two definitions of
+ * "a field" have to be the same one. Pinned by a parity test. */
+function isFillable(el: Element): boolean {
+  return (
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLSelectElement ||
+    el instanceof HTMLTextAreaElement
+  );
+}
+
+/** Are these matches the N controls of ONE radio group? That is a single field
+ * rendered as N inputs — the shape the scanner's own name-based selector
+ * produces — and calling it ambiguity would send a trainer to "fix" a correct
+ * selector. */
+function isOneRadioGroup(els: readonly Element[]): boolean {
+  if (els.length < 2) return false;
+  const names = new Set<string>();
+  for (const el of els) {
+    if (!(el instanceof HTMLInputElement) || el.type !== "radio" || !el.name)
+      return false;
+    names.add(el.name);
   }
+  return names.size === 1;
+}
+
+/** What a selector would DO on this page: not just how many elements it hits,
+ * but how many of those the engine could fill, and whether they are one radio
+ * group. `selectorVerdict` (shared/selectorMatch.ts) turns this into words —
+ * the page measures, the panel interprets.
+ *
+ * An invalid selector is reported as `valid: false` rather than thrown across
+ * the messaging boundary, and is deliberately NOT collapsed into "matched
+ * nothing": the fix for a typo is not the fix for a missing field. */
+export function describeSelectorMatches(selector: string): SelectorMatchReport {
+  let els: Element[];
+  try {
+    els = Array.from(document.querySelectorAll(selector));
+  } catch {
+    return { valid: false, matches: 0, fillable: 0, radioGroup: false };
+  }
+  return {
+    valid: true,
+    matches: els.length,
+    fillable: els.filter(isFillable).length,
+    radioGroup: isOneRadioGroup(els),
+  };
+}
+
+/** How many elements a selector currently matches on this page. Kept as the
+ * raw count for callers that only need a number; the trainer-facing answer is
+ * `describeSelectorMatches`, because the count alone gets a wrapper, a radio
+ * group and a typo all wrong. */
+export function countSelectorMatches(selector: string): number {
+  return describeSelectorMatches(selector).matches;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +275,7 @@ function clearHighlight(): void {
  * leave a control looking edited. The first match is scrolled into view —
  * a highlight below the fold answers nothing.
  */
-export function highlightSelector(selector: string): number {
+export function highlightSelectorReport(selector: string): SelectorMatchReport {
   clearHighlight();
   if (!document.getElementById(HIGHLIGHT_STYLE_ID)) {
     const style = document.createElement("style");
@@ -236,14 +287,24 @@ export function highlightSelector(selector: string): number {
   try {
     matches = Array.from(document.querySelectorAll(selector));
   } catch {
-    return 0; // invalid selector — same answer as "found nothing"
+    // Invalid CSS: nothing to paint, and the report says WHY so the panel can
+    // tell a typo from a field that is genuinely gone.
+    return { valid: false, matches: 0, fillable: 0, radioGroup: false };
   }
   for (const el of matches) el.classList.add(HIGHLIGHT_CLASS);
   // Optional-called: scrolling is a courtesy, and a context that does not
   // implement it must not turn a successful test into a thrown error.
   matches[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
   if (matches.length > 0) {
-    highlightTimer = setTimeout(clearHighlight, HIGHLIGHT_MS) as unknown as number;
+    highlightTimer = setTimeout(
+      clearHighlight,
+      HIGHLIGHT_MS,
+    ) as unknown as number;
   }
-  return matches.length;
+  return describeSelectorMatches(selector);
+}
+
+/** The count-only form, for the tests and callers that want a number. */
+export function highlightSelector(selector: string): number {
+  return highlightSelectorReport(selector).matches;
 }

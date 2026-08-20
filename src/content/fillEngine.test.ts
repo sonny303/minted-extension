@@ -3,9 +3,12 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyFill, clearPortalForm } from "./fillEngine";
+import { describeSelectorMatches } from "./elementPicker";
 import type { FillInstruction } from "../shared/fill";
 
-function instr(over: Partial<FillInstruction> & Pick<FillInstruction, "label" | "selector">): FillInstruction {
+function instr(
+  over: Partial<FillInstruction> & Pick<FillInstruction, "label" | "selector">,
+): FillInstruction {
   return {
     mapId: over.mapId ?? "m1",
     label: over.label,
@@ -26,19 +29,33 @@ describe("applyFill", () => {
       <label>First Name <input id="fn" type="text" /></label>
       <label>Provider's First Name <input id="pfn" type="text" /></label>
     `;
-    const result = applyFill([instr({ label: "First Name", selector: "label:First Name", value: "Ada" })]);
+    const result = applyFill([
+      instr({
+        label: "First Name",
+        selector: "label:First Name",
+        value: "Ada",
+      }),
+    ]);
     expect(result.filled).toEqual(["First Name"]);
-    expect((document.getElementById("fn") as HTMLInputElement).value).toBe("Ada");
+    expect((document.getElementById("fn") as HTMLInputElement).value).toBe(
+      "Ada",
+    );
     expect((document.getElementById("pfn") as HTMLInputElement).value).toBe("");
   });
 
   it("fills by CSS selector and reports not-found with the pinned reason", () => {
     document.body.innerHTML = `<input id="npi" type="text" />`;
-    const hit = applyFill([instr({ label: "NPI", selector: "#npi", value: "123" })]);
+    const hit = applyFill([
+      instr({ label: "NPI", selector: "#npi", value: "123" }),
+    ]);
     expect(hit.filled).toEqual(["NPI"]);
-    expect((document.getElementById("npi") as HTMLInputElement).value).toBe("123");
+    expect((document.getElementById("npi") as HTMLInputElement).value).toBe(
+      "123",
+    );
 
-    const miss = applyFill([instr({ label: "Missing", selector: "#gone", value: "x" })]);
+    const miss = applyFill([
+      instr({ label: "Missing", selector: "#gone", value: "x" }),
+    ]);
     expect(miss.filled).toEqual([]);
     expect(miss.skipped).toEqual([
       { label: "Missing", reason: "field not found on this page", mapId: "m1" },
@@ -56,7 +73,9 @@ describe("applyFill", () => {
       }),
     ]);
     expect(result.filled).toEqual(["Alt"]);
-    expect((document.getElementById("alt") as HTMLInputElement).value).toBe("ok");
+    expect((document.getElementById("alt") as HTMLInputElement).value).toBe(
+      "ok",
+    );
   });
 
   it("skips disabled/readonly and file inputs", () => {
@@ -66,7 +85,12 @@ describe("applyFill", () => {
     `;
     const result = applyFill([
       instr({ label: "RO", selector: "#ro", value: "x" }),
-      instr({ label: "File", selector: "#file", fieldType: "file", value: "x" }),
+      instr({
+        label: "File",
+        selector: "#file",
+        fieldType: "file",
+        value: "x",
+      }),
     ]);
     expect(result.filled).toEqual([]);
     expect(result.skipped.map((s) => s.reason)).toEqual([
@@ -81,12 +105,26 @@ describe("applyFill", () => {
       <input id="cb" type="checkbox" />
     `;
     const result = applyFill([
-      instr({ label: "State", selector: "#st", fieldType: "select", value: "Missouri" }),
-      instr({ label: "Agree", selector: "#cb", fieldType: "checkbox", value: "yes" }),
+      instr({
+        label: "State",
+        selector: "#st",
+        fieldType: "select",
+        value: "Missouri",
+      }),
+      instr({
+        label: "Agree",
+        selector: "#cb",
+        fieldType: "checkbox",
+        value: "yes",
+      }),
     ]);
     expect(result.filled).toEqual(["State", "Agree"]);
-    expect((document.getElementById("st") as HTMLSelectElement).value).toBe("MO");
-    expect((document.getElementById("cb") as HTMLInputElement).checked).toBe(true);
+    expect((document.getElementById("st") as HTMLSelectElement).value).toBe(
+      "MO",
+    );
+    expect((document.getElementById("cb") as HTMLInputElement).checked).toBe(
+      true,
+    );
   });
 
   it("TS-162 — names the control and a bounded option sample when a dropdown misses", () => {
@@ -100,11 +138,21 @@ describe("applyFill", () => {
       </select>
     `;
     const result = applyFill([
-      instr({ label: "State", selector: "#st", fieldType: "select", value: "Kansas" }),
+      instr({
+        label: "State",
+        selector: "#st",
+        fieldType: "select",
+        value: "Kansas",
+      }),
     ]);
     // "Kansas" matches the option TEXT, so this path is the unmatched code.
     const miss = applyFill([
-      instr({ label: "State", selector: "#st", fieldType: "select", value: "Colorado" }),
+      instr({
+        label: "State",
+        selector: "#st",
+        fieldType: "select",
+        value: "Colorado",
+      }),
     ]);
     expect(result.filled).toEqual(["State"]);
     expect(miss.skipped[0]?.reason).toBe(
@@ -115,7 +163,14 @@ describe("applyFill", () => {
 
   it("keeps selector-not-found wording distinct from a vocabulary miss", () => {
     document.body.innerHTML = `<select id="st"><option value="KS">Kansas</option></select>`;
-    const gone = applyFill([instr({ label: "State", selector: "#gone", fieldType: "select", value: "KS" })]);
+    const gone = applyFill([
+      instr({
+        label: "State",
+        selector: "#gone",
+        fieldType: "select",
+        value: "KS",
+      }),
+    ]);
     expect(gone.skipped).toEqual([
       { label: "State", reason: "field not found on this page", mapId: "m1" },
     ]);
@@ -176,8 +231,12 @@ describe("clearPortalForm", () => {
       <input id="t" type="text" value="Ada" />
     `;
     expect(clearPortalForm()).toBe(1);
-    expect(document.querySelector<HTMLInputElement>("#h")!.value).toBe("viewstate");
-    expect(document.querySelector<HTMLInputElement>("#b")!.value).toBe("Submit");
+    expect(document.querySelector<HTMLInputElement>("#h")!.value).toBe(
+      "viewstate",
+    );
+    expect(document.querySelector<HTMLInputElement>("#b")!.value).toBe(
+      "Submit",
+    );
   });
 
   it("fires input+change so a controlled input sees the clear", () => {
@@ -208,4 +267,48 @@ describe("clearPortalForm", () => {
     expect(clearPortalForm()).toBe(1);
     expect(document.querySelector<HTMLInputElement>("#good")!.value).toBe("");
   });
+});
+
+// The Selector Workshop's verdict is only worth reading if it agrees with the
+// engine. `describeSelectorMatches` keeps its own notion of "a field the fill
+// can write to" (input / select / textarea), which is a COPY of `bySelector`'s
+// — so pin the two together rather than trusting the comment.
+describe("workshop / engine parity on what counts as a field", () => {
+  const cases = [
+    {
+      name: "text input by id",
+      html: '<input id="t" type="text">',
+      selector: "#t",
+    },
+    {
+      name: "select",
+      html: '<select id="s"><option value="x">x</option></select>',
+      selector: "#s",
+    },
+    { name: "textarea", html: '<textarea id="a"></textarea>', selector: "#a" },
+    {
+      name: "wrapper div",
+      html: '<div id="w"><input type="text"></div>',
+      selector: "#w",
+    },
+    {
+      name: "a label",
+      html: '<label id="l">Name</label><input type="text">',
+      selector: "#l",
+    },
+    { name: "nothing", html: "<p>hi</p>", selector: "#missing" },
+  ];
+
+  for (const c of cases) {
+    it(`agrees on ${c.name}`, () => {
+      document.body.innerHTML = c.html;
+      const workshopSaysFillable =
+        describeSelectorMatches(c.selector).fillable > 0;
+      const report = applyFill([
+        instr({ label: c.name, selector: c.selector, value: "x" }),
+      ]);
+      const engineFilled = report.filled.length > 0;
+      expect(workshopSaysFillable).toBe(engineFilled);
+    });
+  }
 });

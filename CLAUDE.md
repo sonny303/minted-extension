@@ -76,10 +76,10 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   `src/server/profileFieldMapJoin.test.ts`.)
 - **Profile response:** `GET /api/providers/:id/profile?state=XX&facilityId=…`
   returns `provider` + `tokens[{token, value}]` + `unresolved[{token, reason}]`
-  + `facilities` + `selected_facility_id`; ambiguous facility sets flag
-  `meta.needs_facility`. The snake_case keys `selected_facility_id` and
-  `needs_facility` are the locked wire contract, unlike the camelCased rows.
-  (Panel `src/services/providerProfile.ts`.)
+  - `facilities` + `selected_facility_id`; ambiguous facility sets flag
+    `meta.needs_facility`. The snake_case keys `selected_facility_id` and
+    `needs_facility` are the locked wire contract, unlike the camelCased rows.
+    (Panel `src/services/providerProfile.ts`.)
 - **portalTasks (portal-task close-out):** `GET /api/cases?providerId=…` rows
   optionally carry `portalTasks: [{ taskId, title, portalKey, status }]` — the
   case's open, portal-linked SOP tasks; `portalKey` arrives normalized
@@ -91,8 +91,8 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
 - **Touches body is snake_case** (locked R2 contract, 2026-07-05 — unlike
   fill-events' camelCase): `POST /api/cases/:id/touches` takes
   `{ kind: "portal_submission", portal_key, idempotency_id,
-  fill_session_id?, note?, payer_reference_id?, wip_note?, task_id?,
-  pdf_filename?, bump_status? }`. Server sets org + user from the JWT.
+fill_session_id?, note?, payer_reference_id?, wip_note?, task_id?,
+pdf_filename?, bump_status? }`. Server sets org + user from the JWT.
   **S4.4 (2026-07-28): `bump_status: true` also moves the case In Progress ->
   Submitted** through the panel's `set_case_status`, evidenced by that touch.
   Off by default and omitted from the body unless asked, so the R2 "never an
@@ -103,7 +103,7 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   `SubmissionTouchBody` in `src/shared/apiTypes.ts`.)
 - **Fill-events body is camelCase:** `POST /api/fill-events` takes
   `{ id, caseId, providerId, portalKey, fillMode: "web", startedAt,
-  completedAt, fieldsFilled, fieldsSkipped }`. (Panel
+completedAt, fieldsFilled, fieldsSkipped }`. (Panel
   `src/services/fillSessions.ts`; mirror `FillEventBody` in
   `src/background/api.ts`.)
 - **Idempotency:** fill-events — the client-generated `id`
@@ -306,6 +306,33 @@ portalUrl, portalKey?, facilityId? }` through
   re-render never drops a selection); the batch bar appears on the first tick
   and offers **Delete selected only** — assign-to-section and mark-as-human are
   deferred until sections exist.
+- **The Selector Workshop's verdict reads the match SHAPE, not a count
+  (2026-08-20).** `MATCH_SELECTOR` returns `{valid, matches, fillable,
+radioGroup}` (`describeSelectorMatches`, `content/elementPicker.ts`) and the
+  pure `selectorVerdict` (`shared/selectorMatch.ts`) turns it into the sentence
+  the trainer reads. A bare `querySelectorAll().length` got three common cases
+  wrong, each measured against the real engine before the fix: a **wrapper**
+  (`#npi-field` on the div around the input) matched exactly one element and so
+  showed the green "matches exactly one field", while `bySelector` accepts only
+  input/select/textarea and the fill skipped it as `field not found on this
+page` — the verdict said the opposite of the truth in the one place a trainer
+  goes to be sure; a **radio group** is one field made of N controls, and the
+  scanner's own `input[type="radio"][name="…"]` therefore matched N, so a
+  correct selector was called "ambiguous, and may fill the wrong one" — a false
+  alarm on the exact defect class this trainer was built for (the Humana status
+  form), whose advice, followed, breaks a working selector; and **invalid CSS**
+  was caught and reported as 0, i.e. as a valid selector finding nothing,
+  sending the trainer to re-capture over a typo. `fillable` is a COPY of the
+  engine's rule, so `fillEngine.test.ts` pins the two together over six element
+  shapes rather than trusting the comment. An N-way radio match under a
+  non-radio row now names the control type to change.
+- **A sent capture links to where mapping happens.** Training proposes; the
+  decision is the web app's Submit-form task editor (D18). The note said so and
+  stopped there, so the loop ended on an instruction in a different product with
+  no way to follow it. `MatchedPortal` now carries `payerId` from the registry
+  row it is already built from, and the note links
+  `/admin/payer-admin/setup/{payerId}?tab=templates`. Null payer ⇒ text only,
+  never a dead link.
 - **Sandbox test profile (US-5, 2026-08-20).** A normal fill needs a case, and
   the panel's 4-part case key means one case per provider × group × payer ×
   state — so testing a 100+ field form meant manufacturing cases and leaving

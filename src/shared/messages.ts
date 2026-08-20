@@ -29,6 +29,7 @@ import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
+import type { SelectorMatchReport } from "./selectorMatch";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -108,7 +109,12 @@ export type BgRequest =
   // the panel's list and the stored session disagreeing.
   | { type: "REMOVE_CAPTURE_ROWS"; selectors: string[] }
   // `highlight` also flashes the matches green on the page.
-  | { type: "TEST_CAPTURE_SELECTOR"; tabId: number; selector: string; highlight?: boolean }
+  | {
+      type: "TEST_CAPTURE_SELECTOR";
+      tabId: number;
+      selector: string;
+      highlight?: boolean;
+    }
   // US-5.3 — reset the portal form. Sandbox-only at the UI (the button does
   // not exist outside sandbox mode); the worker re-checks `providerId`
   // against the roster's own `is_test_provider` flag before clearing
@@ -135,13 +141,21 @@ export type BgRequest =
   // audited profile read — the panel never receives the raw token payload.
   // Optional facilityId re-resolves facility.*/assignment.* tokens after the
   // user (or case) picks a location among several.
-  | { type: "GET_PROVIDER_FACILITIES"; providerId: string; facilityId?: string | null }
+  | {
+      type: "GET_PROVIDER_FACILITIES";
+      providerId: string;
+      facilityId?: string | null;
+    }
   | { type: "GET_SELECTED_PROVIDER" }
   | { type: "SET_SELECTED_PROVIDER"; providerId: string | null }
   | { type: "GET_SELECTED_CASE"; providerId: string }
   | { type: "SET_SELECTED_CASE"; providerId: string; caseId: string | null }
   | { type: "GET_SELECTED_FACILITY"; providerId: string }
-  | { type: "SET_SELECTED_FACILITY"; providerId: string; facilityId: string | null }
+  | {
+      type: "SET_SELECTED_FACILITY";
+      providerId: string;
+      facilityId: string | null;
+    }
   // Save the signed-in user's quick-card layout (bare closed-catalog keys, in
   // display order) via PUT /api/me/view-prefs. The panel refetches the
   // provider profile afterwards so the cards re-project under the new layout.
@@ -152,20 +166,39 @@ export type BgRequest =
   // parity: same record, same 60-min/tab-close expiry); CLEAR dismisses an
   // expired/mismatched context.
   | { type: "GET_ACTIVE_CASE" }
-  | { type: "ENTER_ACTIVE_CASE"; caseId: string; providerId: string; orgId: string | null }
+  | {
+      type: "ENTER_ACTIVE_CASE";
+      caseId: string;
+      providerId: string;
+      orgId: string | null;
+    }
   | { type: "CLEAR_ACTIVE_CASE" }
   // E4.3 F4.3.4/TE-6: the server-derived queue top (or null = queue clear).
   | { type: "GET_NEXT_BEST_ACTION"; limit?: number }
   // S6.2 — record a CAQH attestation and stamp the fields the fill carried.
   // PUSH ONLY: nothing is read back from CAQH into Minted Panel.
-  | { type: "RECORD_CAQH_ATTESTATION"; providerId: string; verifiedFields: string[] }
+  | {
+      type: "RECORD_CAQH_ATTESTATION";
+      providerId: string;
+      verifiedFields: string[];
+    }
   // S6.3 — pull ONE field CAQH holds that we are blank on. An exception, not
   // a sync: a disagreement is never offered, only a gap.
-  | { type: "PULL_CAQH_FIELD"; providerId: string; token: string; value: string }
+  | {
+      type: "PULL_CAQH_FIELD";
+      providerId: string;
+      token: string;
+      value: string;
+    }
   // E4.3 F4.3.4/TE-5: log ONE structured touch. The panel generates the
   // idempotency id once per draft and REUSES it on retries, so a failed write
   // retried can never double-log; a fresh draft gets a fresh id.
-  | { type: "LOG_STRUCTURED_TOUCH"; caseId: string; idempotencyId: string; draft: StructuredTouchDraft }
+  | {
+      type: "LOG_STRUCTURED_TOUCH";
+      caseId: string;
+      idempotencyId: string;
+      draft: StructuredTouchDraft;
+    }
   | {
       type: "FILL";
       tabId: number;
@@ -247,12 +280,12 @@ export interface ProviderFacilitiesInfo {
 // The unified search's two halves. Each half degrades independently: a null
 // error with rows is success; a non-null error renders that half's honest
 // failure line while the other half still works.
-/** "Re-test selector": how many elements this selector currently matches on
- * the live page. 1 is healthy; 0 will never fill; >1 is ambiguous and may fill
- * the wrong box. */
-export interface SelectorTestResult {
+/** "Test selector": what this selector would DO on the live page — the shape
+ * the page measured, plus the selector it answers, so the panel can discard a
+ * verdict for text the trainer has since edited. `selectorVerdict` turns it
+ * into the sentence the trainer reads. */
+export interface SelectorTestResult extends SelectorMatchReport {
   selector: string;
-  matches: number;
 }
 
 export interface SearchResults {
@@ -312,7 +345,10 @@ export interface BgResponseMap {
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;
   GET_NEXT_BEST_ACTION: NextBestActionResult;
-  RECORD_CAQH_ATTESTATION: { caqhLastAttestedDate: string | null; verifiedFields: number };
+  RECORD_CAQH_ATTESTATION: {
+    caqhLastAttestedDate: string | null;
+    verifiedFields: number;
+  };
   PULL_CAQH_FIELD: null;
   LOG_STRUCTURED_TOUCH: SubmissionTouch;
   GET_FILL_COVERAGE: FillCoverage;

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cancelElementPick,
   countSelectorMatches,
+  describeSelectorMatches,
   highlightSelector,
   isPicking,
   startElementPick,
@@ -27,7 +28,9 @@ afterEach(() => {
 });
 
 function clickOn(el: Element): void {
-  el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, cancelable: true }),
+  );
 }
 
 describe("startElementPick", () => {
@@ -45,7 +48,9 @@ describe("startElementPick", () => {
     expect(outcome.field.selector).toBe("#npi");
     expect(outcome.field.fieldType).toBe("text");
     // The same nearby-caption rule the scanner uses — one description, not two.
-    expect(outcome.field.label).toBe("*Enter the NPI associated with the application:");
+    expect(outcome.field.label).toBe(
+      "*Enter the NPI associated with the application:",
+    );
   });
 
   it("resolves a clicked LABEL to the control it names", async () => {
@@ -91,7 +96,9 @@ describe("startElementPick", () => {
   it("cancels on Escape — a normal outcome, not an error", async () => {
     document.body.innerHTML = `<input type="text" id="npi" />`;
     const pick = startElementPick();
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
     expect((await pick).status).toBe("cancelled");
   });
 
@@ -105,15 +112,21 @@ describe("startElementPick", () => {
   it("leaves no overlay, hint or cursor class behind when it ends", async () => {
     document.body.innerHTML = `<input type="text" id="npi" />`;
     const pick = startElementPick();
-    expect(document.getElementById("__minted-panel-pick-overlay")).not.toBeNull();
-    expect(document.documentElement.classList.contains("__mp-pick-active")).toBe(true);
+    expect(
+      document.getElementById("__minted-panel-pick-overlay"),
+    ).not.toBeNull();
+    expect(
+      document.documentElement.classList.contains("__mp-pick-active"),
+    ).toBe(true);
 
     clickOn(document.getElementById("npi")!);
     await pick;
 
     expect(document.getElementById("__minted-panel-pick-overlay")).toBeNull();
     expect(document.getElementById("__minted-panel-pick-hint")).toBeNull();
-    expect(document.documentElement.classList.contains("__mp-pick-active")).toBe(false);
+    expect(
+      document.documentElement.classList.contains("__mp-pick-active"),
+    ).toBe(false);
     expect(isPicking()).toBe(false);
   });
 
@@ -126,7 +139,9 @@ describe("startElementPick", () => {
     clickOn(document.getElementById("npi")!);
     expect((await second).status).toBe("picked");
     // Exactly one overlay existed at a time, and none survives.
-    expect(document.querySelectorAll("#__minted-panel-pick-overlay")).toHaveLength(0);
+    expect(
+      document.querySelectorAll("#__minted-panel-pick-overlay"),
+    ).toHaveLength(0);
   });
 
   it("never reads the control's value", async () => {
@@ -170,7 +185,9 @@ describe("highlightSelector", () => {
     // no highlight at all.
     document.body.innerHTML = `<input id="a" style="color: red" />`;
     highlightSelector("#a");
-    expect(document.querySelector<HTMLElement>("#a")!.getAttribute("style")).toBe("color: red");
+    expect(
+      document.querySelector<HTMLElement>("#a")!.getAttribute("style"),
+    ).toBe("color: red");
   });
 
   it("clears the previous highlight before drawing the next", () => {
@@ -179,8 +196,12 @@ describe("highlightSelector", () => {
     document.body.innerHTML = `<input id="a" /><input id="b" />`;
     highlightSelector("#a");
     highlightSelector("#b");
-    expect(document.querySelector("#a")!.classList.contains("__mp-selector-hit")).toBe(false);
-    expect(document.querySelector("#b")!.classList.contains("__mp-selector-hit")).toBe(true);
+    expect(
+      document.querySelector("#a")!.classList.contains("__mp-selector-hit"),
+    ).toBe(false);
+    expect(
+      document.querySelector("#b")!.classList.contains("__mp-selector-hit"),
+    ).toBe(true);
   });
 
   it("auto-clears so a forgotten highlight never becomes page furniture", () => {
@@ -214,7 +235,74 @@ describe("highlightSelector", () => {
     // different set of elements would be actively misleading.
     document.body.innerHTML = `<input class="dup" /><input class="dup" />`;
     for (const selector of [".dup", "#nope", "###", "input"]) {
-      expect(highlightSelector(selector), selector).toBe(countSelectorMatches(selector));
+      expect(highlightSelector(selector), selector).toBe(
+        countSelectorMatches(selector),
+      );
     }
+  });
+});
+
+// 2026-08-20 — the three cases a bare match COUNT gets wrong, each measured
+// against the real fill engine before this shape existed. `selectorVerdict`
+// (shared/selectorMatch.ts) turns these into the trainer's words.
+describe("describeSelectorMatches", () => {
+  it("separates a wrapper from the field inside it", () => {
+    document.body.innerHTML = `<div id="npi-field"><input type="text" name="npi"></div>`;
+    // One element, but the engine's `bySelector` only accepts input/select/
+    // textarea — so this is the case that used to show the green verdict and
+    // then never fill.
+    expect(describeSelectorMatches("#npi-field")).toEqual({
+      valid: true,
+      matches: 1,
+      fillable: 0,
+      radioGroup: false,
+    });
+    expect(describeSelectorMatches("#npi-field input").fillable).toBe(1);
+  });
+
+  it("recognises one radio group behind an N-way match", () => {
+    document.body.innerHTML = `
+      <fieldset><legend>Which type?</legend>
+        <label><input type="radio" name="certType" value="a"> A</label>
+        <label><input type="radio" name="certType" value="b"> B</label>
+        <label><input type="radio" name="certType" value="c"> C</label>
+      </fieldset>`;
+    // Exactly what selectorFor() emits for an id-less radio: matching all three
+    // options is correct, not ambiguous.
+    expect(
+      describeSelectorMatches('input[type="radio"][name="certType"]'),
+    ).toEqual({
+      valid: true,
+      matches: 3,
+      fillable: 3,
+      radioGroup: true,
+    });
+  });
+
+  it("does not call two DIFFERENT radio groups one group", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="one" value="a">
+      <input type="radio" name="two" value="b">`;
+    expect(describeSelectorMatches('input[type="radio"]').radioGroup).toBe(
+      false,
+    );
+  });
+
+  it("reports invalid CSS as invalid rather than as an empty page", () => {
+    document.body.innerHTML = `<input id="a">`;
+    expect(describeSelectorMatches("#a[").valid).toBe(false);
+    expect(describeSelectorMatches("#nope")).toEqual({
+      valid: true,
+      matches: 0,
+      fillable: 0,
+      radioGroup: false,
+    });
+  });
+
+  it("agrees with countSelectorMatches on the raw count", () => {
+    document.body.innerHTML = `<div class="dup"></div><input class="dup">`;
+    expect(describeSelectorMatches(".dup").matches).toBe(
+      countSelectorMatches(".dup"),
+    );
   });
 });

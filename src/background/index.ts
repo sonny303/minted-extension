@@ -3,10 +3,21 @@
 // running on our own chrome-extension:// origin are served — content scripts
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
-import type { BgRequest, BgResponse, ProviderFacilitiesInfo, SearchResults } from "../shared/messages";
+import type {
+  BgRequest,
+  BgResponse,
+  ProviderFacilitiesInfo,
+  SearchResults,
+} from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
-import { AuthRequiredError, currentUserId, getAuthState, signIn, signOut } from "./auth";
+import {
+  AuthRequiredError,
+  currentUserId,
+  getAuthState,
+  signIn,
+  signOut,
+} from "./auth";
 import {
   ApiError,
   completeTaskStep,
@@ -30,7 +41,10 @@ import {
   searchProviders,
 } from "./api";
 import { projectQuickCards, resolveLayout } from "../shared/quickCards";
-import { buildStructuredTouchBody, validateStructuredTouch } from "../shared/structuredTouch";
+import {
+  buildStructuredTouchBody,
+  validateStructuredTouch,
+} from "../shared/structuredTouch";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { readPanelMode, writePanelMode } from "./mode";
 import { coveragePortal, fillPortal, sandboxFillPortal } from "./fill";
@@ -62,6 +76,7 @@ import { assignSortOrder } from "../shared/trainForms";
 import { browseableProviders } from "../shared/browseProviders";
 import type { CapturedField } from "../content/captureScan";
 import { isSandboxProvider } from "../shared/sandbox";
+import type { SelectorMatchReport } from "../shared/selectorMatch";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -69,7 +84,9 @@ import { isSandboxProvider } from "../shared/sandbox";
 // (headless test Chromium) — a throw here would kill the whole worker.
 chrome.sidePanel
   ?.setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error: unknown) => console.error("sidePanel.setPanelBehavior failed", error));
+  .catch((error: unknown) =>
+    console.error("sidePanel.setPanelBehavior failed", error),
+  );
 
 // E4.3 F4.3.1/TE-1: the SET_ACTIVE_CASE handoff receipt + portal-tab binding
 // and expiry listeners. Top-level so every worker restart re-registers them.
@@ -93,7 +110,10 @@ async function readSessionString(key: string): Promise<string | null> {
   return typeof value === "string" ? value : null;
 }
 
-async function writeSessionString(key: string, value: string | null): Promise<void> {
+async function writeSessionString(
+  key: string,
+  value: string | null,
+): Promise<void> {
   if (value == null) {
     await chrome.storage.session.remove(key);
   } else {
@@ -162,7 +182,10 @@ async function readCardLayout(): Promise<{
   try {
     const prefs = await getViewPrefs();
     const allowed = new Set(prefs.catalog.map((f) => f.key));
-    return { layout: resolveLayout(prefs.fields, allowed), catalog: prefs.catalog };
+    return {
+      layout: resolveLayout(prefs.fields, allowed),
+      catalog: prefs.catalog,
+    };
   } catch {
     return { layout: resolveLayout(null), catalog: [] };
   }
@@ -191,7 +214,9 @@ function isFillReportRecord(value: unknown): value is FillReportRecord {
 
 // The provider's most recent stored report across portals (v0 has one
 // portal, so "most recent" is exact). Best-effort by design.
-async function readFillReport(providerId: string): Promise<FillReportRecord | null> {
+async function readFillReport(
+  providerId: string,
+): Promise<FillReportRecord | null> {
   const all = await chrome.storage.session.get(null);
   const records = Object.entries(all)
     .filter(([key]) => key.startsWith(`${FILL_REPORT_PREFIX}${providerId}.`))
@@ -204,11 +229,16 @@ async function readFillReport(providerId: string): Promise<FillReportRecord | nu
 async function resolveMockTelemetryOrgId(): Promise<string> {
   const memberships = await listMyOrgs();
   if (memberships.length === 0) {
-    throw new Error("Choose an organization in Work cases before running a mock dry run.");
+    throw new Error(
+      "Choose an organization in Work cases before running a mock dry run.",
+    );
   }
   if (memberships.length === 1) return memberships[0]!.orgId;
   const activeOrgId = await readActiveOrgId();
-  if (activeOrgId && memberships.some((membership) => membership.orgId === activeOrgId)) {
+  if (
+    activeOrgId &&
+    memberships.some((membership) => membership.orgId === activeOrgId)
+  ) {
     return activeOrgId;
   }
   throw new Error(
@@ -224,7 +254,10 @@ async function resolveMockTelemetryOrgId(): Promise<string> {
  * sandbox action at a real, non-designated provider — a fill with no case
  * attribution, or a form clear on a live case, must never reach real data.
  */
-async function assertSandboxProvider(providerId: string, message: string): Promise<void> {
+async function assertSandboxProvider(
+  providerId: string,
+  message: string,
+): Promise<void> {
   const roster = await listProviders();
   const target = roster.find((p) => p.id === providerId);
   if (!isSandboxProvider(target)) throw new Error(message);
@@ -242,7 +275,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // place; anyone else starts clean.
       const userId = await currentUserId();
       const previousOwner = await readSessionString(WORKBENCH_OWNER_KEY);
-      if (previousOwner != null && previousOwner !== userId) await clearWorkbenchState();
+      if (previousOwner != null && previousOwner !== userId)
+        await clearWorkbenchState();
       await writeSessionString(WORKBENCH_OWNER_KEY, userId);
       return state;
     }
@@ -276,7 +310,12 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // while provider search still works (and vice versa).
       const query = request.query.trim();
       if (query === "") {
-        const empty: SearchResults = { cases: [], providers: [], casesError: null, providersError: null };
+        const empty: SearchResults = {
+          cases: [],
+          providers: [],
+          casesError: null,
+          providersError: null,
+        };
         return empty;
       }
       const [casesRes, providersRes] = await Promise.allSettled([
@@ -286,10 +325,17 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       const results: SearchResults = {
         cases: casesRes.status === "fulfilled" ? casesRes.value : [],
         providers:
-          providersRes.status === "fulfilled" ? browseableProviders(providersRes.value) : [],
-        casesError: casesRes.status === "rejected" ? failureMessage(casesRes.reason) : null,
+          providersRes.status === "fulfilled"
+            ? browseableProviders(providersRes.value)
+            : [],
+        casesError:
+          casesRes.status === "rejected"
+            ? failureMessage(casesRes.reason)
+            : null,
         providersError:
-          providersRes.status === "rejected" ? failureMessage(providersRes.reason) : null,
+          providersRes.status === "rejected"
+            ? failureMessage(providersRes.reason)
+            : null,
       };
       // Both halves down for the same reason (typically auth) — surface it as
       // a real failure so the panel runs its normal error handling.
@@ -336,11 +382,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // portal), so capture works on any DB-registered portal, not just the
       // one with a static content_scripts match.
       await ensureContentScript(request.tabId);
-      const scanned = (await chrome.tabs.sendMessage(request.tabId, { type: "SCAN_FIELDS" })) as
+      const scanned = (await chrome.tabs.sendMessage(request.tabId, {
+        type: "SCAN_FIELDS",
+      })) as
         | { ok?: boolean; data?: CapturedField[]; error?: string }
         | undefined;
       if (!scanned?.ok || !scanned.data) {
-        throw new Error(scanned?.error ?? "Could not read this form — reload the page and retry.");
+        throw new Error(
+          scanned?.error ??
+            "Could not read this form — reload the page and retry.",
+        );
       }
       const previous = await readCaptureSession();
       const samePortal = previous?.portalKey === request.portalKey;
@@ -380,7 +431,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // the page being scanned carry over, and the other pages of a multi-page
       // run are kept verbatim (a plain diff would read them as removed and
       // drop them — see mergePageCapture).
-      const merged = samePortal && previous ? mergePageCapture(previous.rows, rows, pageStep) : rows;
+      const merged =
+        samePortal && previous
+          ? mergePageCapture(previous.rows, rows, pageStep)
+          : rows;
       const session: CaptureSession = {
         portalKey: request.portalKey,
         templateStepId: request.templateStepId ?? null,
@@ -396,7 +450,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       const next: CaptureSession = {
         ...current,
         rows: current.rows.map((r) =>
-          r.selector === request.selector ? { ...r, chosenToken: request.token } : r,
+          r.selector === request.selector
+            ? { ...r, chosenToken: request.token }
+            : r,
         ),
       };
       await writeCaptureSession(next);
@@ -410,13 +466,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         throw new Error("Switch to Train forms to add a field.");
       }
       const current = await readCaptureSession();
-      if (current == null) throw new Error("Capture this form first, then add missing fields.");
+      if (current == null)
+        throw new Error("Capture this form first, then add missing fields.");
       await ensureContentScript(request.tabId);
-      const picked = (await chrome.tabs.sendMessage(request.tabId, { type: "PICK_ELEMENT" })) as
-        | { ok?: boolean; data?: PickOutcome; error?: string }
-        | undefined;
+      const picked = (await chrome.tabs.sendMessage(request.tabId, {
+        type: "PICK_ELEMENT",
+      })) as { ok?: boolean; data?: PickOutcome; error?: string } | undefined;
       if (!picked?.ok || !picked.data) {
-        throw new Error(picked?.error ?? "Could not add a field — reload the page and retry.");
+        throw new Error(
+          picked?.error ?? "Could not add a field — reload the page and retry.",
+        );
       }
       // Cancelling is a normal outcome, not a failure: return the session
       // untouched so the panel simply leaves pick mode.
@@ -437,8 +496,11 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // END of it — its DOM position is not meaningful relative to rows the
       // scan ordered visually, and inventing one would reorder the page.
       const pageStep = request.pageStep?.trim() || null;
-      const samePage = current.rows.filter((r) => (r.pageStep ?? null) === pageStep);
-      const nextSort = samePage.reduce((max, r) => Math.max(max, r.sortOrder ?? 0), 0) + 1;
+      const samePage = current.rows.filter(
+        (r) => (r.pageStep ?? null) === pageStep,
+      );
+      const nextSort =
+        samePage.reduce((max, r) => Math.max(max, r.sortOrder ?? 0), 0) + 1;
       const row: CaptureRow = {
         label: field.label,
         selector: field.selector,
@@ -531,11 +593,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         "This provider isn't the organization's designated sandbox test profile — refusing to clear a form that may carry real, in-progress work.",
       );
       await ensureContentScript(request.tabId);
-      const response = (await chrome.tabs.sendMessage(request.tabId, { type: "CLEAR_FORM" })) as
-        | { ok?: boolean; data?: number; error?: string }
-        | undefined;
+      const response = (await chrome.tabs.sendMessage(request.tabId, {
+        type: "CLEAR_FORM",
+      })) as { ok?: boolean; data?: number; error?: string } | undefined;
       if (!response?.ok || typeof response.data !== "number") {
-        throw new Error(response?.error ?? "Could not clear this form — reload the page and retry.");
+        throw new Error(
+          response?.error ??
+            "Could not clear this form — reload the page and retry.",
+        );
       }
       return { cleared: response.data };
     }
@@ -556,11 +621,21 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         type: "MATCH_SELECTOR",
         selector: request.selector,
         highlight: request.highlight === true,
-      })) as { ok?: boolean; data?: number; error?: string } | undefined;
-      if (!result?.ok || typeof result.data !== "number") {
-        throw new Error(result?.error ?? "Could not check this field on the page.");
+      })) as
+        | { ok?: boolean; data?: SelectorMatchReport; error?: string }
+        | undefined;
+      // The page reports the match SHAPE (how many, how many fillable, one
+      // radio group?) — a bare count cannot tell a wrapper from a field.
+      if (
+        !result?.ok ||
+        result.data == null ||
+        typeof result.data.matches !== "number"
+      ) {
+        throw new Error(
+          result?.error ?? "Could not check this field on the page.",
+        );
       }
-      return { selector: request.selector, matches: result.data };
+      return { selector: request.selector, ...result.data };
     }
     case "SEND_CAPTURE": {
       const current = await readCaptureSession();
@@ -586,7 +661,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           // The ONE exception is a field the portal never labelled at all —
           // then the trainer's name is the only name there is, and sending an
           // empty label instead would propose a row nobody can identify.
-          field_label: row.label.trim() || (row.displayLabel ?? "").trim() || null,
+          field_label:
+            row.label.trim() || (row.displayLabel ?? "").trim() || null,
           form_section: row.formSection,
           page_step: row.pageStep ?? null,
           field_type: row.fieldType,
@@ -641,7 +717,11 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // S6.3: write ONE field the portal holds and we don't, stamping it
       // verified in the same breath (it was just read off the source). Uses
       // the existing provider PATCH — no new write surface.
-      await patchProviderField(request.providerId, request.token, request.value);
+      await patchProviderField(
+        request.providerId,
+        request.token,
+        request.value,
+      );
       return null;
     }
     case "GET_NEXT_BEST_ACTION":
@@ -669,7 +749,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // resolve for that location (multi-facility providers otherwise leave
       // them unresolved behind meta.needs_facility).
       const [{ profile, meta }, { layout, catalog }] = await Promise.all([
-        getProviderProfile(request.providerId, { facilityId: request.facilityId }),
+        getProviderProfile(request.providerId, {
+          facilityId: request.facilityId,
+        }),
         readCardLayout(),
       ]);
       const servedLabels = new Map(catalog.map((f) => [f.key, f.label]));
@@ -680,7 +762,13 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       const info: ProviderFacilitiesInfo = {
         facilities: profile.facilities,
         needsFacility: meta?.needs_facility === true,
-        cards: projectQuickCards(profile.tokens, profile.unresolved, layout, todayIso(), servedLabels),
+        cards: projectQuickCards(
+          profile.tokens,
+          profile.unresolved,
+          layout,
+          todayIso(),
+          servedLabels,
+        ),
         // The served picker catalog rides along so the Edit Layout form offers
         // exactly what the server will accept — no mirrored allowlist.
         catalog,
@@ -695,12 +783,18 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "GET_SELECTED_CASE":
       return readSessionString(SELECTED_CASE_PREFIX + request.providerId);
     case "SET_SELECTED_CASE":
-      await writeSessionString(SELECTED_CASE_PREFIX + request.providerId, request.caseId);
+      await writeSessionString(
+        SELECTED_CASE_PREFIX + request.providerId,
+        request.caseId,
+      );
       return null;
     case "GET_SELECTED_FACILITY":
       return readSessionString(SELECTED_FACILITY_PREFIX + request.providerId);
     case "SET_SELECTED_FACILITY":
-      await writeSessionString(SELECTED_FACILITY_PREFIX + request.providerId, request.facilityId);
+      await writeSessionString(
+        SELECTED_FACILITY_PREFIX + request.providerId,
+        request.facilityId,
+      );
       return null;
     case "SET_VIEW_PREFS":
       await putViewPrefs(request.fields);
@@ -807,7 +901,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         const entry = await chrome.storage.session.get(key);
         const record = entry[key];
         if (isFillReportRecord(record) && record.caseId === request.caseId) {
-          await chrome.storage.session.set({ [key]: { ...record, submitted: true } });
+          await chrome.storage.session.set({
+            [key]: { ...record, submitted: true },
+          });
         }
       } catch {
         // best-effort — the touch itself was logged
@@ -819,11 +915,19 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
 
 function toFailure(error: unknown): BgResponse<never> {
   if (error instanceof AuthRequiredError) {
-    return { ok: false, error: "Session expired - please sign in again.", code: 401 };
+    return {
+      ok: false,
+      error: "Session expired - please sign in again.",
+      code: 401,
+    };
   }
-  if (error instanceof ApiError) return { ok: false, error: error.message, code: error.status };
+  if (error instanceof ApiError)
+    return { ok: false, error: error.message, code: error.status };
   if (error instanceof TypeError) {
-    return { ok: false, error: "Could not reach Minted Panel - check your connection." };
+    return {
+      ok: false,
+      error: "Could not reach Minted Panel - check your connection.",
+    };
   }
   if (error instanceof Error) return { ok: false, error: error.message };
   return { ok: false, error: "Something went wrong." };
@@ -837,7 +941,11 @@ function failureMessage(error: unknown): string {
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: BgRequest, sender, sendResponse: (response: BgResponse<unknown>) => void) => {
+  (
+    message: BgRequest,
+    sender,
+    sendResponse: (response: BgResponse<unknown>) => void,
+  ) => {
     const ownOrigin = `chrome-extension://${chrome.runtime.id}/`;
     if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(ownOrigin)) {
       sendResponse({ ok: false, error: "Not allowed" });
