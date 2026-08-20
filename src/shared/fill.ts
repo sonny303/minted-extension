@@ -40,6 +40,19 @@ export interface FillPageResult {
   pageFields: number;
 }
 
+export interface SandboxFillSummary {
+  filled: number;
+  filledLabels: string[];
+  skipped: ReportedField[];
+  manual: ReportedField[];
+  pageFields: number;
+  /** Selectors this run wrote, so "Clear portal form" can undo exactly them. */
+  filledSelectors: string[];
+  fillSessionId: string | null;
+  /** Non-fatal: the fill happened even if the machine log did not. */
+  logError: string | null;
+}
+
 export interface MockDryRunSummary {
   pass: boolean;
   filled: number;
@@ -110,4 +123,10 @@ export type ContentRequest =
   // shape only, exactly like SCAN_FIELDS.
   | { type: "PICK_ELEMENT" }
   | { type: "CANCEL_PICK" }
-  | { type: "MATCH_SELECTOR"; selector: string };
+  // `highlight` flashes the matches bright green on the page (US-3.2's
+  // Test Selector); without it this is a silent count.
+  | { type: "MATCH_SELECTOR"; selector: string; highlight?: boolean }
+  // US-5.3 — reset the portal form so the next sandbox fill starts clean.
+  // Reachable ONLY from the sandbox surface; on a live form it would wipe a
+  // coordinator's real typing.
+  | { type: "CLEAR_FORM" };

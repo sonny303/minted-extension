@@ -84,6 +84,48 @@ function fireChanged(el: HTMLElement): void {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+/**
+ * US-5.3 — reset the form so the next sandbox fill starts clean.
+ *
+ * Values go back through the SAME native setter the fill uses, so a
+ * framework-controlled input (React et al.) actually sees the clear and the
+ * page's own validation re-runs; a plain `el.value = ""` would leave the
+ * framework's state untouched and the field would snap back.
+ *
+ * Only the panel's sandbox surface can reach this — the button does not exist
+ * outside sandbox mode — because on a live portal it would wipe a
+ * coordinator's real typing. Returns how many controls it reset so the panel
+ * can report rather than claim.
+ */
+export function clearPortalForm(): number {
+  let cleared = 0;
+  const controls = document.querySelectorAll<Fillable>(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea',
+  );
+  for (const el of controls) {
+    try {
+      if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+        if (!el.checked) continue;
+        el.checked = false;
+        fireChanged(el);
+      } else if (el instanceof HTMLSelectElement) {
+        if (el.selectedIndex <= 0 && el.value === "") continue;
+        // Index 0 is the placeholder on a portal select; -1 (nothing chosen)
+        // is the honest reset when there is no placeholder to fall back to.
+        el.selectedIndex = el.options.length > 0 ? 0 : -1;
+        fireChanged(el);
+      } else {
+        if (el.value === "") continue;
+        setNativeValue(el, "");
+      }
+      cleared += 1;
+    } catch {
+      // One stubborn widget must not abort the reset of the rest.
+    }
+  }
+  return cleared;
+}
+
 function labelTextOf(input: HTMLInputElement): string {
   const label = input.labels?.[0] ?? input.closest("label");
   return label?.textContent ?? "";

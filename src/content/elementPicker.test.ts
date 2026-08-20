@@ -5,7 +5,13 @@
 // would be destructive on a live portal form: the pick must not activate the
 // control it lands on, and it must not leave the page decorated when it ends.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelElementPick, countSelectorMatches, isPicking, startElementPick } from "./elementPicker";
+import {
+  cancelElementPick,
+  countSelectorMatches,
+  highlightSelector,
+  isPicking,
+  startElementPick,
+} from "./elementPicker";
 
 // jsdom has no CSS.escape; captureScan (via describeControl) needs it.
 if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
@@ -146,5 +152,69 @@ describe("countSelectorMatches", () => {
   it("treats an invalid selector as zero rather than throwing at the boundary", () => {
     // A hand-edited selector reaching the content script must not crash it.
     expect(countSelectorMatches("###")).toBe(0);
+  });
+});
+
+// US-3.2 — the Selector Workshop's on-page half. The count alone is not the
+// answer a trainer needs: "3 matches" is useless without knowing WHICH three.
+describe("highlightSelector", () => {
+  it("decorates every match and reports how many", () => {
+    document.body.innerHTML = `<input class="dup" /><input class="dup" /><input />`;
+    expect(highlightSelector(".dup")).toBe(2);
+    expect(document.querySelectorAll(".__mp-selector-hit")).toHaveLength(2);
+  });
+
+  it("decorates with a CLASS, never inline styles", () => {
+    // Inline styles would overwrite the portal's own and could not be undone
+    // cleanly — a control left looking edited after a re-test is worse than
+    // no highlight at all.
+    document.body.innerHTML = `<input id="a" style="color: red" />`;
+    highlightSelector("#a");
+    expect(document.querySelector<HTMLElement>("#a")!.getAttribute("style")).toBe("color: red");
+  });
+
+  it("clears the previous highlight before drawing the next", () => {
+    // Otherwise two successive tests both stay lit and the second answer is
+    // unreadable.
+    document.body.innerHTML = `<input id="a" /><input id="b" />`;
+    highlightSelector("#a");
+    highlightSelector("#b");
+    expect(document.querySelector("#a")!.classList.contains("__mp-selector-hit")).toBe(false);
+    expect(document.querySelector("#b")!.classList.contains("__mp-selector-hit")).toBe(true);
+  });
+
+  it("auto-clears so a forgotten highlight never becomes page furniture", () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `<input id="a" />`;
+      highlightSelector("#a");
+      expect(document.querySelectorAll(".__mp-selector-hit")).toHaveLength(1);
+      vi.advanceTimersByTime(5000);
+      expect(document.querySelectorAll(".__mp-selector-hit")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports 0 for a selector that matches nothing, and decorates nothing", () => {
+    document.body.innerHTML = `<input id="a" />`;
+    expect(highlightSelector("#nope")).toBe(0);
+    expect(document.querySelectorAll(".__mp-selector-hit")).toHaveLength(0);
+  });
+
+  it("treats an invalid selector as zero rather than throwing", () => {
+    // Same boundary rule as countSelectorMatches: a half-typed selector is an
+    // ordinary state of the input box, not a crash.
+    document.body.innerHTML = `<input id="a" />`;
+    expect(highlightSelector("###")).toBe(0);
+  });
+
+  it("agrees with countSelectorMatches", () => {
+    // They answer the same question; a panel that showed one number and lit a
+    // different set of elements would be actively misleading.
+    document.body.innerHTML = `<input class="dup" /><input class="dup" />`;
+    for (const selector of [".dup", "#nope", "###", "input"]) {
+      expect(highlightSelector(selector), selector).toBe(countSelectorMatches(selector));
+    }
   });
 });

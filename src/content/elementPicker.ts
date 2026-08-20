@@ -179,3 +179,69 @@ export function countSelectorMatches(selector: string): number {
     return 0;
   }
 }
+
+// ---------------------------------------------------------------------------
+// US-3.2 — Selector Workshop: show the trainer WHICH element a selector hits.
+// ---------------------------------------------------------------------------
+
+const HIGHLIGHT_CLASS = "__mp-selector-hit";
+const HIGHLIGHT_STYLE_ID = "__minted-panel-highlight-style";
+/** Long enough to look at, short enough that a forgotten highlight never
+ * becomes page furniture. */
+const HIGHLIGHT_MS = 2500;
+
+// Bright green, deliberately unlike the pick overlay's forest green: one says
+// "this is what I would hover", the other "this is what your selector found".
+const HIGHLIGHT_STYLE = `
+  .${HIGHLIGHT_CLASS} {
+    outline: 3px solid #16a34a !important;
+    outline-offset: 1px !important;
+    background-color: rgba(22,163,74,.18) !important;
+    transition: none !important;
+  }
+`;
+
+let highlightTimer: number | null = null;
+
+function clearHighlight(): void {
+  if (highlightTimer != null) {
+    clearTimeout(highlightTimer);
+    highlightTimer = null;
+  }
+  for (const el of document.querySelectorAll(`.${HIGHLIGHT_CLASS}`)) {
+    el.classList.remove(HIGHLIGHT_CLASS);
+  }
+}
+
+/**
+ * Flash every element the selector matches in bright green, and say how many
+ * there were.
+ *
+ * Decorating with a CLASS rather than inline styles means the page's own
+ * styles are never overwritten and the cleanup is a class removal that cannot
+ * leave a control looking edited. The first match is scrolled into view —
+ * a highlight below the fold answers nothing.
+ */
+export function highlightSelector(selector: string): number {
+  clearHighlight();
+  if (!document.getElementById(HIGHLIGHT_STYLE_ID)) {
+    const style = document.createElement("style");
+    style.id = HIGHLIGHT_STYLE_ID;
+    style.textContent = HIGHLIGHT_STYLE;
+    document.head.append(style);
+  }
+  let matches: Element[];
+  try {
+    matches = Array.from(document.querySelectorAll(selector));
+  } catch {
+    return 0; // invalid selector — same answer as "found nothing"
+  }
+  for (const el of matches) el.classList.add(HIGHLIGHT_CLASS);
+  // Optional-called: scrolling is a courtesy, and a context that does not
+  // implement it must not turn a successful test into a thrown error.
+  matches[0]?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  if (matches.length > 0) {
+    highlightTimer = setTimeout(clearHighlight, HIGHLIGHT_MS) as unknown as number;
+  }
+  return matches.length;
+}

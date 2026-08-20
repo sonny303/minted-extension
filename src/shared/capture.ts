@@ -47,6 +47,11 @@ export interface CaptureRow {
   /** The trainer overrode the detected control type. A re-scan must not put it
    * back: they are looking at the page and we are guessing from markup. */
   typeOverridden?: boolean;
+  /** The trainer hand-wrote this selector in the Selector Workshop. It is
+   * preserved across a re-capture like a user-mapped row: the scan would
+   * produce the ORIGINAL (fragile) selector again, so without this the fix
+   * would be undone by the very next re-capture. */
+  selectorOverridden?: boolean;
 }
 
 /** Auto-detected by the scan, or pointed at by hand with the element picker. */
@@ -79,6 +84,74 @@ export function rowDisplayName(row: CaptureRow): string {
  * UI flags it, because it is the one a human cannot act on later. */
 export function isNamedRow(row: CaptureRow): boolean {
   return ((row.displayLabel ?? "").trim() || (row.label ?? "").trim()).length > 0;
+}
+
+/** What the trainer changed on one row. An ABSENT key means "leave it alone";
+ * a present-but-empty `displayLabel` means "clear my name and go back to the
+ * portal's" — the same present-vs-absent distinction the panel's own registry
+ * writer draws, and for the same reason. */
+export interface CaptureRowEdit {
+  displayLabel?: string | null;
+  fieldType?: PortalFieldType;
+  newSelector?: string;
+}
+
+export type RowEditOutcome =
+  | { ok: true; rows: CaptureRow[] }
+  | { ok: false; reason: string };
+
+/**
+ * Apply one row edit, or say why it cannot be applied.
+ *
+ * Pure, and separate from the worker's message router, because the invariant
+ * it protects is the same one `mergePageCapture` and `diffCapture` depend on:
+ * THE SELECTOR IS THE ROW'S KEY. Two rows sharing one would corrupt the
+ * session and propose the same selector to the shared library twice, and the
+ * one moment that can happen is a hand-written selector in the Selector
+ * Workshop — which is exactly what this refuses.
+ */
+export function applyRowEdit(
+  rows: readonly CaptureRow[],
+  selector: string,
+  edit: CaptureRowEdit,
+): RowEditOutcome {
+  const target = rows.find((r) => r.selector === selector);
+  if (target == null) return { ok: false, reason: "That field is no longer in this capture." };
+
+  const rewritten = edit.newSelector?.trim() ?? "";
+  const rewriting = rewritten !== "" && rewritten !== selector;
+  if (rewriting && rows.some((r) => r.selector === rewritten)) {
+    return { ok: false, reason: "Another field in this capture already uses that selector." };
+  }
+
+  return {
+    ok: true,
+    rows: rows.map((row) => {
+      if (row.selector !== selector) return row;
+      const patched: CaptureRow = { ...row };
+      if (edit.displayLabel !== undefined) {
+        const trimmed = edit.displayLabel?.trim() ?? "";
+        patched.displayLabel = trimmed === "" ? null : trimmed;
+      }
+      if (edit.fieldType !== undefined) {
+        patched.fieldType = edit.fieldType;
+        // Remember that a HUMAN chose this, so the next re-scan does not
+        // quietly put our own guess back.
+        patched.typeOverridden = true;
+      }
+      if (rewriting) {
+        patched.selector = rewritten;
+        // A hand-written selector must outlive the next re-capture, which
+        // would otherwise re-produce the original fragile one and drop this
+        // row as "removed".
+        patched.selectorOverridden = true;
+        // Re-sending is the POINT of fixing a selector: the shared library
+        // still holds a row at the old one, and this is a new proposal.
+        patched.sent = false;
+      }
+      return patched;
+    }),
+  };
 }
 
 export interface CaptureSession {
@@ -162,6 +235,7 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
       origin: r.origin === "user_mapped" ? "user_mapped" : "auto_detected",
       displayLabel: typeof r.displayLabel === "string" ? r.displayLabel : null,
       typeOverridden: r.typeOverridden === true,
+      selectorOverridden: r.selectorOverridden === true,
       ...(parsedOptions !== undefined ? { options: parsedOptions } : {}),
     });
   }
@@ -226,8 +300,17 @@ function pickDecision(prev: CaptureRow | undefined): Partial<CaptureRow> {
     displayLabel: prev.displayLabel ?? null,
     origin: prev.origin ?? "auto_detected",
     typeOverridden: prev.typeOverridden === true,
+    selectorOverridden: prev.selectorOverridden === true,
     ...(prev.typeOverridden === true ? { fieldType: prev.fieldType } : {}),
   };
+}
+
+/** Rows a fresh scan cannot be expected to reproduce, and which must therefore
+ * survive a re-capture: fields added by hand (the scan never saw them) and
+ * fields whose selector a human rewrote (the scan produces the OLD one). Both
+ * are human work that a plain diff would delete without saying so. */
+function isHumanAuthored(row: CaptureRow): boolean {
+  return row.origin === "user_mapped" || row.selectorOverridden === true;
 }
 
 /**
@@ -262,7 +345,7 @@ export function mergePageCapture(
   const diff = diffCapture(previous.filter(samePage), next);
   const keptSelectors = new Set([...diff.unchanged, ...diff.added].map((r) => r.selector));
   const rescuedManual = diff.removed.filter(
-    (row) => row.origin === "user_mapped" && !keptSelectors.has(row.selector),
+    (row) => isHumanAuthored(row) && !keptSelectors.has(row.selector),
   );
   return [...otherPages, ...diff.unchanged, ...diff.added, ...rescuedManual];
 }

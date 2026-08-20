@@ -33,7 +33,7 @@ import { projectQuickCards, resolveLayout } from "../shared/quickCards";
 import { buildStructuredTouchBody, validateStructuredTouch } from "../shared/structuredTouch";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { readPanelMode, writePanelMode } from "./mode";
-import { coveragePortal, fillPortal } from "./fill";
+import { coveragePortal, fillPortal, sandboxFillPortal } from "./fill";
 import { fillMockPortal } from "./mockFill";
 import { ensureContentScript } from "./inject";
 import { buildSubmissionTouchBody } from "../shared/submission";
@@ -49,6 +49,7 @@ import {
 } from "./activeCase";
 import { resolveActiveCaseState } from "../shared/handoff";
 import {
+  applyRowEdit,
   identifyCapturePage,
   mergePageCapture,
   parseCaptureSession,
@@ -456,24 +457,15 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "EDIT_CAPTURE_ROW": {
       const current = await readCaptureSession();
       if (current == null) throw new Error("No capture in progress");
-      const next: CaptureSession = {
-        ...current,
-        rows: current.rows.map((r) => {
-          if (r.selector !== request.selector) return r;
-          const patched: CaptureRow = { ...r };
-          if (request.displayLabel !== undefined) {
-            const trimmed = request.displayLabel?.trim() ?? "";
-            patched.displayLabel = trimmed === "" ? null : trimmed;
-          }
-          if (request.fieldType !== undefined) {
-            patched.fieldType = request.fieldType;
-            // Remember that a HUMAN chose this, so the next re-scan does not
-            // quietly put our own guess back.
-            patched.typeOverridden = true;
-          }
-          return patched;
-        }),
-      };
+      // The rule itself is pure and lives beside mergePageCapture, which
+      // depends on the same invariant: the selector IS the row's key.
+      const outcome = applyRowEdit(current.rows, request.selector, {
+        displayLabel: request.displayLabel,
+        fieldType: request.fieldType,
+        newSelector: request.newSelector,
+      });
+      if (!outcome.ok) throw new Error(outcome.reason);
+      const next: CaptureSession = { ...current, rows: outcome.rows };
       await writeCaptureSession(next);
       return next;
     }
@@ -487,11 +479,50 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       await writeCaptureSession(next);
       return next;
     }
+    // ---- US-5 sandbox ----
+    case "SANDBOX_FILL": {
+      // Case work only. Train forms has no org, so it cannot read a provider
+      // at all — its equivalent is the synthetic mock dry run.
+      if ((await readPanelMode()) === "train") {
+        throw new Error("Switch to Work cases to run a sandbox fill.");
+      }
+      await ensureContentScript(request.tabId);
+      return sandboxFillPortal({
+        tabId: request.tabId,
+        providerId: request.providerId,
+        portalKey: request.portalKey,
+        state: request.state,
+        facilityId: request.facilityId,
+        orgId: await readActiveOrgId(),
+      });
+    }
+    case "CLEAR_PORTAL_FORM": {
+      await ensureContentScript(request.tabId);
+      const response = (await chrome.tabs.sendMessage(request.tabId, { type: "CLEAR_FORM" })) as
+        | { ok?: boolean; data?: number; error?: string }
+        | undefined;
+      if (!response?.ok || typeof response.data !== "number") {
+        throw new Error(response?.error ?? "Could not clear this form — reload the page and retry.");
+      }
+      return { cleared: response.data };
+    }
+    case "REMOVE_CAPTURE_ROWS": {
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("No capture in progress");
+      const drop = new Set(request.selectors);
+      const next: CaptureSession = {
+        ...current,
+        rows: current.rows.filter((r) => !drop.has(r.selector)),
+      };
+      await writeCaptureSession(next);
+      return next;
+    }
     case "TEST_CAPTURE_SELECTOR": {
       await ensureContentScript(request.tabId);
       const result = (await chrome.tabs.sendMessage(request.tabId, {
         type: "MATCH_SELECTOR",
         selector: request.selector,
+        highlight: request.highlight === true,
       })) as { ok?: boolean; data?: number; error?: string } | undefined;
       if (!result?.ok || typeof result.data !== "number") {
         throw new Error(result?.error ?? "Could not check this field on the page.");

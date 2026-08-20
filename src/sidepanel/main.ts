@@ -77,6 +77,11 @@ import {
   providerGroupsLabel,
   providerMatchesQuery,
 } from "../shared/browseProviders";
+import {
+  findSandboxProvider,
+  sandboxFillState,
+  SANDBOX_UNAVAILABLE_NOTE,
+} from "../shared/sandbox";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -162,6 +167,7 @@ const viewSettingsError = el<HTMLElement>("view-settings-error");
 const viewSettingsSave = el<HTMLButtonElement>("view-settings-save");
 const viewSettingsCancel = el<HTMLButtonElement>("view-settings-cancel");
 const fillSection = el<HTMLElement>("fill-section");
+const caseFill = el<HTMLElement>("case-fill");
 const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
 const caseNote = el<HTMLElement>("case-note");
@@ -186,6 +192,19 @@ const captureStart = el<HTMLButtonElement>("capture-start");
 const captureNextPage = el<HTMLButtonElement>("capture-next-page");
 const captureAddField = el<HTMLButtonElement>("capture-add-field");
 const capturePickStatus = el<HTMLElement>("capture-pick-status");
+const captureBatch = el<HTMLElement>("capture-batch");
+const captureBatchCount = el<HTMLElement>("capture-batch-count");
+const captureBatchDelete = el<HTMLButtonElement>("capture-batch-delete");
+const captureBatchClear = el<HTMLButtonElement>("capture-batch-clear");
+const sandboxEntry = el<HTMLButtonElement>("sandbox-entry");
+const sandboxEntryMeta = el<HTMLElement>("sandbox-entry-meta");
+const sandboxUnavailable = el<HTMLElement>("sandbox-unavailable");
+const sandboxBar = el<HTMLElement>("sandbox-bar");
+const sandboxBarNote = el<HTMLElement>("sandbox-bar-note");
+const sandboxFillBtn = el<HTMLButtonElement>("sandbox-fill");
+const sandboxClearBtn = el<HTMLButtonElement>("sandbox-clear");
+const sandboxExitBtn = el<HTMLButtonElement>("sandbox-exit");
+const sandboxStatus = el<HTMLElement>("sandbox-status");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -1861,6 +1880,10 @@ async function loadProviders(generation: number): Promise<void> {
     return;
   }
   providers = browseableProviders(response.data);
+  // The sandbox entry is derived from the roster, so it can only be honest
+  // once the roster is in hand — before that it would claim "no test provider
+  // designated" for every org.
+  renderSandboxEntry();
 
   const selected = await sendToBackground({ type: "GET_SELECTED_PROVIDER" });
   if (!isCurrent(generation)) return;
@@ -3342,6 +3365,15 @@ let captureAddedPage = false;
 let editingSelector: string | null = null;
 let selectorTestResult: SelectorTestResult | null = null;
 let pickInFlight = false;
+// US-3.3 — rows ticked for a batch action, keyed by selector. Kept OUTSIDE the
+// DOM so a re-render (after an edit, a pick, a re-test) never silently drops a
+// selection the trainer made.
+const batchSelection = new Set<string>();
+
+// US-5 — is the sandbox profile in hand? Panel-only state: it is a way of
+// WORKING, not a stored selection, and it must never survive into a real case
+// (switching provider or case leaves it, below).
+let sandboxActive = false;
 
 // S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
 // blank) is QUARANTINED as of 3M Slice 2, not deleted.
@@ -3412,6 +3444,7 @@ function renderCapture(): void {
   }
   if (captureSession == null) return;
 
+  renderBatchBar();
   for (const group of groupCaptureRowsByPage(captureSession.rows)) {
     if (group.page != null) {
       const heading = document.createElement("p");
@@ -3446,6 +3479,18 @@ function renderCaptureRow(row: CaptureRow): HTMLDivElement {
   const item = document.createElement("div");
   const mapped = row.chosenToken || row.suggestedToken;
   item.className = mapped ? "capture-row" : "capture-row gap";
+
+  const tick = document.createElement("input");
+  tick.type = "checkbox";
+  tick.className = "capture-row-tick";
+  tick.checked = batchSelection.has(row.selector);
+  tick.setAttribute("aria-label", `Select ${rowDisplayName(row)}`);
+  tick.addEventListener("change", () => {
+    if (tick.checked) batchSelection.add(row.selector);
+    else batchSelection.delete(row.selector);
+    renderBatchBar();
+  });
+  item.append(tick);
 
   const label = document.createElement("span");
   label.className = "capture-row-label";
@@ -3534,12 +3579,28 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   typeField.append(typeSelect);
   box.append(typeField);
 
-  const selector = document.createElement("p");
-  selector.className = "capture-editor-selector mono";
-  selector.textContent = row.selector;
-  box.append(selector);
+  // US-3.2 — the Selector Workshop. The auto-captured selector is a starting
+  // point, not a verdict: a fragile one can be replaced with anything CSS can
+  // express, and tested against the live page before it is saved.
+  const selectorField = document.createElement("label");
+  selectorField.className = "capture-editor-field";
+  selectorField.textContent = "CSS selector";
+  const selectorInput = document.createElement("input");
+  selectorInput.type = "text";
+  selectorInput.className = "mono";
+  selectorInput.value = row.selector;
+  selectorInput.spellcheck = false;
+  selectorField.append(selectorInput);
+  box.append(selectorField);
 
-  if (selectorTestResult?.selector === row.selector) {
+  if (row.selectorOverridden) {
+    const note = document.createElement("p");
+    note.className = "capture-editor-note";
+    note.textContent = "Selector written by hand — a re-capture will not overwrite it.";
+    box.append(note);
+  }
+
+  if (selectorTestResult?.selector === selectorInput.value) {
     const result = document.createElement("p");
     const matches = selectorTestResult.matches;
     result.className = matches === 1 ? "capture-editor-note" : "capture-editor-warn";
@@ -3568,6 +3629,11 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
       ...(typeSelect.value !== row.fieldType
         ? { fieldType: typeSelect.value as PortalFieldType }
         : {}),
+      // Same rule for the selector: an untouched value must not mark the row
+      // as hand-written, which would exempt it from future drift repair.
+      ...(selectorInput.value.trim() !== row.selector
+        ? { newSelector: selectorInput.value.trim() }
+        : {}),
     });
   });
   actions.append(save);
@@ -3575,8 +3641,10 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   const test = document.createElement("button");
   test.type = "button";
   test.className = "link";
-  test.textContent = "Re-test on page";
-  test.addEventListener("click", () => void testCaptureSelector(row.selector));
+  test.textContent = "Test selector";
+  // Tests what is TYPED, not what is saved — the point is to try a candidate
+  // before committing to it. The matches flash green on the page.
+  test.addEventListener("click", () => void testCaptureSelector(selectorInput.value.trim()));
   actions.append(test);
 
   const remove = document.createElement("button");
@@ -3599,9 +3667,43 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   return box;
 }
 
+/** US-3.3 — the batch bar appears on the first tick and states exactly what a
+ * bulk action would hit, because "Delete selected" is irreversible. */
+function renderBatchBar(): void {
+  // A selection can outlive the rows it named (a re-capture, a single delete),
+  // so prune to what is actually on screen before counting.
+  const live = new Set((captureSession?.rows ?? []).map((r) => r.selector));
+  for (const selector of [...batchSelection]) {
+    if (!live.has(selector)) batchSelection.delete(selector);
+  }
+  const count = batchSelection.size;
+  captureBatch.hidden = count === 0;
+  captureBatchCount.textContent = `${count} ${count === 1 ? "field" : "fields"} selected`;
+}
+
+async function deleteSelectedCaptureRows(): Promise<void> {
+  const selectors = [...batchSelection];
+  if (selectors.length === 0) return;
+  const plural = selectors.length === 1 ? "field" : "fields";
+  if (!window.confirm(`Delete ${selectors.length} ${plural} from this capture?`)) return;
+  // ONE write: deleting row by row would leave the list and the stored session
+  // disagreeing if the worker failed halfway.
+  const response = await sendToBackground({ type: "REMOVE_CAPTURE_ROWS", selectors });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  batchSelection.clear();
+  editingSelector = null;
+  selectorTestResult = null;
+  setPickStatus(`Deleted ${selectors.length} ${plural}.`);
+  renderCapture();
+}
+
 async function editCaptureRow(
   row: CaptureRow,
-  patch: { displayLabel?: string | null; fieldType?: PortalFieldType },
+  patch: { displayLabel?: string | null; fieldType?: PortalFieldType; newSelector?: string },
 ): Promise<void> {
   const response = await sendToBackground({
     type: "EDIT_CAPTURE_ROW",
@@ -3636,13 +3738,20 @@ async function removeCaptureRow(row: CaptureRow): Promise<void> {
 
 async function testCaptureSelector(selector: string): Promise<void> {
   if (portalTabId == null) {
-    setPickStatus("Open the portal tab to re-test this field.", true);
+    setPickStatus("Open the portal tab to test this field.", true);
+    return;
+  }
+  if (selector === "") {
+    setPickStatus("Type a selector to test.", true);
     return;
   }
   const response = await sendToBackground({
     type: "TEST_CAPTURE_SELECTOR",
     tabId: portalTabId,
     selector,
+    // Flash the matches on the page: a count alone cannot tell the trainer
+    // they matched the WRONG control, which is the failure that matters.
+    highlight: true,
   });
   if (!response.ok) {
     setPickStatus(response.error, true);
@@ -3769,6 +3878,11 @@ captureStart.addEventListener("click", () => {
 });
 
 captureAddField.addEventListener("click", () => void addFieldByPicking());
+captureBatchDelete.addEventListener("click", () => void deleteSelectedCaptureRows());
+captureBatchClear.addEventListener("click", () => {
+  batchSelection.clear();
+  renderCapture();
+});
 
 captureNextPage.addEventListener("click", () => {
   void startCapture("next-page");
@@ -3816,6 +3930,141 @@ async function restoreCapture(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// US-5 — the sandbox test profile.
+//
+// Fills a real portal from the org's DESIGNATED test provider, with no case in
+// play: no touch, no status change, no case lifecycle consumed. That is what
+// makes testing a 100+ field form a matter of seconds instead of manufacturing
+// a case per attempt.
+// ---------------------------------------------------------------------------
+
+/** The sandbox provider for the loaded roster, or null when the org has
+ * designated none. */
+function sandboxProvider(): ProviderListItem | null {
+  return findSandboxProvider(providers);
+}
+
+/** The pinned Search entry. Rendered from the roster, so an org that has not
+ * designated a test provider gets the honest reason instead of a button that
+ * fails when pressed. */
+function renderSandboxEntry(): void {
+  const provider = sandboxProvider();
+  const offer = panelMode === "search" && orgReady;
+  sandboxEntry.hidden = !offer || provider == null;
+  sandboxUnavailable.hidden = !offer || provider != null;
+  if (provider) {
+    sandboxEntryMeta.textContent = `${providerLabel(provider)} · no case needed`;
+  } else {
+    sandboxUnavailable.textContent = SANDBOX_UNAVAILABLE_NOTE;
+  }
+}
+
+/** The in-case-work sandbox chrome. Clear portal form lives here and ONLY
+ * here: it resets every input on the page, which on a live case would wipe a
+ * coordinator's real typing. */
+function renderSandboxBar(): void {
+  const showing = sandboxActive && panelMode === "case";
+  sandboxBar.hidden = !showing;
+  // The sandbox has no case, so the whole case block goes with it — one
+  // container, the same rule renderModeSurfaces uses, for the same reason:
+  // reaching into the cards inside would clobber state they own. Portal
+  // recognition deliberately sits OUTSIDE it and stays visible.
+  caseFill.hidden = showing;
+  if (!showing) return;
+  const provider = providers.find((p) => p.id === selectedProviderId()) ?? null;
+  const state = sandboxFillState(provider);
+  sandboxBarNote.textContent = provider
+    ? `Filling as ${providerLabel(provider)}${state ? ` · ${state}` : ""}. Nothing is logged to a case.`
+    : "Sandbox provider is no longer on this roster.";
+  const ready = provider != null && portal != null && portalTabId != null;
+  sandboxFillBtn.disabled = !ready;
+  sandboxClearBtn.disabled = portalTabId == null;
+}
+
+function setSandboxStatus(message: string | null, isError = false): void {
+  sandboxStatus.hidden = message == null;
+  sandboxStatus.textContent = message ?? "";
+  sandboxStatus.classList.toggle("capture-editor-warn", isError);
+}
+
+/** Enter the sandbox: select the designated provider and land in Work cases.
+ * Deliberately reuses the normal provider-selection path, so quick cards,
+ * facilities and the portal gate all behave exactly as they do for a real
+ * provider — the ONLY difference is that no case is required. */
+async function enterSandbox(): Promise<void> {
+  const provider = sandboxProvider();
+  if (provider == null) return;
+  sandboxActive = true;
+  setSandboxStatus(null);
+  hideSearchResults();
+  searchInput.value = "";
+  await openInCaseWork(selectProviderInPanel(provider));
+  renderSandboxBar();
+  updateFillReady();
+}
+
+function leaveSandbox(): void {
+  sandboxActive = false;
+  setSandboxStatus(null);
+  renderSandboxBar();
+  updateFillReady();
+}
+
+async function runSandboxFill(): Promise<void> {
+  const providerId = selectedProviderId();
+  const activePortal = portal;
+  if (providerId == null || activePortal == null || portalTabId == null) return;
+  const provider = providers.find((p) => p.id === providerId) ?? null;
+  sandboxFillBtn.disabled = true;
+  setSandboxStatus("Filling…");
+  const response = await sendToBackground({
+    type: "SANDBOX_FILL",
+    tabId: portalTabId,
+    providerId,
+    portalKey: activePortal.key,
+    state: sandboxFillState(provider),
+    facilityId: selectedFacilityId(),
+  });
+  sandboxFillBtn.disabled = false;
+  if (!response.ok) {
+    setSandboxStatus(response.error, true);
+    return;
+  }
+  const summary = response.data;
+  const parts = [`Filled ${summary.filled} of ${summary.pageFields} fields on this page`];
+  if (summary.skipped.length > 0) parts.push(`${summary.skipped.length} skipped`);
+  if (summary.manual.length > 0) parts.push(`${summary.manual.length} need manual entry`);
+  // A failed machine log is reported, never swallowed — but it does not make
+  // the fill a failure, because the fill happened.
+  setSandboxStatus(
+    summary.logError ? `${parts.join(" · ")}. ${summary.logError}` : `${parts.join(" · ")}.`,
+    summary.logError != null,
+  );
+}
+
+async function clearPortalFormFromPanel(): Promise<void> {
+  if (portalTabId == null) return;
+  sandboxClearBtn.disabled = true;
+  const response = await sendToBackground({ type: "CLEAR_PORTAL_FORM", tabId: portalTabId });
+  sandboxClearBtn.disabled = false;
+  if (!response.ok) {
+    setSandboxStatus(response.error, true);
+    return;
+  }
+  const { cleared } = response.data;
+  setSandboxStatus(
+    cleared === 0
+      ? "Nothing to clear — the form is already empty."
+      : `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. Ready to re-test.`,
+  );
+}
+
+sandboxEntry.addEventListener("click", () => void enterSandbox());
+sandboxExitBtn.addEventListener("click", () => leaveSandbox());
+sandboxFillBtn.addEventListener("click", () => void runSandboxFill());
+sandboxClearBtn.addEventListener("click", () => void clearPortalFormFromPanel());
+
+// ---------------------------------------------------------------------------
 // E6.9 F6.9.7 + 2026-08-19 — the job chooser (Search / Work cases / Train
 // forms), and F6.9.9 — Train forms.
 // ---------------------------------------------------------------------------
@@ -3853,6 +4102,8 @@ function renderModeSurfaces(): void {
 
   if (training) hideSearchResults();
   renderSelectedProvider();
+  renderSandboxEntry();
+  renderSandboxBar();
   renderCapture();
   void refreshPortalAccessPrompt();
 }
@@ -3918,7 +4169,12 @@ async function loadSharedRegistry(): Promise<void> {
     trainRecognition.textContent = response.error;
     return;
   }
-  sharedPortalRows = response.data;
+  // A non-array here is fatal, not cosmetic: renderTrainPayers iterates this
+  // DURING render, so `for (… of null)` takes the whole panel down rather than
+  // just the payer select. An `ok` envelope carrying a null `data` is a shape
+  // the wire permits, so treat anything unexpected as an empty library — the
+  // trainer then sees "no payers" instead of a blank panel.
+  sharedPortalRows = Array.isArray(response.data) ? response.data : [];
   renderTrainPayers();
   await refreshTrainRecognition();
 }

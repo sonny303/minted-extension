@@ -1,6 +1,7 @@
 // S5.2/S5.4 — capture session rules.
 import { describe, expect, it } from "vitest";
 import {
+  applyRowEdit,
   canSendCapture,
   captureCounts,
   diffCapture,
@@ -573,6 +574,39 @@ describe("mergePageCapture — a re-capture must not delete manual work", () => 
     expect(mergePageCapture(previous, scan, page)[0]?.fieldType).toBe("select");
   });
 
+  it("KEEPS an auto row whose selector the trainer rewrote by hand", () => {
+    // US-3.2: fixing a bad selector is exactly as much manual work as adding
+    // the field would have been, and the rewritten selector is by definition
+    // one the scanner does not produce — so the next scan reports the row as
+    // gone. Judging by origin alone would delete the fix on the very next
+    // re-capture, which is when a trainer is most likely to re-capture.
+    const previous = [
+      row({
+        selector: "#hand-written",
+        pageStep: page,
+        origin: "auto_detected",
+        selectorOverridden: true,
+        displayLabel: "NPI",
+      }),
+    ];
+    const scan = [row({ selector: "input:nth-of-type(4)", pageStep: page })];
+
+    const merged = mergePageCapture(previous, scan, page);
+    expect(merged.map((r) => r.selector).sort()).toEqual([
+      "#hand-written",
+      "input:nth-of-type(4)",
+    ]);
+  });
+
+  it("does not duplicate a rewritten selector the scan now produces itself", () => {
+    const previous = [
+      row({ selector: "#npi", pageStep: page, origin: "auto_detected", selectorOverridden: true }),
+    ];
+    expect(mergePageCapture(previous, [row({ selector: "#npi", pageStep: page })], page)).toHaveLength(
+      1,
+    );
+  });
+
   it("keeps a user-mapped row belonging to ANOTHER page untouched", () => {
     const previous = [
       row({ selector: "#p1", pageStep: "Page 1", origin: "user_mapped" }),
@@ -580,5 +614,94 @@ describe("mergePageCapture — a re-capture must not delete manual work", () => 
     ];
     const merged = mergePageCapture(previous, [row({ selector: "#p2b", pageStep: "Page 2" })], "Page 2");
     expect(merged.map((r) => r.selector).sort()).toEqual(["#p1", "#p2b"]);
+  });
+});
+
+// US-3.2 — the per-row editor. Its one hard rule is the invariant the whole
+// capture session rests on: the SELECTOR IS THE KEY (diffCapture,
+// mergePageCapture and SET_CAPTURE_CHOICE all match rows on it), and the one
+// moment a duplicate can be introduced is a hand-written selector.
+describe("applyRowEdit", () => {
+  const rows = [
+    row({ selector: "#a", label: "Portal's name for A", fieldType: "text" }),
+    row({ selector: "#b", label: "B" }),
+  ];
+
+  it("renames without touching the payer's captured label", () => {
+    // The split is the point: a re-scan must be able to refresh what the
+    // portal says without discarding what the human called it.
+    const out = applyRowEdit(rows, "#a", { displayLabel: " NPI (Type 1) " });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.rows[0]).toMatchObject({
+      displayLabel: "NPI (Type 1)",
+      label: "Portal's name for A",
+    });
+  });
+
+  it("clears the trainer's name when it is blanked, back to the portal's", () => {
+    const named = [row({ selector: "#a", label: "Portal", displayLabel: "Mine" })];
+    const out = applyRowEdit(named, "#a", { displayLabel: "   " });
+    expect(out.ok && out.rows[0]?.displayLabel).toBeNull();
+  });
+
+  it("leaves a field alone when its key is ABSENT", () => {
+    // Present-with-empty means "clear it"; absent means "I did not touch it".
+    // Collapsing the two would wipe a name on any type-only edit.
+    const named = [row({ selector: "#a", displayLabel: "Mine", fieldType: "text" })];
+    const out = applyRowEdit(named, "#a", { fieldType: "select" });
+    expect(out.ok && out.rows[0]).toMatchObject({ displayLabel: "Mine", fieldType: "select" });
+  });
+
+  it("marks a type change as human-chosen so a re-scan cannot undo it", () => {
+    const out = applyRowEdit(rows, "#a", { fieldType: "date" });
+    expect(out.ok && out.rows[0]).toMatchObject({ fieldType: "date", typeOverridden: true });
+  });
+
+  it("rewrites a selector, flags the override, and re-opens it for sending", () => {
+    // sent:false is deliberate — the shared library still holds a row at the
+    // OLD selector, so the fix is a NEW proposal, not a no-op.
+    const sent = [row({ selector: "#old", sent: true })];
+    const out = applyRowEdit(sent, "#old", { newSelector: "  #new  " });
+    expect(out.ok && out.rows[0]).toMatchObject({
+      selector: "#new",
+      selectorOverridden: true,
+      sent: false,
+    });
+  });
+
+  it("REFUSES a rewrite that collides with another row", () => {
+    // Two rows sharing a selector would corrupt every diff and propose the
+    // same selector to the shared library twice.
+    const out = applyRowEdit(rows, "#a", { newSelector: "#b" });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toMatch(/already uses that selector/i);
+  });
+
+  it("allows a no-op rewrite to a row's own selector", () => {
+    // Pressing Save without touching the selector box must not read as a
+    // collision with itself.
+    const out = applyRowEdit(rows, "#a", { newSelector: "#a", displayLabel: "A" });
+    expect(out.ok && out.rows[0]).toMatchObject({ selector: "#a", displayLabel: "A" });
+    expect(out.ok && out.rows[0]?.selectorOverridden).toBeUndefined();
+  });
+
+  it("ignores a blank selector rather than erasing the row's key", () => {
+    const out = applyRowEdit(rows, "#a", { newSelector: "   " });
+    expect(out.ok && out.rows[0]?.selector).toBe("#a");
+  });
+
+  it("reports an unknown row instead of silently doing nothing", () => {
+    const out = applyRowEdit(rows, "#gone", { displayLabel: "x" });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toMatch(/no longer in this capture/i);
+  });
+
+  it("never mutates the input rows", () => {
+    const before = JSON.stringify(rows);
+    applyRowEdit(rows, "#a", { displayLabel: "X", fieldType: "select", newSelector: "#z" });
+    expect(JSON.stringify(rows)).toBe(before);
   });
 });

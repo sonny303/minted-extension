@@ -450,5 +450,10 @@ export interface ProviderListItem {
   // key at all, and the row must still render — absent means "this server
   // doesn't say", never "no groups".
   groups?: ProviderGroupRef[];
+  /** The org's designated dry-run test provider (panel E4.2 F4.2.7). Already
+   * in the list projection; the extension reads it to offer the US-5 sandbox.
+   * The panel excludes such a provider from queue/generation/scorecard, which
+   * is exactly what makes it safe to fill with repeatedly. */
+  isTestProvider?: boolean;
   updatedAt: string;
 }

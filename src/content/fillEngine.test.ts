@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyFill } from "./fillEngine";
+import { applyFill, clearPortalForm } from "./fillEngine";
 import type { FillInstruction } from "../shared/fill";
 
 function instr(over: Partial<FillInstruction> & Pick<FillInstruction, "label" | "selector">): FillInstruction {
@@ -131,5 +131,81 @@ describe("applyFill", () => {
     `;
     const result = applyFill([]);
     expect(result.pageFields).toBe(3);
+  });
+});
+
+// US-5.3 — "Clear portal form". Sandbox-only by construction: it resets every
+// control on the page, which on a live case would wipe a coordinator's real
+// typing. These pin the two things that make it safe to press repeatedly —
+// it reports what it actually changed, and it goes through the same native
+// setter path as a fill so a framework-controlled input really sees the clear.
+describe("clearPortalForm", () => {
+  it("clears text, textarea, select, checkbox and radio", () => {
+    document.body.innerHTML = `
+      <input id="t" type="text" value="Ada" />
+      <textarea id="a">notes</textarea>
+      <select id="s"><option value="">Choose</option><option value="x" selected>X</option></select>
+      <input id="c" type="checkbox" checked />
+      <input id="r" type="radio" name="g" checked />
+    `;
+    expect(clearPortalForm()).toBe(5);
+    expect(document.querySelector<HTMLInputElement>("#t")!.value).toBe("");
+    expect(document.querySelector<HTMLTextAreaElement>("#a")!.value).toBe("");
+    expect(document.querySelector<HTMLSelectElement>("#s")!.value).toBe("");
+    expect(document.querySelector<HTMLInputElement>("#c")!.checked).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#r")!.checked).toBe(false);
+  });
+
+  it("counts only what it actually changed", () => {
+    // The count is the panel's whole feedback line, so an already-empty form
+    // has to read "nothing to clear" rather than a fake success.
+    document.body.innerHTML = `
+      <input id="t" type="text" value="" />
+      <input id="c" type="checkbox" />
+      <select id="s"><option value="">Choose</option><option value="x">X</option></select>
+    `;
+    expect(clearPortalForm()).toBe(0);
+  });
+
+  it("leaves buttons and hidden inputs alone", () => {
+    // Clearing a hidden field would destroy portal state (CSRF tokens, view
+    // state) that the human never typed and cannot retype.
+    document.body.innerHTML = `
+      <input id="h" type="hidden" value="viewstate" />
+      <input id="b" type="submit" value="Submit" />
+      <input id="t" type="text" value="Ada" />
+    `;
+    expect(clearPortalForm()).toBe(1);
+    expect(document.querySelector<HTMLInputElement>("#h")!.value).toBe("viewstate");
+    expect(document.querySelector<HTMLInputElement>("#b")!.value).toBe("Submit");
+  });
+
+  it("fires input+change so a controlled input sees the clear", () => {
+    // Same reason applyFill uses the native setter: a React-style portal that
+    // only listens to events would otherwise re-render the old value straight
+    // back, leaving the form visibly unchanged.
+    document.body.innerHTML = `<input id="t" type="text" value="Ada" />`;
+    const input = document.querySelector<HTMLInputElement>("#t")!;
+    const seen: string[] = [];
+    input.addEventListener("input", () => seen.push("input"));
+    input.addEventListener("change", () => seen.push("change"));
+    clearPortalForm();
+    expect(seen).toEqual(["input", "change"]);
+  });
+
+  it("keeps going when one control throws", () => {
+    document.body.innerHTML = `
+      <input id="bad" type="checkbox" checked />
+      <input id="good" type="text" value="y" />
+    `;
+    const bad = document.querySelector<HTMLInputElement>("#bad")!;
+    Object.defineProperty(bad, "checked", {
+      get: () => true,
+      set: () => {
+        throw new Error("stubborn widget");
+      },
+    });
+    expect(clearPortalForm()).toBe(1);
+    expect(document.querySelector<HTMLInputElement>("#good")!.value).toBe("");
   });
 });

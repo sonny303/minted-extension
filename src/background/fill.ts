@@ -18,8 +18,15 @@ import type {
   FillPageResult,
   FillSummary,
   ReportedField,
+  SandboxFillSummary,
 } from "../shared/fill";
-import { ApiError, getPortalFieldMaps, getProviderProfile, postFillEvent } from "./api";
+import {
+  ApiError,
+  getPortalFieldMaps,
+  getProviderProfile,
+  postFillEvent,
+  postSharedTestFill,
+} from "./api";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -313,5 +320,123 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     // touches route validates fill_session_id and 404s an unknown id.
     fillSessionId: eventRecorded ? fillSessionId : null,
     pageFields: pageResult.pageFields,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// US-5 — the sandbox fill.
+//
+// The bottleneck it removes: filling normally requires a case, and the 4-part
+// case key means one case per provider x group x payer x state — so testing a
+// 100+ field form repeatedly means manufacturing cases. The sandbox fills from
+// a REAL provider (the org's designated test provider) so the values exercise
+// the true profile pipeline, but writes NOTHING that belongs to a case.
+//
+// It is deliberately NOT the mock dry run: that one is for Train forms, which
+// carries no org and therefore cannot read a provider at all. Two mechanisms,
+// each correct for its mode.
+// ---------------------------------------------------------------------------
+
+export interface SandboxFillRequest {
+  tabId: number;
+  providerId: string;
+  portalKey: string;
+  /** From the provider's home state / chosen licence — there is no case to
+   * take it from. Null resolves state-scoped tokens honestly unresolved. */
+  state: string | null;
+  facilityId: string | null;
+  /** Telemetry only: /api/shared-test-fills is user-scoped and takes the org
+   * in its body. */
+  orgId: string | null;
+}
+
+export async function sandboxFillPortal(
+  request: SandboxFillRequest,
+): Promise<SandboxFillSummary> {
+  const startedAt = new Date().toISOString();
+  const fillSessionId = crypto.randomUUID();
+  const [maps, { profile }] = await Promise.all([
+    getPortalFieldMaps(request.portalKey),
+    getProviderProfile(request.providerId, {
+      state: request.state ?? undefined,
+      facilityId: request.facilityId,
+    }),
+  ]);
+  const { instructions, manual } = planFill(maps, profile);
+
+  try {
+    const pong = (await chrome.tabs.sendMessage(request.tabId, { type: "PING" })) as
+      | { ok?: boolean }
+      | undefined;
+    if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
+  } catch (error) {
+    throw new Error(
+      "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
+      { cause: error },
+    );
+  }
+
+  let pageResult: FillPageResult;
+  try {
+    const response = (await chrome.tabs.sendMessage(request.tabId, {
+      type: "APPLY_FILL",
+      instructions,
+    })) as { ok: boolean; data?: FillPageResult; error?: string } | undefined;
+    if (!response?.ok || !response.data) {
+      throw new Error(response?.error ?? "the page didn't confirm the sandbox fill");
+    }
+    pageResult = response.data;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    throw new Error(
+      message.includes("Receiving end does not exist")
+        ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
+        : `Sandbox fill failed on the page: ${message}`,
+      { cause: error },
+    );
+  }
+  const completedAt = new Date().toISOString();
+
+  // The machine log rides /api/shared-test-fills: is_test, NO case and NO
+  // provider. That is what makes 5.2 true by construction rather than by
+  // remembering not to call the case routes — there is no case id to send.
+  // It also keeps these runs out of form-drift, which excludes test fills.
+  let logError: string | null = null;
+  let recordedId: string | null = null;
+  try {
+    recordedId = await postSharedTestFill({
+      id: fillSessionId,
+      portalKey: request.portalKey,
+      fieldsFilled: pageResult.filled.length,
+      fieldsSkipped: [
+        ...pageResult.skipped,
+        ...manual.map((f): ReportedField => ({ ...f, kind: "manual" })),
+      ],
+      startedAt,
+      completedAt,
+      orgId: request.orgId,
+    });
+  } catch (error) {
+    // A logging failure must not un-report a fill that really happened.
+    const detail = error instanceof Error ? error.message : "unknown error";
+    logError = `Sandbox fill applied, but the test log could not be written: ${detail}`;
+  }
+
+  // The selectors we actually wrote — the exact set "Clear portal form"
+  // resets, so it can never touch something the extension did not type.
+  const filledLabelSet = new Set(pageResult.filled);
+  const filledSelectors = instructions
+    .filter((i) => filledLabelSet.has(i.label))
+    .map((i) => i.selector);
+
+  return {
+    filled: pageResult.filled.length,
+    filledLabels: pageResult.filled,
+    skipped: pageResult.skipped,
+    manual,
+    pageFields: pageResult.pageFields,
+    filledSelectors,
+    fillSessionId: recordedId,
+    logError,
   };
 }

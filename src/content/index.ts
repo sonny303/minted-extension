@@ -8,9 +8,14 @@
 // (which fires input/change so the page's own validation runs), and reports
 // per-field results back. It never throws across the messaging boundary.
 import type { ContentRequest } from "../shared/fill";
-import { applyFill } from "./fillEngine";
+import { applyFill, clearPortalForm } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
-import { cancelElementPick, countSelectorMatches, startElementPick } from "./elementPicker";
+import {
+  cancelElementPick,
+  countSelectorMatches,
+  highlightSelector,
+  startElementPick,
+} from "./elementPicker";
 
 chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResponse) => {
   if (message?.type === "PING") {
@@ -51,8 +56,25 @@ chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResp
   }
   if (message?.type === "MATCH_SELECTOR") {
     // Shape question only: how many elements does this selector hit? Never
-    // reads what any of them contain.
-    sendResponse({ ok: true, data: countSelectorMatches(message.selector) });
+    // reads what any of them contain. `highlight` also flashes them green so
+    // the trainer can SEE which control they just described.
+    sendResponse({
+      ok: true,
+      data: message.highlight
+        ? highlightSelector(message.selector)
+        : countSelectorMatches(message.selector),
+    });
+    return false;
+  }
+  if (message?.type === "CLEAR_FORM") {
+    try {
+      sendResponse({ ok: true, data: clearPortalForm() });
+    } catch (error) {
+      sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not clear this form",
+      });
+    }
     return false;
   }
   if (message?.type === "APPLY_FILL") {

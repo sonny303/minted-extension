@@ -17,7 +17,13 @@ import type {
   PortalFieldType,
   StatusBumpMeta,
 } from "./apiTypes";
-import type { FillCoverage, FillReportRecord, FillSummary, MockDryRunSummary } from "./fill";
+import type {
+  FillCoverage,
+  FillReportRecord,
+  FillSummary,
+  MockDryRunSummary,
+  SandboxFillSummary,
+} from "./fill";
 import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
 import type { QuickCards } from "./quickCards";
@@ -87,14 +93,36 @@ export type BgRequest =
   | { type: "CANCEL_CAPTURE_PICK"; tabId: number }
   // Both patch keys are OPTIONAL and independent: an absent key leaves that
   // column alone, so renaming a field never silently re-types it.
+  // `selector` IDENTIFIES the row; `newSelector` (US-3.2's Selector Workshop)
+  // rewrites it. A rewrite is rejected when another row already owns the
+  // target, because the selector is the row's key.
   | {
       type: "EDIT_CAPTURE_ROW";
       selector: string;
       displayLabel?: string | null;
       fieldType?: PortalFieldType;
+      newSelector?: string;
     }
   | { type: "REMOVE_CAPTURE_ROW"; selector: string }
-  | { type: "TEST_CAPTURE_SELECTOR"; tabId: number; selector: string }
+  // Bulk delete is ONE write, not N: a partial failure mid-loop would leave
+  // the panel's list and the stored session disagreeing.
+  | { type: "REMOVE_CAPTURE_ROWS"; selectors: string[] }
+  // `highlight` also flashes the matches green on the page.
+  | { type: "TEST_CAPTURE_SELECTOR"; tabId: number; selector: string; highlight?: boolean }
+  // US-5.3 — reset the portal form. Sandbox-only at the UI; the worker
+  // refuses it outside sandbox so a stray message cannot wipe a live form.
+  | { type: "CLEAR_PORTAL_FORM"; tabId: number }
+  // US-5.2 — fill from the org's designated test provider. No case, so no
+  // touch, no status change and no case lifecycle consumed; the machine log
+  // rides the is_test route.
+  | {
+      type: "SANDBOX_FILL";
+      tabId: number;
+      providerId: string;
+      portalKey: string;
+      state: string | null;
+      facilityId: string | null;
+    }
   | { type: "SEND_CAPTURE" }
   | { type: "CLEAR_CAPTURE" }
   // S4.3: tick one SOP step complete. The server enforces the ordering rule
@@ -262,6 +290,9 @@ export interface BgResponseMap {
   CANCEL_CAPTURE_PICK: null;
   EDIT_CAPTURE_ROW: CaptureSession;
   REMOVE_CAPTURE_ROW: CaptureSession;
+  REMOVE_CAPTURE_ROWS: CaptureSession;
+  CLEAR_PORTAL_FORM: { cleared: number };
+  SANDBOX_FILL: SandboxFillSummary;
   TEST_CAPTURE_SELECTOR: SelectorTestResult;
   SEND_CAPTURE: CaptureSession;
   CLEAR_CAPTURE: null;
