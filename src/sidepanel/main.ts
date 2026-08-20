@@ -4088,9 +4088,14 @@ async function runSandboxFill(): Promise<void> {
 }
 
 async function clearPortalFormFromPanel(): Promise<void> {
-  if (portalTabId == null) return;
+  const providerId = selectedProviderId();
+  if (portalTabId == null || providerId == null) return;
   sandboxClearBtn.disabled = true;
-  const response = await sendToBackground({ type: "CLEAR_PORTAL_FORM", tabId: portalTabId });
+  const response = await sendToBackground({
+    type: "CLEAR_PORTAL_FORM",
+    tabId: portalTabId,
+    providerId,
+  });
   sandboxClearBtn.disabled = false;
   if (!response.ok) {
     setSandboxStatus(response.error, true);

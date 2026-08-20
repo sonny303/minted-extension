@@ -109,9 +109,12 @@ export type BgRequest =
   | { type: "REMOVE_CAPTURE_ROWS"; selectors: string[] }
   // `highlight` also flashes the matches green on the page.
   | { type: "TEST_CAPTURE_SELECTOR"; tabId: number; selector: string; highlight?: boolean }
-  // US-5.3 — reset the portal form. Sandbox-only at the UI; the worker
-  // refuses it outside sandbox so a stray message cannot wipe a live form.
-  | { type: "CLEAR_PORTAL_FORM"; tabId: number }
+  // US-5.3 — reset the portal form. Sandbox-only at the UI (the button does
+  // not exist outside sandbox mode); the worker re-checks `providerId`
+  // against the roster's own `is_test_provider` flag before clearing
+  // anything — the same guard SANDBOX_FILL applies — so a stray or
+  // stale-state message can never wipe a real, live form.
+  | { type: "CLEAR_PORTAL_FORM"; tabId: number; providerId: string }
   // US-5.2 — fill from the org's designated test provider. No case, so no
   // touch, no status change and no case lifecycle consumed; the machine log
   // rides the is_test route.

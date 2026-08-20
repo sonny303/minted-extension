@@ -47,7 +47,9 @@ const STYLE = `
 
 let activePick: (() => void) | null = null;
 
-/** True while a pick is in progress — the worker refuses to start a second. */
+/** True while a pick is in progress. `startElementPick` self-cancels any
+ * prior pick rather than being refused — the worker never calls this; it
+ * exists for tests and callers that want to check without starting one. */
 export function isPicking(): boolean {
   return activePick != null;
 }

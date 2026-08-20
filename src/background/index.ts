@@ -216,6 +216,20 @@ async function resolveMockTelemetryOrgId(): Promise<string> {
   );
 }
 
+/**
+ * Shared guard for the two US-5 sandbox actions (SANDBOX_FILL,
+ * CLEAR_PORTAL_FORM): re-checks the roster's OWN `is_test_provider` flag for
+ * `providerId` rather than trusting whatever the caller sent. Defense in
+ * depth against a panel-side state bug (or any other caller) pointing a
+ * sandbox action at a real, non-designated provider — a fill with no case
+ * attribution, or a form clear on a live case, must never reach real data.
+ */
+async function assertSandboxProvider(providerId: string, message: string): Promise<void> {
+  const roster = await listProviders();
+  const target = roster.find((p) => p.id === providerId);
+  if (!isSandboxProvider(target)) throw new Error(message);
+}
+
 /** Exported for the TE-10 harness — the side panel talks over messaging. */
 export async function handleRequest(request: BgRequest): Promise<unknown> {
   switch (request.type) {
@@ -493,13 +507,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // roster's own `is_test_provider` flag rather than trusting whatever
       // provider id the panel sent. A real provider's data must never reach a
       // live portal through the no-case, no-attribution sandbox path.
-      const sandboxRoster = await listProviders();
-      const sandboxTarget = sandboxRoster.find((p) => p.id === request.providerId);
-      if (!isSandboxProvider(sandboxTarget)) {
-        throw new Error(
-          "This provider isn't the organization's designated sandbox test profile — refusing to run a no-attribution fill against real provider data.",
-        );
-      }
+      await assertSandboxProvider(
+        request.providerId,
+        "This provider isn't the organization's designated sandbox test profile — refusing to run a no-attribution fill against real provider data.",
+      );
       await ensureContentScript(request.tabId);
       return sandboxFillPortal({
         tabId: request.tabId,
@@ -511,6 +522,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       });
     }
     case "CLEAR_PORTAL_FORM": {
+      // Same guard as SANDBOX_FILL, for the same reason: clearing every
+      // control on the page is safe only against the sandbox's own
+      // no-attribution provider — on a real case it would wipe a
+      // coordinator's live typing.
+      await assertSandboxProvider(
+        request.providerId,
+        "This provider isn't the organization's designated sandbox test profile — refusing to clear a form that may carry real, in-progress work.",
+      );
       await ensureContentScript(request.tabId);
       const response = (await chrome.tabs.sendMessage(request.tabId, { type: "CLEAR_FORM" })) as
         | { ok?: boolean; data?: number; error?: string }

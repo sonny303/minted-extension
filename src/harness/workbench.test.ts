@@ -990,16 +990,18 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
 });
 
 // ---------------------------------------------------------------------------
-// US-5 sandbox fill — the worker's own is_test_provider re-check.
+// US-5 sandbox actions — the worker's own is_test_provider re-check.
 //
 // The panel is expected to keep sandboxActive in sync with the real
 // selection, but the worker must not TRUST that: a stale panel state (or any
 // other caller) sending a real provider id must never reach a live portal
-// through the no-attribution, no-touch sandbox path. Proven at the
-// handleRequest boundary — the same path chrome.runtime.onMessage uses —
-// against the mock server's own roster, not a stub.
+// through the no-attribution, no-touch sandbox path — nor clear a real,
+// in-progress form. Proven at the handleRequest boundary — the same path
+// chrome.runtime.onMessage uses — against the mock server's own roster, not
+// a stub. Both SANDBOX_FILL and CLEAR_PORTAL_FORM share the guard
+// (assertSandboxProvider in background/index.ts).
 // ---------------------------------------------------------------------------
-describe("SANDBOX_FILL — refuses any provider that isn't the designated sandbox profile", () => {
+describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't the designated sandbox profile", () => {
   let previousSendMessage: typeof chrome.tabs.sendMessage;
 
   beforeEach(async () => {
@@ -1058,6 +1060,38 @@ describe("SANDBOX_FILL — refuses any provider that isn't the designated sandbo
 
     expect(summary.filled).toBe(1);
     expect(summary.logError).toBeNull();
+  });
+
+  it("refuses CLEAR_PORTAL_FORM for a real, non-designated provider before touching the tab", async () => {
+    const { handleRequest } = await import("../background/index");
+    chrome.tabs.sendMessage = (async () => {
+      throw new Error("CLEAR_PORTAL_FORM must not message the tab for a refused provider");
+    }) as typeof chrome.tabs.sendMessage;
+
+    await expect(
+      handleRequest({
+        type: "CLEAR_PORTAL_FORM",
+        tabId: 1,
+        providerId: FIXTURES.PROVIDER_ID, // a real roster provider, not the sandbox one
+      }),
+    ).rejects.toThrow(/designated sandbox test profile/);
+  });
+
+  it("clears the form once the request really names the designated sandbox provider", async () => {
+    const { handleRequest } = await import("../background/index");
+    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+      if (message?.type === "PING") return { ok: true };
+      if (message?.type === "CLEAR_FORM") return { ok: true, data: 2 };
+      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+
+    const result = (await handleRequest({
+      type: "CLEAR_PORTAL_FORM",
+      tabId: 1,
+      providerId: FIXTURES.SANDBOX_PROVIDER_ID,
+    })) as { cleared: number };
+
+    expect(result.cleared).toBe(2);
   });
 });
 

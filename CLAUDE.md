@@ -347,6 +347,13 @@ portalUrl, portalKey?, facilityId? }` through
   believed. Pinned in `src/harness/workbench.test.ts` (a real, non-designated
   provider is refused before any tab message is sent; the designated sandbox
   provider still fills) against a new `FIXTURES.SANDBOX_PROVIDER_ID` roster row.
+  **`CLEAR_PORTAL_FORM` carries the same guard** (`assertSandboxProvider`,
+  shared with `SANDBOX_FILL`): its message widened to carry `providerId`, and
+  the worker refuses to clear anything unless that id really is the
+  designated sandbox provider — resetting every control on a REAL case's form
+  would wipe a coordinator's live typing, the same blast radius as filling
+  one with the wrong data. The message comment previously CLAIMED this guard
+  existed when it did not (review nit); it now does.
 - **A list read that renders must never trust an `ok` envelope's `data`.**
   `loadSharedRegistry` assigned `response.data` straight to the shared-portal
   rows, and `renderTrainPayers` iterates it DURING render — so a null `data`
