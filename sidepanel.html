@@ -130,6 +130,11 @@
               </button>
             </div>
             <p id="mock-dry-run-status" class="btn-note" hidden></p>
+            <!-- BITE-TRAIN-02: the dry run already knows WHICH field failed
+                 and why; the counts alone sent the trainer back to the page
+                 to guess. -->
+            <div id="mock-dry-run-skipped" hidden></div>
+            <div id="mock-dry-run-gaps" hidden></div>
             <p class="btn-note">
               Review the filled form after a successful dry run before marking it proven.
             </p>

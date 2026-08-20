@@ -14,7 +14,13 @@ import type {
   ProviderProfileFacility,
   UserOrgMembership,
 } from "../shared/apiTypes";
-import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
+import type {
+  FillCoverage,
+  FillReportRecord,
+  FillSummary,
+  MockDryRunSummary,
+  ReportedField,
+} from "../shared/fill";
 import {
   sendToBackground,
   type AuthState,
@@ -48,13 +54,23 @@ import {
   CAPTURE_FIELD_TYPES,
   isNamedRow,
   nextPageSequence,
-  recognitionSummary,
   restoredSummary,
-  rowDisplayName,
   usedPageNames,
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
+import {
+  draftEdit,
+  draftForRow,
+  draftTestMatches,
+  type CaptureRowDraft,
+} from "../shared/captureDraft";
+import {
+  captureLibraryCounts,
+  captureLibrarySummary,
+  joinCaptureLibrary,
+  type CaptureListRow,
+} from "../shared/captureLibrary";
 import { accountGreeting } from "../shared/greeting";
 import {
   canTrainForms,
@@ -122,6 +138,8 @@ const trainProvenChip = el<HTMLElement>("train-proven-chip");
 const runMockDryRunBtn = el<HTMLButtonElement>("run-mock-dry-run");
 const markPortalProvenBtn = el<HTMLButtonElement>("mark-portal-proven");
 const mockDryRunStatus = el<HTMLElement>("mock-dry-run-status");
+const mockDryRunSkipped = el<HTMLElement>("mock-dry-run-skipped");
+const mockDryRunGaps = el<HTMLElement>("mock-dry-run-gaps");
 const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
@@ -3387,6 +3405,11 @@ let captureAddedPage = false;
 // re-test answer, and whether a pick is waiting on the page.
 let editingSelector: string | null = null;
 let selectorTestResult: SelectorTestResult | null = null;
+// BITE-TRAIN-01 — the open editor's UNSAVED values. Panel state, not DOM
+// state: renderCapture() rebuilds the editor for reasons the trainer did not
+// ask for (a selector test, a tab switch, a pick), and anything left in the
+// inputs would go with it.
+let rowDraft: CaptureRowDraft | null = null;
 let pickInFlight = false;
 // US-3.3 — rows ticked for a batch action, keyed by selector. Kept OUTSIDE the
 // DOM so a re-render (after an edit, a pick, a re-test) never silently drops a
@@ -3438,9 +3461,14 @@ function renderCapture(): void {
 
   const counts = captureCounts(captureSession);
   const pageCount = usedPageNames(captureSession).length;
-  let summary = captureSession
-    ? recognitionSummary(counts)
-    : "Not captured yet — read this form's fields into Minted Panel.";
+  // BITE-TRAIN-03 — the list is the scan JOINED to the shared library that is
+  // already in hand, so it survives the session storage dying with the browser
+  // and can say which library fields this page no longer has.
+  const listRows = joinCaptureLibrary(captureSession?.rows ?? [], trainFormMaps);
+  let summary = captureLibrarySummary(captureLibraryCounts(listRows));
+  if (captureSession == null && listRows.length > 0) {
+    summary = `${summary} Not captured in this browser — re-capture to check the form against the page.`;
+  }
   if (captureSession && captureAddedPage && pageCount > 0) {
     summary = `${summary} · Page ${pageCount} of ${pageCount}`;
   }
@@ -3465,30 +3493,28 @@ function renderCapture(): void {
       // Submit-form task editor (D18) — say where, not just "approve them".
       `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`;
   }
-  if (captureSession == null) return;
-
   renderBatchBar();
-  for (const group of groupCaptureRowsByPage(captureSession.rows)) {
+  for (const group of groupCaptureRowsByPage(listRows)) {
     if (group.page != null) {
       const heading = document.createElement("p");
       heading.className = "capture-page-heading";
       heading.textContent = group.page;
       captureRows.append(heading);
     }
-    for (const row of group.rows) {
-      captureRows.append(renderCaptureRow(row));
+    for (const item of group.rows) {
+      captureRows.append(renderCaptureRow(item));
     }
   }
 }
 
 /** Group rows by pageStep in the order pages were first walked. */
 function groupCaptureRowsByPage(
-  rows: readonly CaptureRow[],
-): Array<{ page: string | null; rows: CaptureRow[] }> {
+  rows: readonly CaptureListRow[],
+): Array<{ page: string | null; rows: CaptureListRow[] }> {
   const order: Array<string | null> = [];
-  const groups = new Map<string | null, CaptureRow[]>();
+  const groups = new Map<string | null, CaptureListRow[]>();
   for (const row of rows) {
-    const page = row.pageStep?.trim() ? row.pageStep.trim() : null;
+    const page = row.page;
     if (!groups.has(page)) {
       order.push(page);
       groups.set(page, []);
@@ -3498,71 +3524,100 @@ function groupCaptureRowsByPage(
   return order.map((page) => ({ page, rows: groups.get(page)! }));
 }
 
-function renderCaptureRow(row: CaptureRow): HTMLDivElement {
+function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
+  const row = entry.row;
   const item = document.createElement("div");
-  const mapped = row.chosenToken || row.suggestedToken;
-  item.className = mapped ? "capture-row" : "capture-row gap";
+  // A gap is a field with nothing behind it in the library — the trainer's
+  // actual to-do. A drifted row is worse, and says so in its own chip.
+  item.className = entry.library ? "capture-row" : "capture-row gap";
 
-  const tick = document.createElement("input");
-  tick.type = "checkbox";
-  tick.className = "capture-row-tick";
-  tick.checked = batchSelection.has(row.selector);
-  tick.setAttribute("aria-label", `Select ${rowDisplayName(row)}`);
-  tick.addEventListener("change", () => {
-    if (tick.checked) batchSelection.add(row.selector);
-    else batchSelection.delete(row.selector);
-    renderBatchBar();
-  });
-  item.append(tick);
+  // Batch actions edit the LOCAL capture, so a library-only row has nothing
+  // to tick: deleting it here would suggest the library changed, and it does
+  // not.
+  if (row) {
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.className = "capture-row-tick";
+    tick.checked = batchSelection.has(row.selector);
+    tick.setAttribute("aria-label", `Select ${entry.name}`);
+    tick.addEventListener("change", () => {
+      if (tick.checked) batchSelection.add(row.selector);
+      else batchSelection.delete(row.selector);
+      renderBatchBar();
+    });
+    item.append(tick);
+  }
 
   const label = document.createElement("span");
   label.className = "capture-row-label";
-  label.textContent = rowDisplayName(row);
+  label.textContent = entry.name;
   // A row the portal never named needs a human name before anyone can act on
   // it later; say so rather than rendering a blank and hoping.
-  if (!isNamedRow(row)) label.classList.add("id-empty");
-  label.title = row.selector;
+  if (row && !isNamedRow(row)) label.classList.add("id-empty");
+  label.title = entry.selector;
   item.append(label);
 
+  // BITE-TRAIN-03 — the second column is what the LIBRARY says about the
+  // field, which is the only thing here that decides whether it will fill.
   const value = document.createElement("span");
   value.className = "capture-row-token mono";
-  value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
+  value.textContent = entry.library ? entry.library.note : "Not in the shared library";
   item.append(value);
 
-  if (row.origin === "user_mapped") {
+  if (entry.state === "drifted") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "Not found on this page";
+    item.append(chip);
+  } else if (entry.state === "library-only") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "In the library";
+    item.append(chip);
+  } else if (entry.state === "new") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "New in this scan";
+    item.append(chip);
+  }
+
+  if (row?.origin === "user_mapped") {
     const chip = document.createElement("span");
     chip.className = "pill";
     chip.textContent = "Added by hand";
     item.append(chip);
   }
 
-  if (row.evidence) {
+  if (row?.evidence) {
     const evidence = document.createElement("span");
     evidence.className = "capture-row-evidence";
     evidence.textContent = row.evidence;
     item.append(evidence);
   }
 
-  if (row.sent) {
+  if (row?.sent) {
     const chip = document.createElement("span");
     chip.className = "pill";
     chip.textContent = "Sent";
     item.append(chip);
   }
 
-  const edit = document.createElement("button");
-  edit.type = "button";
-  edit.className = "link capture-row-edit";
-  edit.textContent = "Edit";
-  edit.setAttribute("aria-expanded", String(editingSelector === row.selector));
-  edit.addEventListener("click", () => {
-    editingSelector = editingSelector === row.selector ? null : row.selector;
-    selectorTestResult = null;
-    renderCapture();
-  });
-  item.append(edit);
+  if (row) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "link capture-row-edit";
+    edit.textContent = "Edit";
+    edit.setAttribute("aria-expanded", String(editingSelector === row.selector));
+    edit.addEventListener("click", () => {
+      editingSelector = editingSelector === row.selector ? null : row.selector;
+      selectorTestResult = null;
+      rowDraft = null;
+      renderCapture();
+    });
+    item.append(edit);
 
-  if (editingSelector === row.selector) item.append(renderCaptureRowEditor(row));
+    if (editingSelector === row.selector) item.append(renderCaptureRowEditor(row));
+  }
   return item;
 }
 
@@ -3570,6 +3625,12 @@ function renderCaptureRow(row: CaptureRow): HTMLDivElement {
  * check the selector still resolves, or drop it. Everything here edits the
  * LOCAL capture session; nothing is proposed until Send for approval. */
 function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
+  // BITE-TRAIN-01 — render FROM the draft, write back to it on every
+  // keystroke. The editor is thrown away and rebuilt whenever anything
+  // re-renders the list, so the inputs cannot be the source of truth.
+  const draft = draftForRow(row, rowDraft);
+  rowDraft = draft;
+
   const box = document.createElement("div");
   box.className = "capture-row-editor";
 
@@ -3578,8 +3639,11 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   nameField.textContent = "Field name";
   const nameInput = document.createElement("input");
   nameInput.type = "text";
-  nameInput.value = row.displayLabel ?? "";
+  nameInput.value = draft.displayLabel;
   nameInput.placeholder = row.label || "Name this field";
+  nameInput.addEventListener("input", () => {
+    draft.displayLabel = nameInput.value;
+  });
   nameField.append(nameInput);
   box.append(nameField);
 
@@ -3597,8 +3661,11 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   typeField.textContent = "Control type";
   const typeSelect = document.createElement("select");
   for (const option of CAPTURE_FIELD_TYPES) {
-    typeSelect.add(new Option(option.label, option.value, false, option.value === row.fieldType));
+    typeSelect.add(new Option(option.label, option.value, false, option.value === draft.fieldType));
   }
+  typeSelect.addEventListener("change", () => {
+    draft.fieldType = typeSelect.value as PortalFieldType;
+  });
   typeField.append(typeSelect);
   box.append(typeField);
 
@@ -3611,8 +3678,11 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   const selectorInput = document.createElement("input");
   selectorInput.type = "text";
   selectorInput.className = "mono";
-  selectorInput.value = row.selector;
+  selectorInput.value = draft.selectorText;
   selectorInput.spellcheck = false;
+  selectorInput.addEventListener("input", () => {
+    draft.selectorText = selectorInput.value;
+  });
   selectorField.append(selectorInput);
   box.append(selectorField);
 
@@ -3623,9 +3693,12 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
     box.append(note);
   }
 
-  if (selectorTestResult?.selector === selectorInput.value) {
+  // The verdict answers the TYPED selector, so it is keyed to the draft —
+  // keyed to the stored one it could only ever appear for a selector the
+  // trainer had not edited, which is the case the workshop does not exist for.
+  const matches = draftTestMatches(draft, selectorTestResult);
+  if (matches != null) {
     const result = document.createElement("p");
-    const matches = selectorTestResult.matches;
     result.className = matches === 1 ? "capture-editor-note" : "capture-editor-warn";
     result.textContent =
       matches === 1
@@ -3643,22 +3716,10 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   save.type = "button";
   save.className = "secondary";
   save.textContent = "Save";
-  save.addEventListener("click", () => {
-    void editCaptureRow(row, {
-      displayLabel: nameInput.value,
-      // Only send a type when it actually changed: EDIT_CAPTURE_ROW treats a
-      // present fieldType as a human override, which must not be set by
-      // merely opening the editor and saving a rename.
-      ...(typeSelect.value !== row.fieldType
-        ? { fieldType: typeSelect.value as PortalFieldType }
-        : {}),
-      // Same rule for the selector: an untouched value must not mark the row
-      // as hand-written, which would exempt it from future drift repair.
-      ...(selectorInput.value.trim() !== row.selector
-        ? { newSelector: selectorInput.value.trim() }
-        : {}),
-    });
-  });
+  // `draftEdit` sends only what actually changed: EDIT_CAPTURE_ROW reads a
+  // present fieldType/newSelector as a human override, which must not be set
+  // by merely opening the editor and saving a rename.
+  save.addEventListener("click", () => void editCaptureRow(row, draftEdit(row, draft)));
   actions.append(save);
 
   const test = document.createElement("button");
@@ -3667,7 +3728,7 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   test.textContent = "Test selector";
   // Tests what is TYPED, not what is saved — the point is to try a candidate
   // before committing to it. The matches flash green on the page.
-  test.addEventListener("click", () => void testCaptureSelector(selectorInput.value.trim()));
+  test.addEventListener("click", () => void testCaptureSelector(draft.selectorText.trim()));
   actions.append(test);
 
   const remove = document.createElement("button");
@@ -3708,7 +3769,23 @@ async function deleteSelectedCaptureRows(): Promise<void> {
   const selectors = [...batchSelection];
   if (selectors.length === 0) return;
   const plural = selectors.length === 1 ? "field" : "fields";
-  if (!window.confirm(`Delete ${selectors.length} ${plural} from this capture?`)) return;
+  // Say the same thing the single-row editor says: this list is the local
+  // capture, and a row already proposed stays in the shared library either
+  // way. "Delete 12 fields" with no qualifier reads like a library purge.
+  const sent = (captureSession?.rows ?? []).filter(
+    (r) => r.sent && batchSelection.has(r.selector),
+  ).length;
+  const sentNote =
+    sent > 0
+      ? ` ${sent} of them ${sent === 1 ? "was" : "were"} already sent — removing them here drops them from this list, not from the shared library.`
+      : "";
+  if (
+    !window.confirm(
+      `Delete ${selectors.length} ${plural} from this capture?${sentNote}`,
+    )
+  ) {
+    return;
+  }
   // ONE write: deleting row by row would leave the list and the stored session
   // disagreeing if the worker failed halfway.
   const response = await sendToBackground({ type: "REMOVE_CAPTURE_ROWS", selectors });
@@ -3720,6 +3797,7 @@ async function deleteSelectedCaptureRows(): Promise<void> {
   batchSelection.clear();
   editingSelector = null;
   selectorTestResult = null;
+  rowDraft = null;
   setPickStatus(`Deleted ${selectors.length} ${plural}.`);
   renderCapture();
 }
@@ -3740,6 +3818,7 @@ async function editCaptureRow(
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
+  rowDraft = null;
   setPickStatus(null);
   renderCapture();
 }
@@ -3756,6 +3835,7 @@ async function removeCaptureRow(row: CaptureRow): Promise<void> {
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
+  rowDraft = null;
   renderCapture();
 }
 
@@ -4270,7 +4350,25 @@ function renderTrainDryRun(): void {
   runMockDryRunBtn.disabled = !recognized;
   markPortalProvenBtn.disabled = !recognized;
   trainProvenChip.hidden = !recognized || portal?.proven !== true;
-  if (!recognized) mockDryRunStatus.hidden = true;
+  if (!recognized) {
+    mockDryRunStatus.hidden = true;
+    clearMockDryRunDetail();
+  }
+}
+
+/** BITE-TRAIN-02 — the dry run's per-field diagnosis, in the same buckets the
+ * fill report uses. The engine already returns each failure with its reason;
+ * rendering only the counts made the trainer re-derive them on the page. */
+function renderMockDryRunDetail(summary: MockDryRunSummary): void {
+  fieldList(mockDryRunSkipped, "Not filled on the page:", summary.skipped);
+  fieldList(mockDryRunGaps, "Mapping gaps:", summary.gaps);
+}
+
+function clearMockDryRunDetail(): void {
+  mockDryRunSkipped.hidden = true;
+  mockDryRunSkipped.replaceChildren();
+  mockDryRunGaps.hidden = true;
+  mockDryRunGaps.replaceChildren();
 }
 
 /**
@@ -4368,6 +4466,7 @@ runMockDryRunBtn.addEventListener("click", () => {
     if (!response.ok) {
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();
+      clearMockDryRunDetail();
       mockDryRunStatus.hidden = false;
       return;
     }
@@ -4377,6 +4476,9 @@ runMockDryRunBtn.addEventListener("click", () => {
       ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
       : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
     renderTrainDryRun();
+    // A passing run has nothing in either bucket, so `fieldList` hides them
+    // and the result stays the one line it was.
+    renderMockDryRunDetail(response.data);
     mockDryRunStatus.hidden = false;
   })();
 });
