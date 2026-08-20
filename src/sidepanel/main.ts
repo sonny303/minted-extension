@@ -2233,6 +2233,10 @@ signoutBtn.addEventListener("click", () => {
   bumpGeneration();
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
+    // The sandbox's designated provider is org-specific and the panel is
+    // about to lose all org context — leaving it "active" would carry stale
+    // sandbox chrome into the next sign-in.
+    clearSandboxOnRealSelection();
     orgs = [];
     membershipsLoaded = false;
     orgReady = false;
@@ -2274,6 +2278,9 @@ orgSelect.addEventListener("change", () => {
   // invalidated the instant the switch happens.
   const generation = bumpGeneration();
   void (async () => {
+    // The sandbox's designated provider is org-specific — a stale sandbox
+    // from the org just left must not survive into the one being entered.
+    clearSandboxOnRealSelection();
     activeOrgId = orgId;
     renderOrgContext();
     // The worker wipes provider/case/facility/report state — including any
@@ -2324,6 +2331,13 @@ facilitySelect.addEventListener("change", () => {
 // the handoff apply passes recordEntry=false so it never overwrites the
 // handoff record it is applying.
 function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
+  // A real case selection always wins over a leftover sandbox: the sandbox
+  // bar previously stayed up (and hid the real Fill button) until the
+  // explicit Exit was clicked, which meant "Sandbox fill" could still run
+  // against whatever provider a real case pick had since loaded. Clearing it
+  // here — the funnel every real case pick goes through (dropdown,
+  // active-cases row, NBA handback, handoff apply) — closes that gap.
+  clearSandboxOnRealSelection();
   const providerId = selectedProviderId();
   // A case pick should land on that case's facility once context arrives —
   // not a leftover remembered location from another case on the same provider.
@@ -2625,6 +2639,12 @@ function searchEmptyLine(text: string): HTMLElement {
 // Select a provider found via search (may not be in the browse list's first
 // page) — quick cards + active cases load exactly as a dropdown pick.
 async function selectProviderInPanel(provider: ProviderListItem): Promise<void> {
+  // Real provider selection always wins over a leftover sandbox — see the
+  // note on clearSandboxOnRealSelection. `enterSandbox` also routes through
+  // here for the sandbox provider itself; it sets `sandboxActive` back to
+  // true only AFTER this call returns, so clearing unconditionally here is
+  // safe and never fights that flow.
+  clearSandboxOnRealSelection();
   const generation = bumpGeneration();
   if (!providers.some((p) => p.id === provider.id)) providers.push(provider);
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: provider.id });
@@ -2650,6 +2670,9 @@ async function selectCaseInPanel(
   // carry facilityId so search → case defaults to the case's practice site.
   preferredFacilityId?: string | null,
 ): Promise<void> {
+  // Real case selection always wins over a leftover sandbox — see the note
+  // on clearSandboxOnRealSelection.
+  clearSandboxOnRealSelection();
   const generation = bumpGeneration();
   preferCaseFacility = true;
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId });
@@ -3987,26 +4010,48 @@ function setSandboxStatus(message: string | null, isError = false): void {
   sandboxStatus.classList.toggle("capture-editor-warn", isError);
 }
 
+/**
+ * Clear the sandbox because a REAL provider or case was just selected.
+ *
+ * Previously the Exit button was the ONLY thing that cleared `sandboxActive`,
+ * so picking a real case while the sandbox was up left the sandbox bar
+ * showing (hiding the real Fill button) and let "Sandbox fill" run against
+ * whatever real, non-designated provider had since loaded — a fill with no
+ * case attribution and no `is_test_provider` check of its own. Called from
+ * every funnel a real selection goes through (`applyCaseChoice`,
+ * `selectCaseInPanel`, `selectProviderInPanel`); a no-op when the sandbox
+ * isn't active, so it's safe to call unconditionally from all three.
+ */
+function clearSandboxOnRealSelection(): void {
+  if (!sandboxActive) return;
+  sandboxActive = false;
+  setSandboxStatus(null);
+  renderSandboxBar();
+}
+
 /** Enter the sandbox: select the designated provider and land in Work cases.
  * Deliberately reuses the normal provider-selection path, so quick cards,
  * facilities and the portal gate all behave exactly as they do for a real
- * provider — the ONLY difference is that no case is required. */
+ * provider — the ONLY difference is that no case is required.
+ *
+ * `sandboxActive` is set only AFTER the provider selection resolves:
+ * `selectProviderInPanel` unconditionally clears a stale sandbox on every
+ * real selection (above), and this IS that selection, so flipping the flag
+ * first would have it immediately clobbered back to false. */
 async function enterSandbox(): Promise<void> {
   const provider = sandboxProvider();
   if (provider == null) return;
-  sandboxActive = true;
   setSandboxStatus(null);
   hideSearchResults();
   searchInput.value = "";
   await openInCaseWork(selectProviderInPanel(provider));
+  sandboxActive = true;
   renderSandboxBar();
   updateFillReady();
 }
 
 function leaveSandbox(): void {
-  sandboxActive = false;
-  setSandboxStatus(null);
-  renderSandboxBar();
+  clearSandboxOnRealSelection();
   updateFillReady();
 }
 

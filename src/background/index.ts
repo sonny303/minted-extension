@@ -61,6 +61,7 @@ import type { PickOutcome } from "../content/elementPicker";
 import { assignSortOrder } from "../shared/trainForms";
 import { browseableProviders } from "../shared/browseProviders";
 import type { CapturedField } from "../content/captureScan";
+import { isSandboxProvider } from "../shared/sandbox";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -485,6 +486,19 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // at all — its equivalent is the synthetic mock dry run.
       if ((await readPanelMode()) === "train") {
         throw new Error("Switch to Work cases to run a sandbox fill.");
+      }
+      // Defense in depth against a panel-side state bug (leftover sandbox
+      // chrome pointed at a real, non-designated provider): the worker is the
+      // one place that can refuse the fill outright, so it re-checks the
+      // roster's own `is_test_provider` flag rather than trusting whatever
+      // provider id the panel sent. A real provider's data must never reach a
+      // live portal through the no-case, no-attribution sandbox path.
+      const sandboxRoster = await listProviders();
+      const sandboxTarget = sandboxRoster.find((p) => p.id === request.providerId);
+      if (!isSandboxProvider(sandboxTarget)) {
+        throw new Error(
+          "This provider isn't the organization's designated sandbox test profile — refusing to run a no-attribution fill against real provider data.",
+        );
       }
       await ensureContentScript(request.tabId);
       return sandboxFillPortal({

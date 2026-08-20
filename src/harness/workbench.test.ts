@@ -989,6 +989,78 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
   });
 });
 
+// ---------------------------------------------------------------------------
+// US-5 sandbox fill — the worker's own is_test_provider re-check.
+//
+// The panel is expected to keep sandboxActive in sync with the real
+// selection, but the worker must not TRUST that: a stale panel state (or any
+// other caller) sending a real provider id must never reach a live portal
+// through the no-attribution, no-touch sandbox path. Proven at the
+// handleRequest boundary — the same path chrome.runtime.onMessage uses —
+// against the mock server's own roster, not a stub.
+// ---------------------------------------------------------------------------
+describe("SANDBOX_FILL — refuses any provider that isn't the designated sandbox profile", () => {
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+
+  beforeEach(async () => {
+    stub.reset();
+    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writePanelMode("case");
+    previousSendMessage = chrome.tabs.sendMessage;
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+  });
+
+  it("rejects a real, non-designated provider before ever touching the tab", async () => {
+    const { handleRequest } = await import("../background/index");
+    // No PING/APPLY_FILL stub installed on purpose: a passing test here must
+    // mean the guard fired before any tab message was sent, not that a
+    // lenient stub happened to answer one.
+    chrome.tabs.sendMessage = (async () => {
+      throw new Error("SANDBOX_FILL must not message the tab for a refused provider");
+    }) as typeof chrome.tabs.sendMessage;
+
+    await expect(
+      handleRequest({
+        type: "SANDBOX_FILL",
+        tabId: 1,
+        providerId: FIXTURES.PROVIDER_ID, // a real roster provider, not the sandbox one
+        portalKey: FIXTURES.PORTAL_KEY,
+        state: null,
+        facilityId: null,
+      }),
+    ).rejects.toThrow(/designated sandbox test profile/);
+  });
+
+  it("allows the fill once the request really names the designated sandbox provider", async () => {
+    const { handleRequest } = await import("../background/index");
+    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+      if (message?.type === "PING") return { ok: true };
+      if (message?.type === "APPLY_FILL") {
+        return {
+          ok: true,
+          data: { filled: ["First name"], skipped: [], pageFields: 1 },
+        };
+      }
+      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+
+    const summary = (await handleRequest({
+      type: "SANDBOX_FILL",
+      tabId: 1,
+      providerId: FIXTURES.SANDBOX_PROVIDER_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: null,
+      facilityId: null,
+    })) as import("../shared/fill").SandboxFillSummary;
+
+    expect(summary.filled).toBe(1);
+    expect(summary.logError).toBeNull();
+  });
+});
+
 describe("TE-3 — latency budgets on the seeded mock harness", () => {
   let slow: MockApi;
 

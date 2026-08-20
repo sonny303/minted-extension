@@ -327,6 +327,26 @@ portalUrl, portalKey?, facilityId? }` through
   same one-container rule as `renderModeSurfaces`); `#portal-status` sits
   OUTSIDE it, because a sandbox fill needs to know whether this page is a
   portal every bit as much as a real one does.
+- **Sandbox state must be cleared on every REAL selection, not just Exit
+  (review fix, 2026-08-20).** `sandboxActive` used to be flipped false ONLY by
+  the Exit button, so picking a real case or provider while the sandbox was up
+  left the sandbox bar showing (hiding the real Fill button) and let "Sandbox
+  fill" run against whatever real, non-designated provider had since loaded —
+  a fill with no case attribution and no `is_test_provider` check of its own.
+  Fixed at BOTH layers, deliberately, since neither alone is enough: (1) the
+  panel now clears `sandboxActive` inside `clearSandboxOnRealSelection`,
+  called unconditionally from every funnel a real selection goes through
+  (`applyCaseChoice`, `selectCaseInPanel`, `selectProviderInPanel`) plus
+  org-switch and sign-out; `enterSandbox` sets `sandboxActive = true` only
+  AFTER its own call into `selectProviderInPanel` resolves, so entering the
+  sandbox doesn't immediately clobber itself. (2) the WORKER's `SANDBOX_FILL`
+  handler (`src/background/index.ts`) re-checks the roster's own
+  `is_test_provider` flag against the request's `providerId` before doing
+  anything else — a stale panel is not the only caller that could send a real
+  id, so the fill is refused server-of-truth-side regardless of what the panel
+  believed. Pinned in `src/harness/workbench.test.ts` (a real, non-designated
+  provider is refused before any tab message is sent; the designated sandbox
+  provider still fills) against a new `FIXTURES.SANDBOX_PROVIDER_ID` roster row.
 - **A list read that renders must never trust an `ok` envelope's `data`.**
   `loadSharedRegistry` assigned `response.data` straight to the shared-portal
   rows, and `renderTrainPayers` iterates it DURING render — so a null `data`
