@@ -104,4 +104,10 @@ export type ContentRequest =
   | { type: "PING" }
   | { type: "APPLY_FILL"; instructions: FillInstruction[] }
   // S5.2: read the form's SHAPE (labels/selectors/types only — never a value).
-  | { type: "SCAN_FIELDS" };
+  | { type: "SCAN_FIELDS" }
+  // 2026-08-19 manual mapping. PICK_ELEMENT is the ONE async content request:
+  // it resolves when the human clicks a control or cancels. All three read
+  // shape only, exactly like SCAN_FIELDS.
+  | { type: "PICK_ELEMENT" }
+  | { type: "CANCEL_PICK" }
+  | { type: "MATCH_SELECTOR"; selector: string };

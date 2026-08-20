@@ -1925,6 +1925,64 @@ button.link:hover {
   font-size: 11px;
   color: var(--mp-primary);
 }
+/* 2026-08-19 manual mapping: the inline per-row correction panel, the pick
+   status line, and the "added by hand" affordances. */
+.capture-row-edit {
+  flex: none;
+  font-size: 11px;
+}
+.capture-row-editor {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--mp-line-100);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.capture-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+.capture-editor-field input,
+.capture-editor-field select {
+  font-size: 12px;
+}
+.capture-editor-selector {
+  margin: 0;
+  font-size: 10px;
+  color: var(--mp-ink-secondary);
+  overflow-wrap: anywhere;
+}
+.capture-editor-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+/* A selector that matches 0 or several controls is a real problem with the
+   mapping, so it reads as one rather than as a neutral note. */
+.capture-editor-warn {
+  margin: 0;
+  font-size: 11px;
+  color: #92400e;
+}
+.capture-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.capture-pick-status {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-primary);
+}
+.capture-pick-status.capture-editor-warn {
+  color: #92400e;
+}
+
 .capture-actions {
   display: flex;
   align-items: center;

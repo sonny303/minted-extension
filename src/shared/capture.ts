@@ -33,6 +33,52 @@ export interface CaptureRow {
   sortOrder?: number | null;
   /** E6.10 — captured option vocabulary. Shape-only; never a selected value. */
   options?: { value: string; label: string }[];
+  /** 2026-08-19 — where this row came from. `user_mapped` rows were pointed at
+   * by hand with the element picker, which is the ONLY reason a row can exist
+   * that a fresh auto-scan cannot see (a conditionally-rendered field). The
+   * merge below depends on this to avoid deleting the trainer's work.
+   * Absent on rows captured before the picker existed = auto_detected. */
+  origin?: CaptureOrigin;
+  /** The trainer's own name for the field, when they renamed it. Kept SEPARATE
+   * from `label` — which stays the payer's captured text — so a re-scan can
+   * refresh what the portal says without discarding what the human decided to
+   * call it. Mirrors the panel's display_label / field_label split. */
+  displayLabel?: string | null;
+  /** The trainer overrode the detected control type. A re-scan must not put it
+   * back: they are looking at the page and we are guessing from markup. */
+  typeOverridden?: boolean;
+}
+
+/** Auto-detected by the scan, or pointed at by hand with the element picker. */
+export type CaptureOrigin = "auto_detected" | "user_mapped";
+
+/** The control types a trainer may assign, with the words they see. Mirrors
+ * `PortalFieldType` — a type the fill engine cannot apply is not offerable. */
+export const CAPTURE_FIELD_TYPES: ReadonlyArray<{ value: PortalFieldType; label: string }> = [
+  { value: "text", label: "Text box" },
+  { value: "select", label: "Dropdown" },
+  { value: "radio", label: "Radio group" },
+  { value: "checkbox", label: "Checkbox" },
+  { value: "date", label: "Date" },
+  { value: "file", label: "File upload" },
+];
+
+/** A row's name as the human should see it: their own, else the payer's, else
+ * an honest placeholder — never an empty cell, which reads as a rendering bug
+ * rather than as "this form gave us nothing to go on". */
+export function rowDisplayName(row: CaptureRow): string {
+  const own = (row.displayLabel ?? "").trim();
+  if (own) return own;
+  const captured = (row.label ?? "").trim();
+  if (captured) return captured;
+  return "Unnamed field";
+}
+
+/** Has this row been given a usable name, by the portal or by the trainer?
+ * A nameless row can still be sent — the selector is the useful part — but the
+ * UI flags it, because it is the one a human cannot act on later. */
+export function isNamedRow(row: CaptureRow): boolean {
+  return ((row.displayLabel ?? "").trim() || (row.label ?? "").trim()).length > 0;
 }
 
 export interface CaptureSession {
@@ -112,6 +158,10 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
       sent: r.sent === true,
       pageStep: typeof r.pageStep === "string" ? r.pageStep : null,
       sortOrder: typeof r.sortOrder === "number" ? r.sortOrder : null,
+      // Legacy rows predate the picker and are auto by definition.
+      origin: r.origin === "user_mapped" ? "user_mapped" : "auto_detected",
+      displayLabel: typeof r.displayLabel === "string" ? r.displayLabel : null,
+      typeOverridden: r.typeOverridden === true,
       ...(parsedOptions !== undefined ? { options: parsedOptions } : {}),
     });
   }
@@ -162,9 +212,22 @@ export function diffCapture(
   };
 }
 
+/** What a re-scan must NOT overwrite: everything a human decided.
+ *
+ * The scan refreshes what the PORTAL says (label text, control type, options);
+ * these carry the trainer's decisions across unchanged. `fieldType` is only
+ * held back when it was explicitly overridden — otherwise a portal that
+ * genuinely changed a control type should be allowed to correct us. */
 function pickDecision(prev: CaptureRow | undefined): Partial<CaptureRow> {
   if (!prev) return {};
-  return { chosenToken: prev.chosenToken, sent: prev.sent };
+  return {
+    chosenToken: prev.chosenToken,
+    sent: prev.sent,
+    displayLabel: prev.displayLabel ?? null,
+    origin: prev.origin ?? "auto_detected",
+    typeOverridden: prev.typeOverridden === true,
+    ...(prev.typeOverridden === true ? { fieldType: prev.fieldType } : {}),
+  };
 }
 
 /**
@@ -180,6 +243,14 @@ function pickDecision(prev: CaptureRow | undefined): Partial<CaptureRow> {
  *
  * Rows captured before pages existed (`pageStep` null) diff against an unnamed
  * scan, which is exactly the old single-page behaviour.
+ *
+ * USER-MAPPED rows on the scanned page are kept even when the fresh scan does
+ * not see them (2026-08-19). That is not a special case — it is the whole
+ * reason the picker exists: the fields a trainer adds by hand are precisely
+ * the ones an auto-scan cannot find (revealed only after a radio choice, or
+ * rendered by script after the scan ran). Dropping them on the next
+ * re-capture would delete the manual work silently, which is worse than never
+ * having offered the feature.
  */
 export function mergePageCapture(
   previous: readonly CaptureRow[],
@@ -189,7 +260,11 @@ export function mergePageCapture(
   const samePage = (row: CaptureRow) => (row.pageStep ?? null) === pageStep;
   const otherPages = previous.filter((row) => !samePage(row));
   const diff = diffCapture(previous.filter(samePage), next);
-  return [...otherPages, ...diff.unchanged, ...diff.added];
+  const keptSelectors = new Set([...diff.unchanged, ...diff.added].map((r) => r.selector));
+  const rescuedManual = diff.removed.filter(
+    (row) => row.origin === "user_mapped" && !keptSelectors.has(row.selector),
+  );
+  return [...otherPages, ...diff.unchanged, ...diff.added, ...rescuedManual];
 }
 
 /** The page names already used in this capture run — what `derivePageStep`

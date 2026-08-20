@@ -14,6 +14,7 @@ import type {
   QuickCardCatalogField,
   PortalFieldMap,
   PortalRegistryRow,
+  PortalFieldType,
   StatusBumpMeta,
 } from "./apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, MockDryRunSummary } from "./fill";
@@ -78,6 +79,22 @@ export type BgRequest =
       captureMode?: "auto" | "next-page";
     }
   | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
+  // 2026-08-19 manual mapping. A scan only sees what is on the page at that
+  // moment and wired well enough to recognise, so these let a trainer add and
+  // correct fields by hand rather than discard the capture. All of them work
+  // on SHAPE — selector, label, control type — never a value.
+  | { type: "PICK_CAPTURE_FIELD"; tabId: number; pageStep?: string | null }
+  | { type: "CANCEL_CAPTURE_PICK"; tabId: number }
+  // Both patch keys are OPTIONAL and independent: an absent key leaves that
+  // column alone, so renaming a field never silently re-types it.
+  | {
+      type: "EDIT_CAPTURE_ROW";
+      selector: string;
+      displayLabel?: string | null;
+      fieldType?: PortalFieldType;
+    }
+  | { type: "REMOVE_CAPTURE_ROW"; selector: string }
+  | { type: "TEST_CAPTURE_SELECTOR"; tabId: number; selector: string }
   | { type: "SEND_CAPTURE" }
   | { type: "CLEAR_CAPTURE" }
   // S4.3: tick one SOP step complete. The server enforces the ordering rule
@@ -199,6 +216,14 @@ export interface ProviderFacilitiesInfo {
 // The unified search's two halves. Each half degrades independently: a null
 // error with rows is success; a non-null error renders that half's honest
 // failure line while the other half still works.
+/** "Re-test selector": how many elements this selector currently matches on
+ * the live page. 1 is healthy; 0 will never fill; >1 is ambiguous and may fill
+ * the wrong box. */
+export interface SelectorTestResult {
+  selector: string;
+  matches: number;
+}
+
 export interface SearchResults {
   cases: CaseSearchRow[];
   providers: ProviderListItem[];
@@ -233,6 +258,11 @@ export interface BgResponseMap {
   GET_CAPTURE: CaptureSession | null;
   START_CAPTURE: CaptureSession;
   SET_CAPTURE_CHOICE: CaptureSession;
+  PICK_CAPTURE_FIELD: CaptureSession;
+  CANCEL_CAPTURE_PICK: null;
+  EDIT_CAPTURE_ROW: CaptureSession;
+  REMOVE_CAPTURE_ROW: CaptureSession;
+  TEST_CAPTURE_SELECTOR: SelectorTestResult;
   SEND_CAPTURE: CaptureSession;
   CLEAR_CAPTURE: null;
   COMPLETE_TASK_STEP: { allDone: boolean };

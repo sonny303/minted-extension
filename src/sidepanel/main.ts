@@ -15,13 +15,19 @@ import type {
   UserOrgMembership,
 } from "../shared/apiTypes";
 import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
-import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
+import {
+  sendToBackground,
+  type AuthState,
+  type SearchResults,
+  type SelectorTestResult,
+} from "../shared/messages";
 import { formatDisplayDate, looksLikeIsoDate } from "../shared/detailFields";
 import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../shared/portals";
 import type {
   CaseContextTaskStep,
   NextBestActionItem,
   PortalFieldMap,
+  PortalFieldType,
   PortalRegistryRow,
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
@@ -39,9 +45,12 @@ import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/ca
 import {
   canSendCapture,
   captureCounts,
+  CAPTURE_FIELD_TYPES,
+  isNamedRow,
   nextPageSequence,
   recognitionSummary,
   restoredSummary,
+  rowDisplayName,
   usedPageNames,
   type CaptureRow,
   type CaptureSession,
@@ -175,6 +184,8 @@ const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
 const captureNextPage = el<HTMLButtonElement>("capture-next-page");
+const captureAddField = el<HTMLButtonElement>("capture-add-field");
+const capturePickStatus = el<HTMLElement>("capture-pick-status");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -3325,6 +3336,12 @@ let captureSession: CaptureSession | null = null;
 /** Set when the last capture added a page to an existing session — drives the
  * "· Page N of N" summary suffix (BITE-CAP-05). */
 let captureAddedPage = false;
+// 2026-08-19 manual mapping: which row's inline editor is open (one at a time
+// — two open editors on one list is a way to save the wrong row), the last
+// re-test answer, and whether a pick is waiting on the page.
+let editingSelector: string | null = null;
+let selectorTestResult: SelectorTestResult | null = null;
+let pickInFlight = false;
 
 // S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
 // blank) is QUARANTINED as of 3M Slice 2, not deleted.
@@ -3378,6 +3395,10 @@ function renderCapture(): void {
   // add a page to.
   captureNextPage.hidden = captureSession == null;
   captureNextPage.disabled = false;
+  // Adding a field by hand needs something to add it TO, and a live tab to
+  // point at.
+  captureAddField.hidden = captureSession == null;
+  captureAddField.disabled = pickInFlight || portalTabId == null;
 
   captureRows.replaceChildren();
   captureActions.hidden = !canSendCapture(captureSession);
@@ -3423,17 +3444,29 @@ function groupCaptureRowsByPage(
 
 function renderCaptureRow(row: CaptureRow): HTMLDivElement {
   const item = document.createElement("div");
-  item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
+  const mapped = row.chosenToken || row.suggestedToken;
+  item.className = mapped ? "capture-row" : "capture-row gap";
 
   const label = document.createElement("span");
   label.className = "capture-row-label";
-  label.textContent = row.label || row.selector;
+  label.textContent = rowDisplayName(row);
+  // A row the portal never named needs a human name before anyone can act on
+  // it later; say so rather than rendering a blank and hoping.
+  if (!isNamedRow(row)) label.classList.add("id-empty");
+  label.title = row.selector;
   item.append(label);
 
   const value = document.createElement("span");
   value.className = "capture-row-token mono";
   value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
   item.append(value);
+
+  if (row.origin === "user_mapped") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "Added by hand";
+    item.append(chip);
+  }
 
   if (row.evidence) {
     const evidence = document.createElement("span");
@@ -3448,7 +3481,222 @@ function renderCaptureRow(row: CaptureRow): HTMLDivElement {
     chip.textContent = "Sent";
     item.append(chip);
   }
+
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "link capture-row-edit";
+  edit.textContent = "Edit";
+  edit.setAttribute("aria-expanded", String(editingSelector === row.selector));
+  edit.addEventListener("click", () => {
+    editingSelector = editingSelector === row.selector ? null : row.selector;
+    selectorTestResult = null;
+    renderCapture();
+  });
+  item.append(edit);
+
+  if (editingSelector === row.selector) item.append(renderCaptureRowEditor(row));
   return item;
+}
+
+/** The inline correction panel for one captured row: rename it, re-type it,
+ * check the selector still resolves, or drop it. Everything here edits the
+ * LOCAL capture session; nothing is proposed until Send for approval. */
+function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "capture-row-editor";
+
+  const nameField = document.createElement("label");
+  nameField.className = "capture-editor-field";
+  nameField.textContent = "Field name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = row.displayLabel ?? "";
+  nameInput.placeholder = row.label || "Name this field";
+  nameField.append(nameInput);
+  box.append(nameField);
+
+  // The payer's own words, kept visible as the evidence behind a rename —
+  // renaming must never make it look like the portal said something it didn't.
+  if (row.label.trim()) {
+    const captured = document.createElement("p");
+    captured.className = "capture-editor-note";
+    captured.textContent = `Portal calls it: ${row.label.trim()}`;
+    box.append(captured);
+  }
+
+  const typeField = document.createElement("label");
+  typeField.className = "capture-editor-field";
+  typeField.textContent = "Control type";
+  const typeSelect = document.createElement("select");
+  for (const option of CAPTURE_FIELD_TYPES) {
+    typeSelect.add(new Option(option.label, option.value, false, option.value === row.fieldType));
+  }
+  typeField.append(typeSelect);
+  box.append(typeField);
+
+  const selector = document.createElement("p");
+  selector.className = "capture-editor-selector mono";
+  selector.textContent = row.selector;
+  box.append(selector);
+
+  if (selectorTestResult?.selector === row.selector) {
+    const result = document.createElement("p");
+    const matches = selectorTestResult.matches;
+    result.className = matches === 1 ? "capture-editor-note" : "capture-editor-warn";
+    result.textContent =
+      matches === 1
+        ? "Matches exactly one field on this page."
+        : matches === 0
+          ? "Matches nothing on this page — it will never fill. Re-capture, or add the field by hand while it is visible."
+          : `Matches ${matches} fields — ambiguous, and may fill the wrong one.`;
+    box.append(result);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "capture-editor-actions";
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary";
+  save.textContent = "Save";
+  save.addEventListener("click", () => {
+    void editCaptureRow(row, {
+      displayLabel: nameInput.value,
+      // Only send a type when it actually changed: EDIT_CAPTURE_ROW treats a
+      // present fieldType as a human override, which must not be set by
+      // merely opening the editor and saving a rename.
+      ...(typeSelect.value !== row.fieldType
+        ? { fieldType: typeSelect.value as PortalFieldType }
+        : {}),
+    });
+  });
+  actions.append(save);
+
+  const test = document.createElement("button");
+  test.type = "button";
+  test.className = "link";
+  test.textContent = "Re-test on page";
+  test.addEventListener("click", () => void testCaptureSelector(row.selector));
+  actions.append(test);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "link";
+  remove.textContent = row.sent ? "Remove from list" : "Remove";
+  remove.addEventListener("click", () => void removeCaptureRow(row));
+  actions.append(remove);
+
+  box.append(actions);
+
+  if (row.sent) {
+    const note = document.createElement("p");
+    note.className = "capture-editor-note";
+    // Be honest about reach: the panel's propose call already happened.
+    note.textContent =
+      "Already sent — removing it here drops it from this list, not from the shared library.";
+    box.append(note);
+  }
+  return box;
+}
+
+async function editCaptureRow(
+  row: CaptureRow,
+  patch: { displayLabel?: string | null; fieldType?: PortalFieldType },
+): Promise<void> {
+  const response = await sendToBackground({
+    type: "EDIT_CAPTURE_ROW",
+    selector: row.selector,
+    ...patch,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  editingSelector = null;
+  selectorTestResult = null;
+  setPickStatus(null);
+  renderCapture();
+}
+
+async function removeCaptureRow(row: CaptureRow): Promise<void> {
+  const response = await sendToBackground({
+    type: "REMOVE_CAPTURE_ROW",
+    selector: row.selector,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  editingSelector = null;
+  selectorTestResult = null;
+  renderCapture();
+}
+
+async function testCaptureSelector(selector: string): Promise<void> {
+  if (portalTabId == null) {
+    setPickStatus("Open the portal tab to re-test this field.", true);
+    return;
+  }
+  const response = await sendToBackground({
+    type: "TEST_CAPTURE_SELECTOR",
+    tabId: portalTabId,
+    selector,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  selectorTestResult = response.data;
+  setPickStatus(null);
+  renderCapture();
+}
+
+function setPickStatus(message: string | null, isError = false): void {
+  capturePickStatus.hidden = message == null;
+  capturePickStatus.textContent = message ?? "";
+  capturePickStatus.classList.toggle("capture-editor-warn", isError);
+}
+
+/** F1 — "+ Add field": hand the page a crosshair and wait for the trainer to
+ * click the control the scan missed. The panel stays responsive throughout;
+ * the pick resolves when they click or press Escape. */
+async function addFieldByPicking(): Promise<void> {
+  if (portalTabId == null || captureSession == null) return;
+  const tabId = portalTabId;
+  pickInFlight = true;
+  captureAddField.disabled = true;
+  setPickStatus("Click the field on the portal page · Esc to cancel");
+  const response = await sendToBackground({
+    type: "PICK_CAPTURE_FIELD",
+    tabId,
+    pageStep: currentCapturePage(),
+  });
+  pickInFlight = false;
+  captureAddField.disabled = false;
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  const before = captureSession?.rows.length ?? 0;
+  captureSession = response.data;
+  const added = captureSession.rows.length - before;
+  // Cancelling returns the session untouched — say nothing rather than
+  // claiming a field was added.
+  setPickStatus(added > 0 ? "Field added. Name it under Edit if the portal didn't." : null);
+  renderCapture();
+}
+
+/** The page a hand-added field belongs to: the one the trainer is looking at,
+ * which is the page the most recent rows were captured from. */
+function currentCapturePage(): string | null {
+  const rows = captureSession?.rows ?? [];
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const page = rows[i]?.pageStep?.trim();
+    if (page) return page;
+  }
+  return null;
 }
 
 async function startCapture(mode: "auto" | "next-page"): Promise<void> {
@@ -3519,6 +3767,8 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
 captureStart.addEventListener("click", () => {
   void startCapture("auto");
 });
+
+captureAddField.addEventListener("click", () => void addFieldByPicking());
 
 captureNextPage.addEventListener("click", () => {
   void startCapture("next-page");

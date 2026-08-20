@@ -83,18 +83,45 @@ function controlType(el: Element): PortalFieldType {
   return "text";
 }
 
+/** A structural path to `el`, as `:nth-child()` steps from the nearest
+ * id-bearing ancestor (else `body`). This is the LAST-resort selector — it is
+ * exactly the kind that drifts when the form changes — but it has to actually
+ * resolve, which the old `tag:nth-of-type(queryIndex)` did not: that index came
+ * from the document-wide control query while `:nth-of-type` counts among a
+ * parent's children, so on the Humana status form it produced
+ * `input:nth-of-type(4)`, which matches ZERO elements. A selector that finds
+ * nothing can never be filled and can never be re-found on re-capture. */
+function structuralPath(el: Element): string {
+  const steps: string[] = [];
+  let node: Element | null = el;
+  while (node && node !== document.body && node.parentElement) {
+    const parent: HTMLElement = node.parentElement;
+    const tag = node.tagName.toLowerCase();
+    const position = Array.prototype.indexOf.call(parent.children, node) + 1;
+    steps.unshift(`${tag}:nth-child(${position})`);
+    if (parent.id) {
+      steps.unshift(`#${CSS.escape(parent.id)}`);
+      return steps.join(" > ");
+    }
+    node = parent;
+  }
+  return ["body", ...steps].join(" > ");
+}
+
 /** The most stable selector we can offer for this control, in descending
- * order of durability: a real id, then name, then a positional fallback.
- * A positional selector is the LAST resort — it is exactly the kind that
- * drifts when the form changes. */
-function selectorFor(el: Element, index: number): string {
+ * order of durability: a real id, then name (scoped by tag AND type so a
+ * radio group's members don't all collapse onto the first match), then the
+ * structural path above. */
+function selectorFor(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
   const name = (el as HTMLInputElement).name;
   if (name) {
     const tag = el.tagName.toLowerCase();
-    return `${tag}[name="${CSS.escape(name)}"]`;
+    const type = el instanceof HTMLInputElement ? el.type : "";
+    const typePart = type ? `[type="${CSS.escape(type)}"]` : "";
+    return `${tag}${typePart}[name="${CSS.escape(name)}"]`;
   }
-  return `${el.tagName.toLowerCase()}:nth-of-type(${index + 1})`;
+  return structuralPath(el);
 }
 
 /** The label a human would read for this control: its <label>, then aria
@@ -119,6 +146,91 @@ function labelFor(el: Element): string {
   }
   const placeholder = (el as HTMLInputElement).placeholder?.trim();
   return placeholder ?? "";
+}
+
+/** The name to CAPTURE this control under. A radio prefers its group's
+ * question over its own option text; anything the form left unlabelled falls
+ * back to nearby visible text. Still possibly empty — a nameless row is
+ * captured with its selector rather than dropped, and the trainer names it. */
+function captureLabel(el: Element, type: PortalFieldType): string {
+  if (type === "radio" && el instanceof HTMLInputElement) {
+    const question = radioGroupLabel(el);
+    if (question) return question;
+  }
+  const wired = labelFor(el);
+  if (wired) return wired;
+  return nearbyLabel(el);
+}
+
+/** Longest text we will adopt as a label guess. A portal's paragraph of
+ * instructions is not a field name; past this it is prose, not a label. */
+const NEARBY_LABEL_MAX_CHARS = 120;
+
+function cleanLabelText(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** The question a RADIO GROUP is asking, which is not the same as any one
+ * option's text. `labelFor` on a radio returns its own option ("Practitioner
+ * certification application"), so a group captured that way is named after
+ * whichever option happened to come first — the exact mis-naming seen on the
+ * Humana status form, where the real question is "Please select which type of
+ * certification application you would like a status on:".
+ *
+ * Looks only at grouping containers and their accessible names; the options
+ * themselves are already preserved in `options`. */
+function radioGroupLabel(el: HTMLInputElement): string {
+  const group = el.closest("fieldset, [role='radiogroup']");
+  if (group) {
+    const legend = cleanLabelText(group.querySelector("legend")?.textContent);
+    if (legend) return legend;
+    const aria = cleanLabelText(group.getAttribute("aria-label"));
+    if (aria) return aria;
+    const labelledBy = group.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      // aria-labelledby is a token LIST; join what resolves, in order.
+      const text = labelledBy
+        .split(/\s+/)
+        .map((id) => cleanLabelText(document.getElementById(id)?.textContent))
+        .filter(Boolean)
+        .join(" ");
+      if (text) return text;
+    }
+    const heading = cleanLabelText(group.querySelector("h1, h2, h3, h4, h5, h6")?.textContent);
+    if (heading && heading.length <= NEARBY_LABEL_MAX_CHARS) return heading;
+  }
+  return "";
+}
+
+/** The visible text a human would read AS this control's name when the form
+ * wires no label at all — the case that makes a captured row nameless and
+ * unmappable (the Humana NPI box: its caption is a plain sibling, with no
+ * `for`, no aria, no placeholder).
+ *
+ * Deliberately narrow. It walks previous siblings of the control and of its
+ * wrapper, taking the first short run of text, and never descends into other
+ * controls. It reads element TEXT only — never a control's value — so the PHI
+ * boundary is unmoved. A guess is still only a guess: it is a starting point
+ * the trainer can rename, which is why the edit UI exists. */
+function nearbyLabel(el: Element): string {
+  const ownsAControl = (node: Element): boolean => node.querySelector(FILLABLE) != null;
+  // Two levels: the control's own siblings, then its wrapper's. Portals
+  // usually put the caption in one of those two places.
+  let node: Element | null = el;
+  for (let depth = 0; node && node !== document.body && depth < 2; depth += 1) {
+    for (
+      let previous = node.previousElementSibling;
+      previous;
+      previous = previous.previousElementSibling
+    ) {
+      // A sibling that owns its own control is that field's caption, not ours.
+      if (ownsAControl(previous)) break;
+      const text = cleanLabelText(previous.textContent);
+      if (text && text.length <= NEARBY_LABEL_MAX_CHARS) return text;
+    }
+    node = node.parentElement;
+  }
+  return "";
 }
 
 function sectionFor(el: Element): string | null {
@@ -184,12 +296,49 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
  * position (top→bottom, left→right), not DOM tree order — grid/flex forms
  * often paint fields in a different sequence than `querySelectorAll`. The
  * background stamps that sequence as `sort_order` for Form setup. */
+/** Describe ONE control exactly as a scan would. The manual element picker
+ * calls this too, so a hand-picked field and an auto-detected one carry
+ * identical metadata — there is no second, drifting copy of "what a captured
+ * field looks like". Shape only: never a value. */
+export function describeControl(el: Element): CapturedField {
+  const type = controlType(el);
+  const options = optionsFor(el, type);
+  return {
+    label: captureLabel(el, type),
+    selector: selectorFor(el),
+    fieldType: type,
+    formSection: sectionFor(el),
+    ...(options !== undefined ? { options } : {}),
+  };
+}
+
+/** The nearest thing to `node` that capture can actually map: the control
+ * itself, the control a clicked <label> points at, or a control inside a
+ * clicked wrapper. Null when the click landed on nothing mappable. */
+export function nearestCapturableControl(node: Element | null): Element | null {
+  if (node == null) return null;
+  const self = node.closest(FILLABLE);
+  if (self) return self;
+  const label = node.closest("label");
+  if (label) {
+    const forId = label.getAttribute("for");
+    if (forId) {
+      const target = document.getElementById(forId);
+      if (target?.matches(FILLABLE)) return target;
+    }
+    const inner = label.querySelector(FILLABLE);
+    if (inner) return inner;
+  }
+  return node.querySelector(FILLABLE);
+}
+
 export function scanCapturableFields(): CapturedField[] {
   const seenRadioNames = new Set<string>();
   const fields: CapturedField[] = [];
-  const controls = Array.from(document.querySelectorAll(FILLABLE)).map(
-    (el, index) => ({ el, index }),
-  );
+  const controls = Array.from(document.querySelectorAll(FILLABLE)).map((el, index) => ({
+    el,
+    index,
+  }));
 
   const visible = controls
     .filter(({ el }) => isCapturableControl(el))
@@ -197,7 +346,7 @@ export function scanCapturableFields(): CapturedField[] {
       (a, b) => compareVisualPosition(a.el, b.el) || a.index - b.index,
     );
 
-  for (const { el, index } of visible) {
+  for (const { el } of visible) {
     const type = controlType(el);
     if (type === "radio") {
       const name = (el as HTMLInputElement).name;
@@ -206,16 +355,7 @@ export function scanCapturableFields(): CapturedField[] {
         seenRadioNames.add(name);
       }
     }
-    const options = optionsFor(el, type);
-    fields.push({
-      label: labelFor(el),
-      // Keep the document-order index for nth-of-type fallbacks so a visual
-      // re-sort never rewrites an existing positional selector.
-      selector: selectorFor(el, index),
-      fieldType: type,
-      formSection: sectionFor(el),
-      ...(options !== undefined ? { options } : {}),
-    });
+    fields.push(describeControl(el));
   }
 
   return fields;

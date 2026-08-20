@@ -9,8 +9,10 @@ import {
   nextPageSequence,
   parseCaptureSession,
   usedPageNames,
+  isNamedRow,
   recognitionSummary,
   restoredSummary,
+  rowDisplayName,
   type CaptureRow,
   type CaptureSession,
 } from "./capture";
@@ -441,3 +443,142 @@ function blankRow(selector: string): CaptureRow {
     sent: false,
   };
 }
+
+// 2026-08-19 — manual mapping. The picker exists because an auto-scan can only
+// see what is rendered AND wired at the moment it runs; these rules are what
+// stop a later re-capture from throwing the trainer's work away.
+describe("rowDisplayName / isNamedRow", () => {
+  it("prefers the trainer's name over the payer's captured text", () => {
+    expect(rowDisplayName(row({ label: "txtNPI_1", displayLabel: "NPI (Type 1)" }))).toBe(
+      "NPI (Type 1)",
+    );
+  });
+
+  it("falls back to the payer's text, then to an honest placeholder", () => {
+    expect(rowDisplayName(row({ label: "Tax ID", displayLabel: null }))).toBe("Tax ID");
+    // An empty cell reads as a rendering bug; this reads as "the form gave us
+    // nothing", which is the truth and is actionable.
+    expect(rowDisplayName(row({ label: "", displayLabel: null }))).toBe("Unnamed field");
+    expect(rowDisplayName(row({ label: "   ", displayLabel: "  " }))).toBe("Unnamed field");
+  });
+
+  it("knows which rows still need a human name", () => {
+    expect(isNamedRow(row({ label: "NPI" }))).toBe(true);
+    expect(isNamedRow(row({ label: "", displayLabel: "NPI" }))).toBe(true);
+    expect(isNamedRow(row({ label: "", displayLabel: null }))).toBe(false);
+  });
+});
+
+describe("parseCaptureSession — manual-mapping fields", () => {
+  it("restores origin, the trainer's name, and the type override", () => {
+    const restored = parseCaptureSession(
+      session([
+        row({
+          selector: "#npi",
+          origin: "user_mapped",
+          displayLabel: "NPI",
+          typeOverridden: true,
+        }),
+      ]),
+    );
+    expect(restored?.rows[0]).toMatchObject({
+      origin: "user_mapped",
+      displayLabel: "NPI",
+      typeOverridden: true,
+    });
+  });
+
+  it("treats a row captured before the picker existed as auto-detected", () => {
+    // Legacy sessions carry no `origin`; defaulting to user_mapped would make
+    // mergePageCapture preserve rows the portal really did remove.
+    const legacy = { label: "NPI", selector: "#npi", fieldType: "text" };
+    const restored = parseCaptureSession({
+      portalKey: "availity",
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [legacy],
+    });
+    expect(restored?.rows[0]?.origin).toBe("auto_detected");
+    expect(restored?.rows[0]?.displayLabel).toBeNull();
+    expect(restored?.rows[0]?.typeOverridden).toBe(false);
+  });
+});
+
+describe("mergePageCapture — a re-capture must not delete manual work", () => {
+  const page = "Page 1";
+
+  it("KEEPS a user-mapped row the fresh scan cannot see", () => {
+    // The whole point of the picker: the Humana NPI box only exists after a
+    // radio choice, so the next scan legitimately misses it. Dropping it here
+    // would silently undo the trainer's fix.
+    const previous = [
+      row({ selector: "#type", pageStep: page, origin: "auto_detected" }),
+      row({
+        selector: "#npi",
+        pageStep: page,
+        origin: "user_mapped",
+        displayLabel: "NPI",
+        chosenToken: "provider.npi",
+      }),
+    ];
+    const scan = [row({ selector: "#type", pageStep: page })];
+
+    const merged = mergePageCapture(previous, scan, page);
+    const npi = merged.find((r) => r.selector === "#npi");
+    expect(npi).toBeDefined();
+    expect(npi).toMatchObject({ displayLabel: "NPI", chosenToken: "provider.npi" });
+  });
+
+  it("still DROPS an auto-detected row the scan no longer sees", () => {
+    // Drift repair has to keep working: a field the portal really removed
+    // should leave the capture.
+    const previous = [row({ selector: "#gone", pageStep: page, origin: "auto_detected" })];
+    const merged = mergePageCapture(previous, [row({ selector: "#kept", pageStep: page })], page);
+    expect(merged.map((r) => r.selector)).toEqual(["#kept"]);
+  });
+
+  it("does not duplicate a user-mapped row the scan HAS caught up with", () => {
+    // Once the field is visible at scan time the auto row covers it; keeping
+    // the rescued copy too would propose the same selector twice.
+    const previous = [
+      row({ selector: "#npi", pageStep: page, origin: "user_mapped", displayLabel: "NPI" }),
+    ];
+    const merged = mergePageCapture(previous, [row({ selector: "#npi", pageStep: page })], page);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ selector: "#npi", displayLabel: "NPI" });
+  });
+
+  it("carries a rename and a type override across a re-scan", () => {
+    const previous = [
+      row({
+        selector: "#npi",
+        label: "txtNPI_1",
+        pageStep: page,
+        displayLabel: "NPI (Type 1)",
+        fieldType: "text",
+        typeOverridden: true,
+      }),
+    ];
+    // The scan re-reads the portal and guesses a different type.
+    const scan = [row({ selector: "#npi", label: "txtNPI_1", pageStep: page, fieldType: "select" })];
+
+    const [merged] = mergePageCapture(previous, scan, page);
+    expect(merged?.displayLabel).toBe("NPI (Type 1)");
+    expect(merged?.fieldType).toBe("text");
+  });
+
+  it("lets a re-scan correct a type the trainer never overrode", () => {
+    const previous = [row({ selector: "#state", pageStep: page, fieldType: "text" })];
+    const scan = [row({ selector: "#state", pageStep: page, fieldType: "select" })];
+    expect(mergePageCapture(previous, scan, page)[0]?.fieldType).toBe("select");
+  });
+
+  it("keeps a user-mapped row belonging to ANOTHER page untouched", () => {
+    const previous = [
+      row({ selector: "#p1", pageStep: "Page 1", origin: "user_mapped" }),
+      row({ selector: "#p2", pageStep: "Page 2" }),
+    ];
+    const merged = mergePageCapture(previous, [row({ selector: "#p2b", pageStep: "Page 2" })], "Page 2");
+    expect(merged.map((r) => r.selector).sort()).toEqual(["#p1", "#p2b"]);
+  });
+});

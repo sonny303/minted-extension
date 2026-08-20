@@ -148,9 +148,16 @@
                 <button id="capture-next-page" class="link" type="button" hidden>
                   Capture next page
                 </button>
+                <!-- 2026-08-19: a scan only sees what is rendered AND wired at
+                     the moment it runs, so a field revealed by an earlier
+                     answer is legitimately missed. This adds it by hand. -->
+                <button id="capture-add-field" class="link" type="button" hidden>
+                  + Add field
+                </button>
               </div>
             </div>
             <p id="capture-restored" class="capture-restored" hidden></p>
+            <p id="capture-pick-status" class="capture-pick-status" hidden></p>
             <div id="capture-rows" class="capture-rows"></div>
             <div id="capture-actions" class="capture-actions" hidden>
               <button id="capture-send" class="secondary" type="button">

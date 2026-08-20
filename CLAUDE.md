@@ -258,6 +258,44 @@ portalUrl, portalKey?, facilityId? }` through
   contract (every `el()` id resolves, no duplicate ids, every case-work
   surface really is inside `#case-work`) — main.ts throws at import on a
   missing id, which means a blank panel, and nothing else would catch it.
+- **Manual field mapping (2026-08-19).** A scan only sees what is rendered AND
+  wired at the moment it runs, so a field a portal reveals after an earlier
+  answer is legitimately missed — that is what "only 1 of 2 fields" on the
+  Humana status form was (the NPI box is `display:none` until a certification
+  type is chosen; the radio WAS found, which also rules out an iframe).
+  **`+ Add field`** puts the page in pick mode (`src/content/elementPicker.ts`):
+  crosshair, hover highlight, click to add, Esc/right-click/blur to cancel.
+  Every listener is CAPTURE-phase and swallows its event, so picking a radio
+  does not also select it and picking near a submit cannot navigate the form
+  away mid-training — verified in a real browser, not just jsdom. The pick
+  describes the element through the SAME `describeControl` the scanner uses, so
+  a hand-picked and an auto-detected field can never drift apart.
+  `PICK_ELEMENT` is the ONE async `ContentRequest` (its listener returns true);
+  `MATCH_SELECTOR` backs "Re-test on page" (1 healthy / 0 will never fill / >1
+  ambiguous). Per-row inline editing renames, re-types, re-tests and removes.
+  **`CaptureRow` gained `origin`, `displayLabel` and `typeOverridden`:**
+  `displayLabel` is the trainer's name and is kept SEPARATE from `label` (the
+  payer's captured text) exactly as the panel splits display_label from
+  field_label — so a re-scan refreshes what the portal says without discarding
+  what the human called it. `SEND_CAPTURE` still proposes `field_label` as the
+  payer's text, falling back to the trainer's name ONLY when the portal never
+  labelled the field at all (otherwise there is nothing to preserve).
+  **`mergePageCapture` rescues `user_mapped` rows a fresh scan cannot see** —
+  those are precisely the conditionally-rendered fields the picker exists for,
+  and dropping them on the next re-capture would silently delete the manual
+  work. An `auto_detected` row the scan no longer sees is still dropped, so
+  drift repair is unchanged. Legacy rows parse as `auto_detected`.
+- **Scanner fixes shipped with it (2026-08-19), all three reproduced first.**
+  (1) The no-id/no-name fallback selector `tag:nth-of-type(queryIndex)` mixed
+  a document-wide query index with a sibling-scoped pseudo-class and resolved
+  to ZERO elements — replaced by a real `:nth-child()` path anchored at the
+  nearest id-bearing ancestor. (2) A radio group was named after whichever
+  option came first; `radioGroupLabel` now prefers the group's QUESTION
+  (fieldset legend / `[role=radiogroup]` aria) and the options keep their own
+  text. (3) A control the form wires no label for captured nameless;
+  `nearbyLabel` adopts a short preceding caption, never crossing into a
+  sibling that owns its own control, and never past 120 chars (prose is not a
+  label). Name-based selectors now carry the input TYPE too.
 - **Capture is per PAGE (E6.9 F6.9.8 / BITE-CAP-05).** The side panel sends a
   collision-free `pageStep` candidate from `derivePageStep` (heading → URL
   tail → capture sequence); the background names the page AFTER the scan via

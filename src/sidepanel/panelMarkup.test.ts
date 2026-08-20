@@ -95,6 +95,17 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(caseWork.contains(capture)).toBe(false);
   });
 
+  it("carries the manual-mapping affordances inside the trainer", () => {
+    // 2026-08-19: adding/correcting a field by hand is a Train-forms job, so
+    // these must live under #train-section like capture itself.
+    const train = doc.getElementById("train-section")!;
+    for (const id of ["capture-add-field", "capture-pick-status"]) {
+      const node = doc.getElementById(id);
+      expect(node, `#${id}`).not.toBeNull();
+      expect(train.contains(node), `#${id} inside #train-section`).toBe(true);
+    }
+  });
+
   it("has retired the Browse-providers dropdown", () => {
     // Superseded by free-text search, which can name the group a provider
     // belongs to — the dropdown could not, so two same-named providers were

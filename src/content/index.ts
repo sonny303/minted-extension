@@ -10,6 +10,7 @@
 import type { ContentRequest } from "../shared/fill";
 import { applyFill } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
+import { cancelElementPick, countSelectorMatches, startElementPick } from "./elementPicker";
 
 chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResponse) => {
   if (message?.type === "PING") {
@@ -27,6 +28,31 @@ chrome.runtime.onMessage.addListener((message: ContentRequest, _sender, sendResp
         error: error instanceof Error ? error.message : "Could not read this form",
       });
     }
+    return false;
+  }
+  if (message?.type === "PICK_ELEMENT") {
+    // ASYNC: the pick resolves only when the human clicks or cancels, so this
+    // branch returns true to hold the message channel open. Every other branch
+    // answers synchronously and returns false.
+    startElementPick()
+      .then((outcome) => sendResponse({ ok: true, data: outcome }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : "Could not pick a field",
+        }),
+      );
+    return true;
+  }
+  if (message?.type === "CANCEL_PICK") {
+    cancelElementPick();
+    sendResponse({ ok: true, data: null });
+    return false;
+  }
+  if (message?.type === "MATCH_SELECTOR") {
+    // Shape question only: how many elements does this selector hit? Never
+    // reads what any of them contain.
+    sendResponse({ ok: true, data: countSelectorMatches(message.selector) });
     return false;
   }
   if (message?.type === "APPLY_FILL") {

@@ -52,9 +52,11 @@ import {
   identifyCapturePage,
   mergePageCapture,
   parseCaptureSession,
+  rowDisplayName,
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
+import type { PickOutcome } from "../content/elementPicker";
 import { assignSortOrder } from "../shared/trainForms";
 import { browseableProviders } from "../shared/browseProviders";
 import type { CapturedField } from "../content/captureScan";
@@ -353,6 +355,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         sent: false,
         pageStep,
         sortOrder: f.sortOrder,
+        origin: "auto_detected",
+        displayLabel: null,
+        typeOverridden: false,
         ...(f.options !== undefined ? { options: f.options } : {}),
       }));
       // Re-capturing is DRIFT REPAIR, and it is PER PAGE: prior decisions on
@@ -381,6 +386,118 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       await writeCaptureSession(next);
       return next;
     }
+    // ---- 2026-08-19 manual mapping ----
+    case "PICK_CAPTURE_FIELD": {
+      // Same Train-only gate as capture itself: pointing at a field is
+      // capturing one, and a proposal always lands in the shared library.
+      if ((await readPanelMode()) !== "train") {
+        throw new Error("Switch to Train forms to add a field.");
+      }
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("Capture this form first, then add missing fields.");
+      await ensureContentScript(request.tabId);
+      const picked = (await chrome.tabs.sendMessage(request.tabId, { type: "PICK_ELEMENT" })) as
+        | { ok?: boolean; data?: PickOutcome; error?: string }
+        | undefined;
+      if (!picked?.ok || !picked.data) {
+        throw new Error(picked?.error ?? "Could not add a field — reload the page and retry.");
+      }
+      // Cancelling is a normal outcome, not a failure: return the session
+      // untouched so the panel simply leaves pick mode.
+      if (picked.data.status === "cancelled") return current;
+
+      const field = picked.data.field;
+      const existing = current.rows.find((r) => r.selector === field.selector);
+      if (existing) {
+        // Already known. Say so by returning the session unchanged rather than
+        // adding a duplicate row that would propose the same selector twice.
+        throw new Error(
+          `That field is already captured${
+            rowDisplayName(existing) ? ` as "${rowDisplayName(existing)}"` : ""
+          }.`,
+        );
+      }
+      // A hand-added field joins the page the trainer is looking at, at the
+      // END of it — its DOM position is not meaningful relative to rows the
+      // scan ordered visually, and inventing one would reorder the page.
+      const pageStep = request.pageStep?.trim() || null;
+      const samePage = current.rows.filter((r) => (r.pageStep ?? null) === pageStep);
+      const nextSort = samePage.reduce((max, r) => Math.max(max, r.sortOrder ?? 0), 0) + 1;
+      const row: CaptureRow = {
+        label: field.label,
+        selector: field.selector,
+        fieldType: field.fieldType,
+        formSection: field.formSection,
+        suggestedToken: null,
+        evidence: null,
+        chosenToken: null,
+        sent: false,
+        pageStep,
+        sortOrder: nextSort,
+        origin: "user_mapped",
+        displayLabel: null,
+        typeOverridden: false,
+        ...(field.options !== undefined ? { options: field.options } : {}),
+      };
+      const next: CaptureSession = { ...current, rows: [...current.rows, row] };
+      await writeCaptureSession(next);
+      return next;
+    }
+    case "CANCEL_CAPTURE_PICK": {
+      // Best-effort: the pick may already have resolved, or the tab may be
+      // gone. Either way the panel is leaving pick mode, so never throw.
+      try {
+        await chrome.tabs.sendMessage(request.tabId, { type: "CANCEL_PICK" });
+      } catch {
+        // no content script / tab closed — nothing to cancel
+      }
+      return null;
+    }
+    case "EDIT_CAPTURE_ROW": {
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("No capture in progress");
+      const next: CaptureSession = {
+        ...current,
+        rows: current.rows.map((r) => {
+          if (r.selector !== request.selector) return r;
+          const patched: CaptureRow = { ...r };
+          if (request.displayLabel !== undefined) {
+            const trimmed = request.displayLabel?.trim() ?? "";
+            patched.displayLabel = trimmed === "" ? null : trimmed;
+          }
+          if (request.fieldType !== undefined) {
+            patched.fieldType = request.fieldType;
+            // Remember that a HUMAN chose this, so the next re-scan does not
+            // quietly put our own guess back.
+            patched.typeOverridden = true;
+          }
+          return patched;
+        }),
+      };
+      await writeCaptureSession(next);
+      return next;
+    }
+    case "REMOVE_CAPTURE_ROW": {
+      const current = await readCaptureSession();
+      if (current == null) throw new Error("No capture in progress");
+      const next: CaptureSession = {
+        ...current,
+        rows: current.rows.filter((r) => r.selector !== request.selector),
+      };
+      await writeCaptureSession(next);
+      return next;
+    }
+    case "TEST_CAPTURE_SELECTOR": {
+      await ensureContentScript(request.tabId);
+      const result = (await chrome.tabs.sendMessage(request.tabId, {
+        type: "MATCH_SELECTOR",
+        selector: request.selector,
+      })) as { ok?: boolean; data?: number; error?: string } | undefined;
+      if (!result?.ok || typeof result.data !== "number") {
+        throw new Error(result?.error ?? "Could not check this field on the page.");
+      }
+      return { selector: request.selector, matches: result.data };
+    }
     case "SEND_CAPTURE": {
       const current = await readCaptureSession();
       if (current == null) throw new Error("No capture in progress");
@@ -399,7 +516,13 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         await proposeSharedFieldMap({
           portal_key: current.portalKey,
           selector: row.selector,
-          field_label: row.label,
+          // The payer's own captured text is what `field_label` means, and a
+          // rename must NOT overwrite it (E6.9 keeps the admin's name in
+          // `display_label`, which the panel's field registry edits by row id).
+          // The ONE exception is a field the portal never labelled at all —
+          // then the trainer's name is the only name there is, and sending an
+          // empty label instead would propose a row nobody can identify.
+          field_label: row.label.trim() || (row.displayLabel ?? "").trim() || null,
           form_section: row.formSection,
           page_step: row.pageStep ?? null,
           field_type: row.fieldType,
