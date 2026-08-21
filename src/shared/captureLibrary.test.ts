@@ -58,7 +58,10 @@ describe("joinCaptureLibrary", () => {
   });
 
   it("marks a field the library has never seen as new", () => {
-    const list = joinCaptureLibrary([row({ selector: "#tin", label: "TIN" })], [map()]);
+    const list = joinCaptureLibrary(
+      [row({ selector: "#tin", label: "TIN" })],
+      [map()],
+    );
     expect(list[0]).toMatchObject({ state: "new", library: null });
   });
 
@@ -84,7 +87,13 @@ describe("joinCaptureLibrary", () => {
   });
 
   it("lists the library alone when the browser lost the capture session", () => {
-    const list = joinCaptureLibrary([], [map({ pageStep: "Credentials" }), map({ id: "map-2", selector: "#tin" })]);
+    const list = joinCaptureLibrary(
+      [],
+      [
+        map({ pageStep: "Credentials" }),
+        map({ id: "map-2", selector: "#tin" }),
+      ],
+    );
     expect(list.map((r) => r.state)).toEqual(["library-only", "library-only"]);
     expect(list.every((r) => r.row === null)).toBe(true);
   });
@@ -103,8 +112,12 @@ describe("joinCaptureLibrary", () => {
   });
 
   it("names a library row by the selector when nobody renamed it", () => {
-    expect(libraryRowName(map({ selector: "label:Provider NPI" }))).toBe("Provider NPI");
-    expect(libraryRowName(map({ displayLabel: "  Individual NPI " }))).toBe("Individual NPI");
+    expect(libraryRowName(map({ selector: "label:Provider NPI" }))).toBe(
+      "Provider NPI",
+    );
+    expect(libraryRowName(map({ displayLabel: "  Individual NPI " }))).toBe(
+      "Individual NPI",
+    );
   });
 });
 
@@ -118,12 +131,25 @@ describe("captureLibraryCounts / captureLibrarySummary", () => {
       ],
       [
         map(),
-        map({ id: "map-2", selector: "#tin", status: "proposed", source: "manual", token: null }),
+        map({
+          id: "map-2",
+          selector: "#tin",
+          status: "proposed",
+          source: "manual",
+          token: null,
+        }),
         map({ id: "map-3", selector: "#lic", displayLabel: "License" }),
       ],
     );
     const counts = captureLibraryCounts(list);
-    expect(counts).toEqual({ total: 4, mapped: 2, undecided: 1, human: 0, fresh: 1, drifted: 1 });
+    expect(counts).toEqual({
+      total: 4,
+      mapped: 2,
+      undecided: 1,
+      human: 0,
+      fresh: 1,
+      drifted: 1,
+    });
     expect(captureLibrarySummary(counts)).toBe(
       "2 of 4 fill from the shared library · 1 awaiting a decision · 1 new in this scan · 1 in the library but not on this page.",
     );
@@ -133,5 +159,26 @@ describe("captureLibraryCounts / captureLibrarySummary", () => {
     expect(captureLibrarySummary(captureLibraryCounts([]))).toBe(
       "Nothing in the shared library for this form yet — capture it to propose its fields.",
     );
+  });
+});
+
+describe("library rows carry a control type", () => {
+  it("takes it from the map for a row the scan did not find", () => {
+    // The drift row's live re-check needs it: an N-way radio match is one
+    // field, and without the type it would read as ambiguity.
+    const list = joinCaptureLibrary(
+      [row({ selector: "#a" })],
+      [map({ selector: "#gone", fieldType: "radio" })],
+    );
+    const drifted = list.find((r) => r.state === "drifted");
+    expect(drifted?.fieldType).toBe("radio");
+  });
+
+  it("takes it from the captured row when the scan found it", () => {
+    const list = joinCaptureLibrary(
+      [row({ selector: "#a", fieldType: "select" })],
+      [map({ selector: "#a" })],
+    );
+    expect(list[0]?.fieldType).toBe("select");
   });
 });

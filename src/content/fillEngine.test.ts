@@ -297,6 +297,16 @@ describe("workshop / engine parity on what counts as a field", () => {
       selector: "#l",
     },
     { name: "nothing", html: "<p>hi</p>", selector: "#missing" },
+    {
+      name: "a label: selector",
+      html: '<label for="fn">First Name</label><input id="fn" type="text">',
+      selector: "label:First Name",
+    },
+    {
+      name: "a label: selector the page lacks",
+      html: '<label for="fn">First Name</label><input id="fn" type="text">',
+      selector: "label:Last Name",
+    },
   ];
 
   for (const c of cases) {

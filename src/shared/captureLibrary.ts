@@ -11,7 +11,7 @@
 // recognition), so this is a join, not a fetch. It reads only: nothing here
 // proposes, approves or writes — mapping decisions stay in the web app.
 
-import type { PortalFieldMap } from "./apiTypes";
+import type { PortalFieldMap, PortalFieldType } from "./apiTypes";
 import type { CaptureRow } from "./capture";
 import { rowDisplayName } from "./capture";
 import { classifyFieldMap, type FieldDecision } from "./fieldClassify";
@@ -41,6 +41,10 @@ export interface CaptureListRow {
   /** What the library says about it, or null when the library has never seen
    * it. `decision` mirrors the web app's own registry classifier. */
   library: { decision: FieldDecision; note: string } | null;
+  /** The control type, from the captured row or the library map. Carried so a
+   * live re-test of a library-only row can read an N-way radio match as one
+   * field rather than as ambiguity. */
+  fieldType: PortalFieldType;
 }
 
 /** A library row's human name: the admin's rename, else the selector with the
@@ -48,13 +52,17 @@ export interface CaptureListRow {
 export function libraryRowName(map: PortalFieldMap): string {
   const own = (map.displayLabel ?? "").trim();
   if (own) return own;
-  return map.selector.startsWith("label:") ? map.selector.slice("label:".length) : map.selector;
+  return map.selector.startsWith("label:")
+    ? map.selector.slice("label:".length)
+    : map.selector;
 }
 
 /** Every selector a map answers to — the stored one plus its fallbacks, so a
  * field the scan found by a fallback is not reported as new. */
 function selectorsOf(map: PortalFieldMap): string[] {
-  return [map.selector, ...(map.selectorFallbacks ?? [])].map((s) => s.trim()).filter(Boolean);
+  return [map.selector, ...(map.selectorFallbacks ?? [])]
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -92,6 +100,7 @@ export function joinCaptureLibrary(
       state: map ? "in-library" : "new",
       row,
       library: map ? describe(map) : null,
+      fieldType: row.fieldType,
     };
   });
 
@@ -112,12 +121,16 @@ export function joinCaptureLibrary(
       state: scanned ? "drifted" : "library-only",
       row: null,
       library: describe(map),
+      fieldType: map.fieldType,
     });
   }
   return out;
 }
 
-function describe(map: PortalFieldMap): { decision: FieldDecision; note: string } {
+function describe(map: PortalFieldMap): {
+  decision: FieldDecision;
+  note: string;
+} {
   const classification = classifyFieldMap(map);
   return { decision: classification.decision, note: classification.reason };
 }
@@ -131,7 +144,9 @@ export interface CaptureLibraryCounts {
   drifted: number;
 }
 
-export function captureLibraryCounts(list: readonly CaptureListRow[]): CaptureLibraryCounts {
+export function captureLibraryCounts(
+  list: readonly CaptureListRow[],
+): CaptureLibraryCounts {
   const counts: CaptureLibraryCounts = {
     total: list.length,
     mapped: 0,
@@ -175,8 +190,11 @@ export function captureLibrarySummary(counts: CaptureLibraryCounts): string {
   if (counts.total === 0) {
     return "Nothing in the shared library for this form yet — capture it to propose its fields.";
   }
-  const parts: string[] = [`${counts.mapped} of ${counts.total} fill from the shared library`];
-  if (counts.undecided > 0) parts.push(`${counts.undecided} awaiting a decision`);
+  const parts: string[] = [
+    `${counts.mapped} of ${counts.total} fill from the shared library`,
+  ];
+  if (counts.undecided > 0)
+    parts.push(`${counts.undecided} awaiting a decision`);
   if (counts.human > 0) parts.push(`${counts.human} filled by a person`);
   if (counts.fresh > 0) parts.push(`${counts.fresh} new in this scan`);
   if (counts.drifted > 0) {

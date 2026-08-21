@@ -3,7 +3,11 @@
 // field is wrapped so one bad selector or odd widget skips-and-reports
 // instead of aborting the run. Nothing here reads storage, fetches, or sees
 // anything beyond the values it is handed.
-import type { FillInstruction, FillPageResult, ReportedField } from "../shared/fill";
+import type {
+  FillInstruction,
+  FillPageResult,
+  ReportedField,
+} from "../shared/fill";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -29,10 +33,18 @@ function controlForLabel(label: HTMLLabelElement): Fillable | null {
     : null;
 }
 
+/** The `label:` prefix the shared library uses for label-addressed maps. */
+export const LABEL_SELECTOR_PREFIX = "label:";
+
 // "label:First Name" → the form control belonging to the label whose full
 // text matches exactly (after normalization). Exact match is deliberate: the
 // portal has both "First Name" and "Provider's First Name".
-function byLabel(text: string): Fillable | null {
+//
+// EXPORTED so the Selector Workshop resolves a label-addressed selector the
+// same way the fill does. It used to run raw querySelectorAll, which cannot
+// parse `label:…` at all — so every library field stored that way tested as
+// "matches nothing" and read as drift on a page where it fills perfectly.
+export function byLabel(text: string): Fillable | null {
   const want = normalize(text);
   for (const label of Array.from(document.querySelectorAll("label"))) {
     if (normalize(label.textContent ?? "") !== want) continue;
@@ -56,7 +68,10 @@ function bySelector(selector: string): Fillable | null {
 }
 
 function resolveTarget(instruction: FillInstruction): Fillable | null {
-  for (const selector of [instruction.selector, ...instruction.selectorFallbacks]) {
+  for (const selector of [
+    instruction.selector,
+    ...instruction.selectorFallbacks,
+  ]) {
     const target = selector.startsWith("label:")
       ? byLabel(selector.slice("label:".length))
       : bySelector(selector);
@@ -104,7 +119,10 @@ export function clearPortalForm(): number {
   );
   for (const el of controls) {
     try {
-      if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+      if (
+        el instanceof HTMLInputElement &&
+        (el.type === "checkbox" || el.type === "radio")
+      ) {
         if (!el.checked) continue;
         el.checked = false;
         fireChanged(el);
@@ -162,11 +180,14 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   const scope = el.form ?? document;
   const group = el.name
     ? Array.from(
-        scope.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${CSS.escape(el.name)}"]`),
+        scope.querySelectorAll<HTMLInputElement>(
+          `input[type="radio"][name="${CSS.escape(el.name)}"]`,
+        ),
       )
     : [el];
   const match = group.find(
-    (radio) => normalize(radio.value) === want || normalize(labelTextOf(radio)) === want,
+    (radio) =>
+      normalize(radio.value) === want || normalize(labelTextOf(radio)) === want,
   );
   if (!match) {
     return {
@@ -212,7 +233,8 @@ function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
 }
 
 function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
-  if (el instanceof HTMLSelectElement) return applySelect(el, instruction.value);
+  if (el instanceof HTMLSelectElement)
+    return applySelect(el, instruction.value);
   if (el instanceof HTMLInputElement && el.type === "radio") {
     return applyRadio(el, instruction.value);
   }
@@ -256,7 +278,11 @@ export function applyFill(instructions: FillInstruction[]): FillPageResult {
       if (outcome.ok) {
         filled.push(instruction.label);
       } else {
-        skipped.push({ label: instruction.label, reason: outcome.reason, mapId: instruction.mapId });
+        skipped.push({
+          label: instruction.label,
+          reason: outcome.reason,
+          mapId: instruction.mapId,
+        });
       }
     } catch (error) {
       skipped.push({

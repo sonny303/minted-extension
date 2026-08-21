@@ -3858,6 +3858,13 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
     item.append(chip);
   }
 
+  // A LIBRARY row (drifted, or library-only before a capture) has no captured
+  // row to edit — and used to have no actions at all, which made the "needs
+  // updating" half of the job a dead end: the list named the problem and
+  // offered nothing to do about it. Two things are honest here without
+  // deciding anything the web app owns.
+  if (row == null) item.append(renderLibraryRowActions(entry));
+
   if (row) {
     const edit = document.createElement("button");
     edit.type = "button";
@@ -3879,6 +3886,70 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
       item.append(renderCaptureRowEditor(row));
   }
   return item;
+}
+
+/**
+ * What a trainer can do about a field the LIBRARY holds and this page did not
+ * yield — the drift half of the job.
+ *
+ * "Check page" is first because "not found on this page" is a fact about the
+ * SCAN, not about the page: a field revealed only after an earlier answer is
+ * genuinely present and simply was not rendered when the scan ran, which is
+ * the exact situation the picker exists for. Testing the library's own
+ * selector live separates that from a selector that really has gone stale, and
+ * costs one click instead of a re-capture.
+ *
+ * "Re-point" is the repair: click where the field moved to, and the proposal
+ * carries the library's name for it. It PROPOSES at the new selector — the old
+ * map stays until someone retires it in the web app, because what a re-trained
+ * selector does to an approved map is the web app's decision, not this
+ * panel's. The copy says so rather than implying the library was edited.
+ */
+function renderLibraryRowActions(entry: CaptureListRow): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "capture-editor-actions";
+
+  const check = document.createElement("button");
+  check.type = "button";
+  check.className = "link";
+  check.textContent = "Check page";
+  check.disabled = portalTabId == null;
+  check.addEventListener(
+    "click",
+    () => void testCaptureSelector(entry.selector),
+  );
+  box.append(check);
+
+  // Re-pointing adds a row to the capture, so it needs one to add to.
+  if (captureSession != null) {
+    const repoint = document.createElement("button");
+    repoint.type = "button";
+    repoint.className = "link";
+    repoint.textContent = "Re-point";
+    repoint.disabled = pickInFlight || portalTabId == null;
+    repoint.addEventListener("click", () => void repointLibraryField(entry));
+    box.append(repoint);
+  }
+
+  // The verdict from a live check, keyed to THIS row's selector so one row's
+  // answer never appears under another.
+  if (
+    selectorTestResult != null &&
+    selectorTestResult.selector === entry.selector
+  ) {
+    const { valid, matches, fillable, radioGroup } = selectorTestResult;
+    const verdict = selectorVerdict(
+      { valid, matches, fillable, radioGroup },
+      entry.fieldType,
+    );
+    const line = document.createElement("p");
+    line.className = verdict.ok ? "capture-editor-note" : "capture-editor-warn";
+    line.textContent = verdict.ok
+      ? `${verdict.text} It was not in this scan — capture this page again to pick it up.`
+      : verdict.text;
+    box.append(line);
+  }
+  return box;
 }
 
 /** The inline correction panel for one captured row: rename it, re-type it,
@@ -4180,6 +4251,45 @@ async function addFieldByPicking(): Promise<void> {
   // claiming a field was added.
   setPickStatus(
     added > 0 ? "Field added. Name it under Edit if the portal didn't." : null,
+  );
+  renderCapture();
+}
+
+/**
+ * Re-point a drifted library field: the trainer clicks where it moved to, and
+ * the resulting proposal carries the LIBRARY's name for it rather than
+ * whatever the portal calls the new control — so a reviewer in the web app can
+ * see it is the same field, not a stranger.
+ *
+ * It PROPOSES; it does not retire the old map. That decision belongs to the
+ * web app (the extension has no approval write at all), so the status line
+ * says what actually happened instead of implying the library was repaired.
+ */
+async function repointLibraryField(entry: CaptureListRow): Promise<void> {
+  if (portalTabId == null || captureSession == null) return;
+  const tabId = portalTabId;
+  pickInFlight = true;
+  renderCapture();
+  setPickStatus(`Click "${entry.name}" where it is now · Esc to cancel`);
+  const response = await sendToBackground({
+    type: "PICK_CAPTURE_FIELD",
+    tabId,
+    pageStep: currentCapturePage(),
+    displayLabel: entry.name,
+  });
+  pickInFlight = false;
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    renderCapture();
+    return;
+  }
+  const before = captureSession?.rows.length ?? 0;
+  captureSession = response.data;
+  const added = captureSession.rows.length - before;
+  setPickStatus(
+    added > 0
+      ? `"${entry.name}" re-pointed. Send the capture to propose it — the old one stays in the library until it is retired in the web app.`
+      : null,
   );
   renderCapture();
 }

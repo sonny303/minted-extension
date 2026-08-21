@@ -4,7 +4,16 @@
 // (scripts/mock-panel-api.mjs). No real payer portal and no real panel is
 // ever contacted; auth is mocked to a fixture JWT the mock server accepts.
 import { stub } from "./chromeStub";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 // @ts-expect-error — the mock server is an untyped .mjs harness module,
 // deliberately outside the typechecked tree (it mirrors the panel repo's own
 // scripts/mock-api-server.mjs pattern).
@@ -80,9 +89,17 @@ vi.mock("../background/auth", () => {
     forceRefresh: async () => {
       throw new AuthRequiredError();
     },
-    getAuthState: async () => ({ signedIn: true, email: "testkansas@minted.com", name: "Test Kansas" }),
+    getAuthState: async () => ({
+      signedIn: true,
+      email: "testkansas@minted.com",
+      name: "Test Kansas",
+    }),
     currentUserId: async () => "user-kansas",
-    signIn: async () => ({ signedIn: true, email: "testkansas@minted.com", name: "Test Kansas" }),
+    signIn: async () => ({
+      signedIn: true,
+      email: "testkansas@minted.com",
+      name: "Test Kansas",
+    }),
     signOut: async () => {},
   };
 });
@@ -90,7 +107,11 @@ vi.mock("../background/auth", () => {
 interface MockApi {
   baseUrl: string;
   state: {
-    fieldMaps: Array<{ id: string; token: string | null; [key: string]: unknown }>;
+    fieldMaps: Array<{
+      id: string;
+      token: string | null;
+      [key: string]: unknown;
+    }>;
     touches: Map<string, unknown>;
     viewPrefs: Map<string, string[]>;
     failTouches: number;
@@ -168,8 +189,12 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
   });
 
   it("rejects a disallowed origin and malformed shapes — nothing stored", async () => {
-    expect(await handleExternalMessage(HANDOFF, "https://evil.example.com")).toEqual({ ok: false });
-    expect(await handleExternalMessage({ ...HANDOFF, caseId: "nope" }, APP_ORIGIN)).toEqual({
+    expect(
+      await handleExternalMessage(HANDOFF, "https://evil.example.com"),
+    ).toEqual({ ok: false });
+    expect(
+      await handleExternalMessage({ ...HANDOFF, caseId: "nope" }, APP_ORIGIN),
+    ).toEqual({
       ok: false,
     });
     expect((await getActiveCaseState()).status).toBe("none");
@@ -177,10 +202,14 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
 
   it("last launch wins — a second handoff replaces the pending context", async () => {
     await handleExternalMessage(HANDOFF, APP_ORIGIN);
-    await handleExternalMessage({ ...HANDOFF, caseId: FIXTURES.CASE2_ID }, APP_ORIGIN);
+    await handleExternalMessage(
+      { ...HANDOFF, caseId: FIXTURES.CASE2_ID },
+      APP_ORIGIN,
+    );
     const state = await getActiveCaseState();
     expect(state.status).toBe("active");
-    if (state.status === "active") expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
+    if (state.status === "active")
+      expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
   });
 
   it("binds the next tab on the portal origin — and only that origin", async () => {
@@ -239,7 +268,10 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
     expect(context.payerPipelineState).toBe("submitted");
     expect(context.referenceNumbers).toEqual(["REF-1001"]);
     expect(context.selectedFacility?.id).toBe(FIXTURES.FACILITY_ID);
-    expect(context.openTasks?.map((t) => t.executionType)).toEqual(["extension_fill", "manual"]);
+    expect(context.openTasks?.map((t) => t.executionType)).toEqual([
+      "extension_fill",
+      "manual",
+    ]);
   });
 });
 
@@ -260,7 +292,9 @@ describe("TS-81 — read-only fill: every field accounted for, reasons surfaced"
       expect(gap.reason).toBeTruthy();
     }
     // The two gap KINDS route differently (F4.3.3): data gap vs mapping gap.
-    const caqh = coverage.gaps.find((g) => g.label.includes("caqh") || g.label.includes("#caqh"));
+    const caqh = coverage.gaps.find(
+      (g) => g.label.includes("caqh") || g.label.includes("#caqh"),
+    );
     expect(caqh?.kind).toBe("no_value");
     expect(caqh?.reason).toBe("empty on provider");
     const ptan = coverage.gaps.find((g) => g.label === "Group Medicare PTAN");
@@ -276,11 +310,15 @@ describe("TS-82 — fix-it improves the live session after a refetch", () => {
       state: "KS",
       facilityId: FIXTURES.FACILITY_ID,
     });
-    expect(before.gaps.some((g) => g.label === "Group Medicare PTAN")).toBe(true);
+    expect(before.gaps.some((g) => g.label === "Group Medicare PTAN")).toBe(
+      true,
+    );
 
     // The platform's train flow (TE-4) approves the mapping — simulated as
     // the server-side change it is; the extension itself writes nothing.
-    const row = mock.state.fieldMaps.find((m) => m.id === FIXTURES.UNTRAINED_MAP_ID);
+    const row = mock.state.fieldMaps.find(
+      (m) => m.id === FIXTURES.UNTRAINED_MAP_ID,
+    );
     if (row) row.token = "provider.email";
 
     const after = await coveragePortal({
@@ -290,7 +328,9 @@ describe("TS-82 — fix-it improves the live session after a refetch", () => {
       facilityId: FIXTURES.FACILITY_ID,
     });
     expect(after.available).toBe(before.available + 1);
-    expect(after.gaps.some((g) => g.label === "Group Medicare PTAN")).toBe(false);
+    expect(after.gaps.some((g) => g.label === "Group Medicare PTAN")).toBe(
+      false,
+    );
   });
 });
 
@@ -308,10 +348,16 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
   it("logs one structured touch; a same-id retry replays instead of double-logging", async () => {
     const id = crypto.randomUUID();
     const body = buildStructuredTouchBody(draft, id);
-    const { touch: created } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: created } = await postSubmissionTouch(
+      FIXTURES.CASE_ID,
+      body,
+    );
     expect(created.touchType).toBe("portal");
     expect(created.outcome).toBe("successful");
-    const { touch: replayed } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: replayed } = await postSubmissionTouch(
+      FIXTURES.CASE_ID,
+      body,
+    );
     expect(replayed.id).toBe(created.id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -321,10 +367,15 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     const id = crypto.randomUUID();
     const body = buildStructuredTouchBody(draft, id);
     mock.state.failTouches = 1;
-    await expect(postSubmissionTouch(FIXTURES.CASE_ID, body)).rejects.toThrow(ApiError);
+    await expect(postSubmissionTouch(FIXTURES.CASE_ID, body)).rejects.toThrow(
+      ApiError,
+    );
     expect(mock.state.touches.size).toBe(0);
     // The retry reuses the same idempotency id (the panel preserves the draft).
-    const { touch: retried } = await postSubmissionTouch(FIXTURES.CASE_ID, body);
+    const { touch: retried } = await postSubmissionTouch(
+      FIXTURES.CASE_ID,
+      body,
+    );
     expect(retried.id).toBe(id);
     expect(mock.state.touches.size).toBe(1);
     mock.state.touches.clear();
@@ -332,7 +383,10 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
 
   it("the server rejects a portal_submission-only field on a structured touch", async () => {
     const id = crypto.randomUUID();
-    const body = { ...buildStructuredTouchBody(draft, id), task_id: FIXTURES.TASK_ID };
+    const body = {
+      ...buildStructuredTouchBody(draft, id),
+      task_id: FIXTURES.TASK_ID,
+    };
     await expect(
       postSubmissionTouch(FIXTURES.CASE_ID, body as never),
     ).rejects.toThrow(/portal_submission/);
@@ -353,7 +407,8 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     });
     const state = await getActiveCaseState();
     expect(state.status).toBe("active");
-    if (state.status === "active") expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
+    if (state.status === "active")
+      expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
   });
 });
 
@@ -369,8 +424,12 @@ describe("TS-100 — unified standalone search", () => {
     expect(byPayer[0]?.facilityId).toBeNull();
     const byRef = await searchCases("REF-1001");
     expect(byRef.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
-    expect((await searchCases("C-1001")).map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
-    expect((await searchCases("1002")).map((r) => r.id)).toEqual([FIXTURES.CASE2_ID]);
+    expect((await searchCases("C-1001")).map((r) => r.id)).toEqual([
+      FIXTURES.CASE_ID,
+    ]);
+    expect((await searchCases("1002")).map((r) => r.id)).toEqual([
+      FIXTURES.CASE2_ID,
+    ]);
     expect(await searchCases("   ")).toEqual([]);
   });
 
@@ -393,7 +452,9 @@ describe("TS-100 — unified standalone search", () => {
     ]);
     expect(kay?.groups?.[0]?.isPrimary).toBe(true);
     // The formatter the panel actually renders, over that same wire shape.
-    expect(providerGroupsLabel(kay!)).toBe("Kansas Fitness Physio Group · Wellspring PT");
+    expect(providerGroupsLabel(kay!)).toBe(
+      "Kansas Fitness Physio Group · Wellspring PT",
+    );
   });
 });
 
@@ -401,7 +462,12 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
   it("projects honest empties (with reasons) and the <30-day expiry badge", async () => {
     const { profile } = await getProviderProfile(FIXTURES.PROVIDER_ID);
     const today = new Date().toISOString().slice(0, 10);
-    const cards = projectQuickCards(profile.tokens, profile.unresolved, resolveLayout(null), today);
+    const cards = projectQuickCards(
+      profile.tokens,
+      profile.unresolved,
+      resolveLayout(null),
+      today,
+    );
     expect(cards.name).toBe("Kay One");
     expect(cards.dateOfBirth).toBe("1980-01-15");
     // CAQH is empty on the fixture — rendered honestly with the reason.
@@ -424,7 +490,9 @@ describe("S5.1/S5.3 — capture proposes, and learns", () => {
     // Approving is a human act in the webapp; the panel can only propose.
     expect(result.map.status).toBe("proposed");
     expect(result.map.token).toBeNull();
-    expect(mock.state.proposedMaps.get("humana_enroll:#npi")?.status).toBe("proposed");
+    expect(mock.state.proposedMaps.get("humana_enroll:#npi")?.status).toBe(
+      "proposed",
+    );
   });
 
   it("returns the learned suggestion with its payer-count evidence", async () => {
@@ -447,8 +515,16 @@ describe("S5.1/S5.3 — capture proposes, and learns", () => {
   });
 
   it("is idempotent on (portal_key, selector)", async () => {
-    const a = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
-    const b = await proposeFieldMap({ portal_key: "p", selector: "#dup", field_label: "X" });
+    const a = await proposeFieldMap({
+      portal_key: "p",
+      selector: "#dup",
+      field_label: "X",
+    });
+    const b = await proposeFieldMap({
+      portal_key: "p",
+      selector: "#dup",
+      field_label: "X",
+    });
     expect(a.map.id).toBe(b.map.id);
   });
 });
@@ -486,7 +562,9 @@ describe("S4.4 — the opt-in status bump", () => {
     );
     expect(result.touch.id).toBeTruthy();
     expect(result.statusBump?.applied).toBe(false);
-    expect(result.statusBump?.reason).toMatch(/status that can move to Submitted/);
+    expect(result.statusBump?.reason).toMatch(
+      /status that can move to Submitted/,
+    );
   });
 
   it("carries no bump meta when none was requested", async () => {
@@ -585,12 +663,16 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
       "provider.ssnLast4",
       "provider.npi",
     ]);
-    await expect(putViewPrefs(["provider.notARealColumn"])).rejects.toThrow(ApiError);
+    await expect(putViewPrefs(["provider.notARealColumn"])).rejects.toThrow(
+      ApiError,
+    );
   });
 
   it("an invalid stored layout degrades to the default, never a broken card", () => {
     const served = new Set(["provider.npi"]);
-    expect(resolveLayout(["provider.npi", "bogus.key"], served).source).toBe("default");
+    expect(resolveLayout(["provider.npi", "bogus.key"], served).source).toBe(
+      "default",
+    );
     expect(resolveLayout(null, served).source).toBe("default");
   });
 });
@@ -794,7 +876,11 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     expect(known.kind).toBe("existing");
     if (known.kind === "existing") expect(known.portal.key).toBe("aetna_join");
 
-    const unknown = recognizeForm("https://other.example/apply", registry, "Cigna");
+    const unknown = recognizeForm(
+      "https://other.example/apply",
+      registry,
+      "Cigna",
+    );
     expect(unknown).toEqual({ kind: "new", candidateName: "Cigna form" });
 
     // A second form for a payer that already has one is numbered, never a
@@ -897,6 +983,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     formSection: string | null;
   }>;
   let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let pickPayload: unknown;
 
   beforeAll(async () => {
     // Importing the worker registers messaging; handleRequest is the same
@@ -907,10 +994,17 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
   beforeEach(() => {
     stub.reset();
     scanPayload = [];
+    pickPayload = { status: "cancelled" };
     previousSendMessage = chrome.tabs.sendMessage;
-    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      message: { type?: string },
+    ) => {
       if (message?.type === "PING") return { ok: true };
-      if (message?.type === "SCAN_FIELDS") return { ok: true, data: scanPayload };
+      if (message?.type === "SCAN_FIELDS")
+        return { ok: true, data: scanPayload };
+      if (message?.type === "PICK_ELEMENT")
+        return { ok: true, data: pickPayload };
       throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
     }) as typeof chrome.tabs.sendMessage;
   });
@@ -926,8 +1020,18 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await writePanelMode("train");
 
     scanPayload = [
-      { label: "First", selector: "#p1a", fieldType: "text", formSection: null },
-      { label: "Second", selector: "#p1b", fieldType: "text", formSection: null },
+      {
+        label: "First",
+        selector: "#p1a",
+        fieldType: "text",
+        formSection: null,
+      },
+      {
+        label: "Second",
+        selector: "#p1b",
+        fieldType: "text",
+        formSection: null,
+      },
     ];
     const page1 = (await handleRequest({
       type: "START_CAPTURE",
@@ -966,16 +1070,98 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const kept = page2.rows.find((r) => r.selector === "#p1a");
     expect(kept?.pageStep).toBe("step1");
     expect(kept?.chosenToken).toBe("provider.firstName");
-    expect(page2.rows.filter((r) => r.pageStep === "step2").map((r) => r.selector)).toEqual([
-      "#p2a",
-      "#p2b",
-    ]);
+    expect(
+      page2.rows.filter((r) => r.pageStep === "step2").map((r) => r.selector),
+    ).toEqual(["#p2a", "#p2b"]);
+  });
+
+  it("re-points a drifted library field under the library's own name", async () => {
+    // The drift repair: the trainer clicks where the field moved to, and the
+    // proposal has to be recognisable in the web app as the SAME field rather
+    // than an anonymous new one — otherwise a reviewer sees a stranger and the
+    // old map with no way to connect them.
+    const { handleRequest } = await import("../background/index");
+    await writePanelMode("train");
+    scanPayload = [
+      { label: "First", selector: "#a", fieldType: "text", formSection: null },
+    ];
+    await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      portalKey: "bcbs_ks_enrollment",
+      pageStep: "step1",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    });
+
+    pickPayload = {
+      status: "picked",
+      field: {
+        // The portal calls the new control something else entirely.
+        label: "txtNPI2",
+        selector: "#npi-moved",
+        fieldType: "text",
+        formSection: null,
+      },
+    };
+    const session = (await handleRequest({
+      type: "PICK_CAPTURE_FIELD",
+      tabId: 1,
+      pageStep: "step1",
+      displayLabel: "Provider NPI",
+    })) as {
+      rows: Array<{
+        selector: string;
+        displayLabel?: string | null;
+        label: string;
+      }>;
+    };
+
+    const added = session.rows.find((r) => r.selector === "#npi-moved");
+    expect(added?.displayLabel).toBe("Provider NPI");
+    // The portal's own text is preserved beside it, never overwritten.
+    expect(added?.label).toBe("txtNPI2");
+  });
+
+  it("leaves an ordinary hand-added field unnamed for the portal's text", async () => {
+    const { handleRequest } = await import("../background/index");
+    await writePanelMode("train");
+    scanPayload = [
+      { label: "First", selector: "#a", fieldType: "text", formSection: null },
+    ];
+    await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      portalKey: "bcbs_ks_enrollment",
+      pageStep: "step1",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    });
+    pickPayload = {
+      status: "picked",
+      field: {
+        label: "NPI",
+        selector: "#npi",
+        fieldType: "text",
+        formSection: null,
+      },
+    };
+    const session = (await handleRequest({
+      type: "PICK_CAPTURE_FIELD",
+      tabId: 1,
+      pageStep: "step1",
+    })) as { rows: Array<{ selector: string; displayLabel?: string | null }> };
+    expect(
+      session.rows.find((r) => r.selector === "#npi")?.displayLabel,
+    ).toBeNull();
   });
 
   it("refuses START_CAPTURE in Work cases mode", async () => {
     const { handleRequest } = await import("../background/index");
     await writePanelMode("case");
-    scanPayload = [{ label: "First", selector: "#a", fieldType: "text", formSection: null }];
+    scanPayload = [
+      { label: "First", selector: "#a", fieldType: "text", formSection: null },
+    ];
     await expect(
       handleRequest({
         type: "START_CAPTURE",
@@ -1021,7 +1207,9 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
     // mean the guard fired before any tab message was sent, not that a
     // lenient stub happened to answer one.
     chrome.tabs.sendMessage = (async () => {
-      throw new Error("SANDBOX_FILL must not message the tab for a refused provider");
+      throw new Error(
+        "SANDBOX_FILL must not message the tab for a refused provider",
+      );
     }) as typeof chrome.tabs.sendMessage;
 
     await expect(
@@ -1038,7 +1226,10 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
 
   it("allows the fill once the request really names the designated sandbox provider", async () => {
     const { handleRequest } = await import("../background/index");
-    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      message: { type?: string },
+    ) => {
       if (message?.type === "PING") return { ok: true };
       if (message?.type === "APPLY_FILL") {
         return {
@@ -1065,7 +1256,9 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
   it("refuses CLEAR_PORTAL_FORM for a real, non-designated provider before touching the tab", async () => {
     const { handleRequest } = await import("../background/index");
     chrome.tabs.sendMessage = (async () => {
-      throw new Error("CLEAR_PORTAL_FORM must not message the tab for a refused provider");
+      throw new Error(
+        "CLEAR_PORTAL_FORM must not message the tab for a refused provider",
+      );
     }) as typeof chrome.tabs.sendMessage;
 
     await expect(
@@ -1079,7 +1272,10 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
 
   it("clears the form once the request really names the designated sandbox provider", async () => {
     const { handleRequest } = await import("../background/index");
-    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      message: { type?: string },
+    ) => {
       if (message?.type === "PING") return { ok: true };
       if (message?.type === "CLEAR_FORM") return { ok: true, data: 2 };
       throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
@@ -1121,7 +1317,10 @@ describe("TE-3 — latency budgets on the seeded mock harness", () => {
     const start = performance.now();
     await Promise.all([
       getCaseContext(FIXTURES.CASE_ID),
-      getProviderProfile(FIXTURES.PROVIDER_ID, { state: "KS", facilityId: FIXTURES.FACILITY_ID }),
+      getProviderProfile(FIXTURES.PROVIDER_ID, {
+        state: "KS",
+        facilityId: FIXTURES.FACILITY_ID,
+      }),
       getPortalFieldMaps(FIXTURES.PORTAL_KEY),
     ]);
     const elapsed = performance.now() - start;

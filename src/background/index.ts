@@ -513,7 +513,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         pageStep,
         sortOrder: nextSort,
         origin: "user_mapped",
-        displayLabel: null,
+        // A re-point carries the library's own name for the field it replaces;
+        // an ordinary hand-add has none and falls back to the portal's text.
+        displayLabel: request.displayLabel?.trim() || null,
         typeOverridden: false,
         ...(field.options !== undefined ? { options: field.options } : {}),
       };

@@ -326,6 +326,28 @@ page` — the verdict said the opposite of the truth in the one place a trainer
   engine's rule, so `fillEngine.test.ts` pins the two together over six element
   shapes rather than trusting the comment. An N-way radio match under a
   non-radio row now names the control type to change.
+- **A drifted library row is actionable (2026-08-21).** "In the library but not
+  on this page" IS the _needs updating_ half of the job, and those rows had no
+  tick, no Edit and no action at all — the list named the problem and offered
+  nothing to do about it. Two things are honest without deciding anything the
+  web app owns. **"Check page"** re-tests the LIBRARY's own selector live,
+  because "not found on this page" is a fact about the SCAN, not the page: a
+  field revealed only after an earlier answer is genuinely present and simply
+  was not rendered when the scan ran — the exact situation the picker exists
+  for. **"Re-point"** is the repair: click where the field moved to, and the
+  proposal carries the library's own name (`PICK_CAPTURE_FIELD` gained an
+  optional `displayLabel`), so a reviewer sees the same field rather than a
+  stranger. It PROPOSES at the new selector; the old map stays until someone
+  retires it in the web app, and the status line says exactly that instead of
+  implying the library was edited. `CaptureListRow` carries `fieldType` so a
+  library-only row's re-test can read an N-way radio match as one field.
+- **`label:` selectors resolve the way the fill does.** The shared library
+  really stores maps as `label:First Name`, which is not parseable CSS — so
+  `describeSelectorMatches` running raw `querySelectorAll` reported "matches
+  nothing" for a field that fills perfectly, and in the capture list every
+  label-addressed library field read as drift. `byLabel` is now exported from
+  `fillEngine.ts` and used by the workshop, and the parity test covers both a
+  present and an absent label.
 - **A sent capture links to where mapping happens.** Training proposes; the
   decision is the web app's Submit-form task editor (D18). The note said so and
   stopped there, so the loop ended on an instruction in a different product with

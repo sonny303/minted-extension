@@ -90,7 +90,16 @@ export type BgRequest =
   // moment and wired well enough to recognise, so these let a trainer add and
   // correct fields by hand rather than discard the capture. All of them work
   // on SHAPE — selector, label, control type — never a value.
-  | { type: "PICK_CAPTURE_FIELD"; tabId: number; pageStep?: string | null }
+  // `displayLabel` re-points a DRIFTED library field: the trainer clicks where
+  // it moved to, and the new proposal carries the library's own name for it so
+  // it is recognisable as the same field rather than an anonymous new one.
+  // Absent for an ordinary hand-added field.
+  | {
+      type: "PICK_CAPTURE_FIELD";
+      tabId: number;
+      pageStep?: string | null;
+      displayLabel?: string | null;
+    }
   | { type: "CANCEL_CAPTURE_PICK"; tabId: number }
   // Both patch keys are OPTIONAL and independent: an absent key leaves that
   // column alone, so renaming a field never silently re-types it.

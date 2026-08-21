@@ -306,3 +306,24 @@ describe("describeSelectorMatches", () => {
     );
   });
 });
+
+describe("label: selectors resolve the way the fill does", () => {
+  it("finds the control behind a label-addressed map", () => {
+    // The shared library really stores maps as `label:First Name`. Tested with
+    // raw querySelectorAll that is not even parseable CSS, so it came back as
+    // "matches nothing" — and in the capture list, every such field read as
+    // drift on a page where it fills perfectly.
+    document.body.innerHTML = `<label for="fn">First Name *</label><input id="fn">`;
+    expect(describeSelectorMatches("label:First Name")).toEqual({
+      valid: true,
+      matches: 1,
+      fillable: 1,
+      radioGroup: false,
+    });
+  });
+
+  it("still reports an honest miss for a label the page does not have", () => {
+    document.body.innerHTML = `<label for="fn">First Name</label><input id="fn">`;
+    expect(describeSelectorMatches("label:Last Name").matches).toBe(0);
+  });
+});

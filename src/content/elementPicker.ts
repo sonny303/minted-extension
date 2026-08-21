@@ -13,6 +13,7 @@
 // that already contains an NPI captures "there is a text box here called NPI",
 // never the digits.
 import type { SelectorMatchReport } from "../shared/selectorMatch";
+import { byLabel, LABEL_SELECTOR_PREFIX } from "./fillEngine";
 import {
   describeControl,
   nearestCapturableControl,
@@ -211,6 +212,19 @@ function isOneRadioGroup(els: readonly Element[]): boolean {
  * the messaging boundary, and is deliberately NOT collapsed into "matched
  * nothing": the fix for a typo is not the fix for a missing field. */
 export function describeSelectorMatches(selector: string): SelectorMatchReport {
+  // A `label:` selector is not CSS and querySelectorAll cannot parse it. The
+  // shared library really stores maps that way, so testing one raw reported
+  // "matches nothing" for a field that fills perfectly — and, in the capture
+  // list, made every label-addressed library field read as drift.
+  if (selector.startsWith(LABEL_SELECTOR_PREFIX)) {
+    const hit = byLabel(selector.slice(LABEL_SELECTOR_PREFIX.length)) != null;
+    return {
+      valid: true,
+      matches: hit ? 1 : 0,
+      fillable: hit ? 1 : 0,
+      radioGroup: false,
+    };
+  }
   let els: Element[];
   try {
     els = Array.from(document.querySelectorAll(selector));
