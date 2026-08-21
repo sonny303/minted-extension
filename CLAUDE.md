@@ -39,6 +39,28 @@ An eslint rule enforces the boundary: only `src/background/` may import
 `@supabase/supabase-js`. Builds: `vite.config.ts` (panel + background) and
 `vite.content.config.ts` (content script — content scripts can't be ESM).
 
+## Shipping to the Chrome Web Store
+
+`docs/CHROME-WEB-STORE.md` is the submission runbook: permission
+justifications written against the code, the data-use disclosure answers, the
+listing copy, packaging, and the ordered list of steps only the account owner
+can do. Two things in it are worth knowing before touching the manifest:
+
+- **Publish UNLISTED.** This is business software that does nothing without a
+  Minted Panel account; public visibility buys nothing and invites review
+  questions.
+- **`optional_host_permissions: ["https://*/*"]` is the review risk**, and the
+  defense is that the literal wildcard is NEVER passed to
+  `chrome.permissions.request` — `portalOriginPatterns` turns registry rows
+  into specific `https://host/*` patterns and only those are requested, inside
+  a user gesture. Keep it that way; the justification text depends on it.
+- **Bump `version` in BOTH `public/manifest.json` and `package.json`** for
+  every upload. The store rejects a duplicate version, and drift between the
+  two makes a published package untraceable to its source.
+- **After the first approval, the extension ID changes.** `API_CORS_ORIGINS` on
+  the panel's Vercel project must gain `chrome-extension://<published-id>` or
+  every data call fails post-install — the likeliest launch-day failure.
+
 ## Commands (all verified passing 2026-08-20, clean clone + `npm ci`)
 
 - `npm run build` — panel/background then content builds; `dist/` = loadable

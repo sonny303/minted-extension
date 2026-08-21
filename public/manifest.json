@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Minted Panel Workbench",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "One-click payer portal form fill from Minted Panel provider data.",
   "action": {
     "default_title": "Minted Panel Workbench",
