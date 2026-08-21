@@ -368,9 +368,55 @@ export interface BgResponseMap {
   MARK_SUBMITTED: { touch: SubmissionTouch; statusBump: StatusBumpMeta | null };
 }
 
-// Typed wrapper so panel call sites get the right response type per request.
+// Transport failures Chrome words for engineers, not for the person holding
+// the panel. Each of these means the same practical thing: the side panel and
+// the background worker are no longer talking, and reopening the panel fixes
+// it. The commonest cause is reloading the extension (or an auto-update)
+// while the panel is open.
+const DISCONNECTED =
+  /extension context invalidated|receiving end does not exist|message port closed|could not establish connection/i;
+
+function transportFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  if (DISCONNECTED.test(raw)) {
+    return "The extension was reloaded or updated, so this panel lost its connection. Close and reopen the side panel, then try again.";
+  }
+  return raw.trim() || "Could not reach the extension's background worker.";
+}
+
+/**
+ * Typed wrapper so panel call sites get the right response type per request —
+ * and the ONE place a transport failure becomes a VISIBLE error.
+ *
+ * This used to `return chrome.runtime.sendMessage(request)` bare, which meant
+ * a rejected send propagated to the caller. Panel click handlers are wired as
+ * `() => void someAsyncThing()`, so that rejection had nowhere to go: it
+ * surfaced as an unhandled rejection in a console the user never opens, and
+ * the button they pressed did NOTHING — no result, no error, no spinner. That
+ * is what "Check page does nothing" turned out to be, and with 68 call sites
+ * against 4 try blocks it was every other button too.
+ *
+ * So the boundary absorbs it: every failure comes back as the `{ ok: false }`
+ * envelope that all 68 call sites already branch on, and none of them needed
+ * to change. A missing/garbled response gets the same treatment — a listener
+ * that returns without calling `sendResponse` yields `undefined`, and callers
+ * reading `response.ok` off it would throw exactly as silently.
+ */
 export async function sendToBackground<T extends BgRequest["type"]>(
   request: Extract<BgRequest, { type: T }>,
 ): Promise<BgResponse<BgResponseMap[T]>> {
-  return chrome.runtime.sendMessage(request);
+  let response: unknown;
+  try {
+    response = await chrome.runtime.sendMessage(request);
+  } catch (error) {
+    return { ok: false, error: transportFailure(error) };
+  }
+  if (response == null || typeof response !== "object" || !("ok" in response)) {
+    return {
+      ok: false,
+      error:
+        "The extension's background worker did not respond. Close and reopen the side panel, then try again.",
+    };
+  }
+  return response as BgResponse<BgResponseMap[T]>;
 }

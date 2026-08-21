@@ -363,6 +363,28 @@ page` — the verdict said the opposite of the truth in the one place a trainer
   retires it in the web app, and the status line says exactly that instead of
   implying the library was edited. `CaptureListRow` carries `fieldType` so a
   library-only row's re-test can read an N-way radio match as one field.
+- **The messaging boundary never rejects (2026-08-21).** Reported as
+  "the Check page button does nothing". The panel wiring was fine — driving the
+  built panel proved the click fires, the verdict renders, and `.capture-rows`
+  keeps its scroll position through `replaceChildren`, so all three of the
+  obvious theories were wrong. The real hole was `sendToBackground`, which
+  `return`ed `chrome.runtime.sendMessage(request)` bare. Panel click handlers
+  are wired `() => void someAsyncThing()`, so a REJECTED send had nowhere to
+  land: it became an unhandled rejection in a console no user opens, and the
+  button did nothing at all — no result, no error. With **68 call sites against
+  4 try blocks** that was latent behind most of the panel's buttons, not just
+  this one. The commonest trigger is reloading the unpacked extension (or an
+  auto-update) with the panel open, which invalidates the context.
+  `sendToBackground` now absorbs it: every transport failure comes back as the
+  `{ ok: false }` envelope all 68 sites already branch on, so none of them
+  changed. A `undefined`/garbled response gets the same treatment — a listener
+  that returns without calling `sendResponse` yields undefined, and callers
+  reading `response.ok` off it would throw just as silently. Chrome's jargon
+  ("Extension context invalidated") is translated to the remedy.
+  **Feedback placement was the other half:** a failed row-level check only ever
+  wrote to the card-top status line, so an answer landed away from the row the
+  user pressed. `selectorTestError` is keyed to its selector and renders on the
+  row, beside where the verdict would have been.
 - **`label:` selectors resolve the way the fill does.** The shared library
   really stores maps as `label:First Name`, which is not parseable CSS — so
   `describeSelectorMatches` running raw `querySelectorAll` reported "matches

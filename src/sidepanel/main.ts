@@ -3642,6 +3642,11 @@ let captureAddedPage = false;
 // re-test answer, and whether a pick is waiting on the page.
 let editingSelector: string | null = null;
 let selectorTestResult: SelectorTestResult | null = null;
+// A FAILED check, keyed to the selector it answers. Kept beside the result
+// rather than only in the card-top status line: "Check page" is a per-ROW
+// action, and an answer that lands somewhere other than the row you pressed
+// reads as nothing having happened at all.
+let selectorTestError: { selector: string; message: string } | null = null;
 // BITE-TRAIN-01 — the open editor's UNSAVED values. Panel state, not DOM
 // state: renderCapture() rebuilds the editor for reasons the trainer did not
 // ask for (a selector test, a tab switch, a pick), and anything left in the
@@ -3877,6 +3882,7 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
     edit.addEventListener("click", () => {
       editingSelector = editingSelector === row.selector ? null : row.selector;
       selectorTestResult = null;
+      selectorTestError = null;
       rowDraft = null;
       renderCapture();
     });
@@ -3929,6 +3935,18 @@ function renderLibraryRowActions(entry: CaptureListRow): HTMLElement {
     repoint.disabled = pickInFlight || portalTabId == null;
     repoint.addEventListener("click", () => void repointLibraryField(entry));
     box.append(repoint);
+  }
+
+  // A failed check answers this row too — silence here is what made the
+  // button look broken.
+  if (
+    selectorTestError != null &&
+    selectorTestError.selector === entry.selector
+  ) {
+    const line = document.createElement("p");
+    line.className = "capture-editor-warn";
+    line.textContent = selectorTestError.message;
+    box.append(line);
   }
 
   // The verdict from a live check, keyed to THIS row's selector so one row's
@@ -4038,6 +4056,16 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   // The words come from the shared `selectorVerdict`, which reads the match
   // SHAPE: a bare count called a wrapper healthy, a radio group ambiguous and
   // a typo a missing field, all three wrongly.
+  if (
+    selectorTestError != null &&
+    selectorTestError.selector === draft.selectorText.trim()
+  ) {
+    const line = document.createElement("p");
+    line.className = "capture-editor-warn";
+    line.textContent = selectorTestError.message;
+    box.append(line);
+  }
+
   const report = draftTestReport(draft, selectorTestResult);
   if (report != null) {
     const verdict = selectorVerdict(report, draft.fieldType);
@@ -4146,6 +4174,7 @@ async function deleteSelectedCaptureRows(): Promise<void> {
   batchSelection.clear();
   editingSelector = null;
   selectorTestResult = null;
+  selectorTestError = null;
   rowDraft = null;
   setPickStatus(`Deleted ${selectors.length} ${plural}.`);
   renderCapture();
@@ -4171,6 +4200,7 @@ async function editCaptureRow(
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
+  selectorTestError = null;
   rowDraft = null;
   setPickStatus(null);
   renderCapture();
@@ -4188,6 +4218,7 @@ async function removeCaptureRow(row: CaptureRow): Promise<void> {
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
+  selectorTestError = null;
   rowDraft = null;
   renderCapture();
 }
@@ -4210,10 +4241,17 @@ async function testCaptureSelector(selector: string): Promise<void> {
     highlight: true,
   });
   if (!response.ok) {
+    // Report it ON the row as well as in the status line, and re-render so it
+    // actually appears — returning here without one is how this read as a
+    // dead button.
+    selectorTestError = { selector, message: response.error };
+    selectorTestResult = null;
     setPickStatus(response.error, true);
+    renderCapture();
     return;
   }
   selectorTestResult = response.data;
+  selectorTestError = null;
   setPickStatus(null);
   renderCapture();
 }
