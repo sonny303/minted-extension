@@ -35,7 +35,7 @@ row here.
 | `activeTab`                                             | Lets the panel see whether the tab the user is _looking at_ is a payer portal we recognize, without standing access to the page.                                                                                                      |
 | `sidePanel`                                             | The entire UI is a Chrome side panel.                                                                                                                                                                                                 |
 | `scripting`                                             | Injects the content script into a payer portal the user has granted access to, when there is no static match (`src/background/inject.ts`). This is what lets one build serve many payer portals instead of shipping a hardcoded list. |
-| `host_permissions` → `mintedpanel.vercel.app`           | The extension's own backend. All provider data comes from here.                                                                                                                                                                       |
+| `host_permissions` → `mintedpanel.com`                  | The extension's own backend — the canonical Minted Panel app host. All provider data comes from here.                                                                                                                                 |
 | `host_permissions` → `fkvuhfsqcmujywzgczmc.supabase.co` | Sign-in only. Supabase issues the JWT; the extension never queries database tables and never holds a service key.                                                                                                                     |
 | `host_permissions` → `provider.bcbsks.com`              | The one payer portal shipped with static access, so the first-run experience needs no permission prompt.                                                                                                                              |
 | `optional_host_permissions` → `https://*/*`             | **Read the note below — this is the line most likely to draw a review question.**                                                                                                                                                     |
@@ -108,7 +108,7 @@ Then check all three certification boxes — they are all true:
 - Not being used for purposes unrelated to the item's core functionality ✓
 - Not being used to determine creditworthiness or for lending ✓
 
-**Privacy policy URL:** `https://mintedpanel.vercel.app/privacy`
+**Privacy policy URL:** `https://mintedpanel.com/privacy`
 (source of truth: `mintedpanel/docs/privacy-policy.md`; the route mirrors it).
 
 ---
@@ -214,6 +214,33 @@ These need the developer account and cannot be done from a coding session.
 
 ---
 
+## App host: `mintedpanel.com`
+
+`mintedpanel.com` is canonical (`www` redirects to it, so a page's origin is
+never `www` — it is deliberately not allowlisted anywhere).
+
+Four places carry the host, and they are not interchangeable:
+
+| Where                                             | Value                     | Why it matters                                                                                                                      |
+| ------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `src/shared/config.ts` `API_BASE_URL`             | `https://mintedpanel.com` | Where every API call goes. Must be the CANONICAL host — a redirect here breaks CORS preflight on writes.                            |
+| `src/shared/handoff.ts` `HANDOFF_ALLOWED_ORIGINS` | apex + `.vercel.app`      | Security allowlist: which page may hand a case to the extension. Re-checked in the worker so a manifest edit alone cannot widen it. |
+| `manifest.json` `externally_connectable.matches`  | apex + `.vercel.app`      | Chrome's own gate on who may message the extension.                                                                                 |
+| `manifest.json` `host_permissions`                | apex + `.vercel.app`      | Network access to the backend.                                                                                                      |
+
+**The `.vercel.app` origin is kept on purpose.** Vercel never stops serving a
+project's deployment URL, so someone with an old bookmark would otherwise get a
+handoff that fails silently. Drop it once the team is confident nobody reaches
+the app that way — that is a one-line change in each of the three files above,
+plus a version bump and a re-upload.
+
+`API_BASE_URL` also honours a `VITE_API_BASE_URL` build override, so a staging
+build needs no source edit. The **manifest cannot read env vars**, so a build
+pointed at a different host still needs its `host_permissions` and
+`externally_connectable` entries added by hand.
+
+---
+
 ## Known review risks, honestly
 
 - **The broad optional host permission** is the one a reviewer is most likely
@@ -221,10 +248,10 @@ These need the developer account and cannot be done from a coding session.
   review pushes back, the fallback is to enumerate the currently-registered
   payer origins in `optional_host_permissions` explicitly and accept that
   adding a payer portal then requires an extension release.
-- **`mintedpanel.vercel.app` is a `vercel.app` subdomain.** Reviewers
-  occasionally treat these as less established than a custom domain. Moving the
-  backend to a Minted Panel-owned domain before submitting would remove the
-  question, and is worth doing anyway.
+- ~~`vercel.app` subdomain~~ — **resolved.** The extension now targets
+  `https://mintedpanel.com`, the owned canonical host. The `.vercel.app`
+  deployment URL stays allowlisted (see below) but is no longer what the
+  listing points at.
 - **The extension is useless without an account**, which is allowed, but the
   listing must say so plainly (the description above does) or it reads as a
   broken install to a reviewer who cannot sign in.

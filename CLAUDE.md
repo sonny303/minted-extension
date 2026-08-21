@@ -20,7 +20,7 @@ no static match (see "Portal access" below and the README).
 
 1. **Never queries Supabase tables; never holds the service key.** Supabase
    auth only mints a JWT (anon key + email/password). ALL data flows through
-   the panel API at `https://mintedpanel.vercel.app` (`src/shared/config.ts`).
+   the panel API at `https://mintedpanel.com` (`src/shared/config.ts`).
 2. **The background service worker owns every API call** (`src/background/`:
    `api.ts` fetch layer, `auth.ts` session, `fill.ts` fill orchestration,
    `orgState.ts`, `activeCase.ts` E4.3 handoff receipt + active-case record,
@@ -502,6 +502,15 @@ page` — the verdict said the opposite of the truth in the one place a trainer
   changes or on packing). The handoff needs no CORS — it rides
   `externally_connectable` (allowlisted to the app origin in the manifest AND
   re-checked in the worker).
+- **The app host is `https://mintedpanel.com`** (canonical; `www` redirects to
+  it and is therefore never a page origin, so it is allowlisted nowhere). The
+  `.vercel.app` deployment URL stays allowlisted for handoff/host access
+  because Vercel keeps serving it and an old bookmark would otherwise fail
+  silently — but `API_BASE_URL` points at the apex ONLY, since a redirect on
+  the API host breaks CORS preflight on writes. The host lives in four
+  non-interchangeable places (`config.ts`, `handoff.ts`, and two manifest
+  keys); `docs/CHROME-WEB-STORE.md` has the table. `VITE_API_BASE_URL`
+  retargets a build, but the MANIFEST cannot read env vars.
 
 ## Before you change anything
 

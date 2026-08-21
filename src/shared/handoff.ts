@@ -33,7 +33,16 @@ export interface SetActiveCaseMessage {
 // externally_connectable.matches already restricts who can message us, but the
 // handler re-checks the sender origin against this list so a manifest edit
 // can't silently widen the surface.
-export const HANDOFF_ALLOWED_ORIGINS: readonly string[] = ["https://mintedpanel.vercel.app"];
+//
+// `mintedpanel.com` is the canonical app host. The `.vercel.app` deployment
+// URL stays allowlisted because Vercel never stops serving it, so a bookmark
+// or an old link still hands off instead of failing silently — drop it once
+// the team is sure nobody reaches the app that way. `www.` is deliberately
+// ABSENT: it redirects to the apex, so a page's origin is never `www`.
+export const HANDOFF_ALLOWED_ORIGINS: readonly string[] = [
+  "https://mintedpanel.com",
+  "https://mintedpanel.vercel.app",
+];
 
 export function isAllowedHandoffOrigin(origin: string | undefined | null): boolean {
   return origin != null && HANDOFF_ALLOWED_ORIGINS.includes(origin);

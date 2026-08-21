@@ -11,7 +11,7 @@ Three rules everything else follows from:
 1. **The extension never queries Supabase tables and never holds the service
    key.** Supabase auth is used only to mint a JWT (anon key + email/password
    sign-in). All data flows through the Minted Panel server API at
-   `https://mintedpanel.vercel.app` with `Authorization: Bearer <jwt>`.
+   `https://mintedpanel.com` with `Authorization: Bearer <jwt>`.
 2. **The background service worker owns every API call.** The workbench UI —
    a Chrome side panel, opened by clicking the toolbar icon — is UI only and
    talks to the worker over `chrome.runtime` messaging; it never holds
@@ -26,19 +26,19 @@ Three rules everything else follows from:
 
 API surface consumed (all responses use the `{ data, error, meta }` envelope):
 
-| Route | Use |
-| --- | --- |
-| `GET /api/me/orgs` | org picker (the caller's own memberships; user-scoped, needs no org context) |
-| `GET /api/me/view-prefs` / `PUT` | the user's saved quick-card layout PLUS the schema-derived field catalog (`{ fields: string[] \| null, catalog: QuickCardCatalogField[] }`, 117 fields served; PUT validated against the same set; user-scoped) |
-| `GET /api/providers` | provider picker (PHI-safe list projection); `?search=` is the provider half of the unified search |
-| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill AND the quick-card projection (one audited read); carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick |
-| `GET /api/portal-field-maps?portal_key=…` | selector catalog for the portal |
-| `GET /api/cases?providerId=…` | case picker + active-cases list (the provider's OPEN cases); each row also carries `payerReferenceId` (prefill), `latestNote` (card), `lastSubmittedAt` (duplicate-submission guard), and `portalTasks` (close-out) |
-| `GET /api/cases?q=…` | the case half of the unified standalone search (E4.3; ids + display fields only) |
-| `GET /api/cases/:id/context` | the case workbench read: identity header (provider/payer/state), `selectedFacility`, `openTasks` with E4.2 execution types, `payerPipelineState`, tracking ID, latest note/touch |
-| `GET /api/next-best-action` | the org's server-ranked queue top (`{ item }` or `{ item: null }`) after a log — no ranking logic in the extension |
-| `POST /api/fill-events` | fill log, idempotent on a client-generated UUID |
-| `POST /api/cases/:id/touches` | two kinds on one route (snake_case body per the locked R2 contract): `portal_submission` ("Mark submitted", with optional `payer_reference_id`, `wip_note`, `task_id`, `pdf_filename` write-back) and `structured_touch` (E4.3 typed touch: required `touch_type`, optional `outcome`/recipient/`next_follow_up_date`/`payer_reference_id`) |
+| Route                                                  | Use                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/me/orgs`                                     | org picker (the caller's own memberships; user-scoped, needs no org context)                                                                                                                                                                                                                                                                |
+| `GET /api/me/view-prefs` / `PUT`                       | the user's saved quick-card layout PLUS the schema-derived field catalog (`{ fields: string[] \| null, catalog: QuickCardCatalogField[] }`, 117 fields served; PUT validated against the same set; user-scoped)                                                                                                                             |
+| `GET /api/providers`                                   | provider picker (PHI-safe list projection); `?search=` is the provider half of the unified search                                                                                                                                                                                                                                           |
+| `GET /api/providers/:id/profile?state=XX&facilityId=…` | resolved field-token values for fill AND the quick-card projection (one audited read); carries the provider's `facilities` list + `selected_facility_id`, and flags `meta.needs_facility` when several locations need a user pick                                                                                                           |
+| `GET /api/portal-field-maps?portal_key=…`              | selector catalog for the portal                                                                                                                                                                                                                                                                                                             |
+| `GET /api/cases?providerId=…`                          | case picker + active-cases list (the provider's OPEN cases); each row also carries `payerReferenceId` (prefill), `latestNote` (card), `lastSubmittedAt` (duplicate-submission guard), and `portalTasks` (close-out)                                                                                                                         |
+| `GET /api/cases?q=…`                                   | the case half of the unified standalone search (E4.3; ids + display fields only)                                                                                                                                                                                                                                                            |
+| `GET /api/cases/:id/context`                           | the case workbench read: identity header (provider/payer/state), `selectedFacility`, `openTasks` with E4.2 execution types, `payerPipelineState`, tracking ID, latest note/touch                                                                                                                                                            |
+| `GET /api/next-best-action`                            | the org's server-ranked queue top (`{ item }` or `{ item: null }`) after a log — no ranking logic in the extension                                                                                                                                                                                                                          |
+| `POST /api/fill-events`                                | fill log, idempotent on a client-generated UUID                                                                                                                                                                                                                                                                                             |
+| `POST /api/cases/:id/touches`                          | two kinds on one route (snake_case body per the locked R2 contract): `portal_submission` ("Mark submitted", with optional `payer_reference_id`, `wip_note`, `task_id`, `pdf_filename` write-back) and `structured_touch` (E4.3 typed touch: required `touch_type`, optional `outcome`/recipient/`next_follow_up_date`/`payer_reference_id`) |
 
 Org context: a single-org user sends no `x-org-id` header — the server
 resolves their sole membership (unchanged v0 behavior) and the panel shows
@@ -113,7 +113,7 @@ writes are the existing manual touch POST and the user-scoped layout PUT.
 
 - **Handoff receipt (F4.3.1/TE-1):** the webapp's "Work in portal" sends the
   locked `SET_ACTIVE_CASE` message (`{ type, caseId, providerId, orgId,
-  portalUrl }` — identifiers + URL ONLY) through Chrome external messaging.
+portalUrl }` — identifiers + URL ONLY) through Chrome external messaging.
   `externally_connectable.matches` is restricted to the approved app origin
   and the worker re-checks `sender.origin` (defense in depth) and
   strict-parses the shape, dropping unknown fields. The worker stores ONE
@@ -136,8 +136,8 @@ writes are the existing manual touch POST and the user-scoped layout PUT.
   `no_mapping` routes to the platform train flow
   (`/portals/<key>/train?field=…`, new tab), `no_value` routes to the
   provider record. "I fixed a mapping — refresh and re-check" refetches maps
-  + profile so the fix improves the live session. The extension never writes
-  mappings.
+  - profile so the fix improves the live session. The extension never writes
+    mappings.
 - **Log-and-advance (F4.3.4/TE-5/TE-6):** the "Log a touch" form posts
   `kind: structured_touch` (type required; `other` requires the one-line
   context). A failed write preserves every entered value and reuses the same
@@ -288,7 +288,7 @@ npm run build
 `API_CORS_ORIGINS` on the Vercel project must include the extension origin
 `chrome-extension://<id>` once the unpacked extension has its id (shown on
 `chrome://extensions`). Until then, API calls from extension pages rely on the
-host permission for `mintedpanel.vercel.app`; setting the env var is required
+host permission for `mintedpanel.com`; setting the env var is required
 config for the API to serve extension origins. The id changes if the unpacked
 directory path changes, and again when the extension is packed — re-check the
 env var at both points.

@@ -69,9 +69,22 @@ describe("parseSetActiveCase", () => {
 
 describe("origin rules", () => {
   it("allows only the approved app origins", () => {
+    expect(isAllowedHandoffOrigin("https://mintedpanel.com")).toBe(true);
+    // The Vercel deployment URL keeps working, so an old link still hands off.
     expect(isAllowedHandoffOrigin("https://mintedpanel.vercel.app")).toBe(true);
     expect(isAllowedHandoffOrigin("https://evil.example.com")).toBe(false);
     expect(isAllowedHandoffOrigin(undefined)).toBe(false);
+  });
+
+  it("rejects look-alikes of the canonical host", () => {
+    // A suffix/prefix match would let any of these hand off a case. The
+    // allowlist is an exact origin comparison, and these pin that.
+    expect(isAllowedHandoffOrigin("https://mintedpanel.com.evil.example")).toBe(false);
+    expect(isAllowedHandoffOrigin("https://evil-mintedpanel.com")).toBe(false);
+    expect(isAllowedHandoffOrigin("http://mintedpanel.com")).toBe(false);
+    // www redirects to the apex, so a page origin is never www — and an
+    // unlisted origin must not be silently accepted.
+    expect(isAllowedHandoffOrigin("https://www.mintedpanel.com")).toBe(false);
   });
 
   it("matches portal tabs by origin, not prefix", () => {

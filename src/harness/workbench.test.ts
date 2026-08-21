@@ -163,7 +163,7 @@ const HANDOFF = {
   orgId: FIXTURES.KANSAS_ORG as string,
   portalUrl: "https://provider.bcbsks.com/enroll/form",
 };
-const APP_ORIGIN = "https://mintedpanel.vercel.app";
+const APP_ORIGIN = "https://mintedpanel.com";
 
 async function forceIdle(minutes: number): Promise<void> {
   const record = (await readActiveCaseRecord()) as ActiveCaseRecord;
@@ -739,7 +739,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
         orgId: FIXTURES.KANSAS_ORG,
         portalUrl: "https://provider.bcbsks.com/x",
       },
-      "https://mintedpanel.vercel.app",
+      APP_ORIGIN,
     );
     expect(accepted).toEqual({ ok: true });
     expect(await readPanelMode()).toBe("case");

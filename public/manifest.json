@@ -27,10 +27,12 @@
   ],
   "externally_connectable": {
     "matches": [
+      "https://mintedpanel.com/*",
       "https://mintedpanel.vercel.app/*"
     ]
   },
   "host_permissions": [
+    "https://mintedpanel.com/*",
     "https://mintedpanel.vercel.app/*",
     "https://fkvuhfsqcmujywzgczmc.supabase.co/*",
     "https://provider.bcbsks.com/*"

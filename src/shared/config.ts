@@ -24,4 +24,4 @@ export const SUPABASE_ANON_KEY = envOr(
   "VITE_SUPABASE_ANON_KEY",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZrdnVoZnNxY211anl3emdjem1jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNTQ0NzIsImV4cCI6MjA5NjYzMDQ3Mn0.Ek_6EvJkqJzdFmb0Ipwfl6zyOR6HzikKSz14EIOh2W8",
 );
-export const API_BASE_URL = envOr("VITE_API_BASE_URL", "https://mintedpanel.vercel.app");
+export const API_BASE_URL = envOr("VITE_API_BASE_URL", "https://mintedpanel.com");
