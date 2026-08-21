@@ -34,6 +34,10 @@ export const FIXTURES = {
   PORTAL_KEY: "bcbs_ks_enrollment",
   // The deliberately-untrained map row (token null) — the TS-82 fix-it target.
   UNTRAINED_MAP_ID: "fm-untrained-1",
+  // The org's designated sandbox test provider (US-5) — distinct from the two
+  // real roster providers above, so a SANDBOX_FILL test can assert real
+  // providers are refused without disturbing any existing fixture assertion.
+  SANDBOX_PROVIDER_ID: "8a1e6b4c-0000-4000-a000-00000000005a",
 };
 
 // A representative slice of the served quick-card catalog (the real one is
@@ -95,6 +99,26 @@ const PROVIDERS = [
     specialty: "Physical Therapy",
     email: "pat.o@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
+  },
+  {
+    id: FIXTURES.SANDBOX_PROVIDER_ID,
+    firstName: "Sandy",
+    lastName: "Testworthy",
+    credentials: "PT",
+    npi: "1000000099",
+    homeState: "KS",
+    caqhId: null,
+    caqhLastAttestedDate: null,
+    taxonomyCode: "225100000X",
+    status: "active",
+    groupId: "g-1",
+    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    specialty: "Physical Therapy",
+    email: "sandy.testworthy@example.com",
+    updatedAt: "2026-07-01T00:00:00Z",
+    // US-5: the org's ONE designated sandbox profile — findSandboxProvider
+    // picks the row carrying this flag.
+    isTestProvider: true,
   },
 ];
 

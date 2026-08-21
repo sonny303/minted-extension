@@ -1,6 +1,7 @@
 // S5.2/S5.4 — capture session rules.
 import { describe, expect, it } from "vitest";
 import {
+  applyRowEdit,
   canSendCapture,
   captureCounts,
   diffCapture,
@@ -9,8 +10,10 @@ import {
   nextPageSequence,
   parseCaptureSession,
   usedPageNames,
+  isNamedRow,
   recognitionSummary,
   restoredSummary,
+  rowDisplayName,
   type CaptureRow,
   type CaptureSession,
 } from "./capture";
@@ -441,3 +444,264 @@ function blankRow(selector: string): CaptureRow {
     sent: false,
   };
 }
+
+// 2026-08-19 — manual mapping. The picker exists because an auto-scan can only
+// see what is rendered AND wired at the moment it runs; these rules are what
+// stop a later re-capture from throwing the trainer's work away.
+describe("rowDisplayName / isNamedRow", () => {
+  it("prefers the trainer's name over the payer's captured text", () => {
+    expect(rowDisplayName(row({ label: "txtNPI_1", displayLabel: "NPI (Type 1)" }))).toBe(
+      "NPI (Type 1)",
+    );
+  });
+
+  it("falls back to the payer's text, then to an honest placeholder", () => {
+    expect(rowDisplayName(row({ label: "Tax ID", displayLabel: null }))).toBe("Tax ID");
+    // An empty cell reads as a rendering bug; this reads as "the form gave us
+    // nothing", which is the truth and is actionable.
+    expect(rowDisplayName(row({ label: "", displayLabel: null }))).toBe("Unnamed field");
+    expect(rowDisplayName(row({ label: "   ", displayLabel: "  " }))).toBe("Unnamed field");
+  });
+
+  it("knows which rows still need a human name", () => {
+    expect(isNamedRow(row({ label: "NPI" }))).toBe(true);
+    expect(isNamedRow(row({ label: "", displayLabel: "NPI" }))).toBe(true);
+    expect(isNamedRow(row({ label: "", displayLabel: null }))).toBe(false);
+  });
+});
+
+describe("parseCaptureSession — manual-mapping fields", () => {
+  it("restores origin, the trainer's name, and the type override", () => {
+    const restored = parseCaptureSession(
+      session([
+        row({
+          selector: "#npi",
+          origin: "user_mapped",
+          displayLabel: "NPI",
+          typeOverridden: true,
+        }),
+      ]),
+    );
+    expect(restored?.rows[0]).toMatchObject({
+      origin: "user_mapped",
+      displayLabel: "NPI",
+      typeOverridden: true,
+    });
+  });
+
+  it("treats a row captured before the picker existed as auto-detected", () => {
+    // Legacy sessions carry no `origin`; defaulting to user_mapped would make
+    // mergePageCapture preserve rows the portal really did remove.
+    const legacy = { label: "NPI", selector: "#npi", fieldType: "text" };
+    const restored = parseCaptureSession({
+      portalKey: "availity",
+      templateStepId: null,
+      startedAt: "2026-07-28",
+      rows: [legacy],
+    });
+    expect(restored?.rows[0]?.origin).toBe("auto_detected");
+    expect(restored?.rows[0]?.displayLabel).toBeNull();
+    expect(restored?.rows[0]?.typeOverridden).toBe(false);
+  });
+});
+
+describe("mergePageCapture — a re-capture must not delete manual work", () => {
+  const page = "Page 1";
+
+  it("KEEPS a user-mapped row the fresh scan cannot see", () => {
+    // The whole point of the picker: the Humana NPI box only exists after a
+    // radio choice, so the next scan legitimately misses it. Dropping it here
+    // would silently undo the trainer's fix.
+    const previous = [
+      row({ selector: "#type", pageStep: page, origin: "auto_detected" }),
+      row({
+        selector: "#npi",
+        pageStep: page,
+        origin: "user_mapped",
+        displayLabel: "NPI",
+        chosenToken: "provider.npi",
+      }),
+    ];
+    const scan = [row({ selector: "#type", pageStep: page })];
+
+    const merged = mergePageCapture(previous, scan, page);
+    const npi = merged.find((r) => r.selector === "#npi");
+    expect(npi).toBeDefined();
+    expect(npi).toMatchObject({ displayLabel: "NPI", chosenToken: "provider.npi" });
+  });
+
+  it("still DROPS an auto-detected row the scan no longer sees", () => {
+    // Drift repair has to keep working: a field the portal really removed
+    // should leave the capture.
+    const previous = [row({ selector: "#gone", pageStep: page, origin: "auto_detected" })];
+    const merged = mergePageCapture(previous, [row({ selector: "#kept", pageStep: page })], page);
+    expect(merged.map((r) => r.selector)).toEqual(["#kept"]);
+  });
+
+  it("does not duplicate a user-mapped row the scan HAS caught up with", () => {
+    // Once the field is visible at scan time the auto row covers it; keeping
+    // the rescued copy too would propose the same selector twice.
+    const previous = [
+      row({ selector: "#npi", pageStep: page, origin: "user_mapped", displayLabel: "NPI" }),
+    ];
+    const merged = mergePageCapture(previous, [row({ selector: "#npi", pageStep: page })], page);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ selector: "#npi", displayLabel: "NPI" });
+  });
+
+  it("carries a rename and a type override across a re-scan", () => {
+    const previous = [
+      row({
+        selector: "#npi",
+        label: "txtNPI_1",
+        pageStep: page,
+        displayLabel: "NPI (Type 1)",
+        fieldType: "text",
+        typeOverridden: true,
+      }),
+    ];
+    // The scan re-reads the portal and guesses a different type.
+    const scan = [row({ selector: "#npi", label: "txtNPI_1", pageStep: page, fieldType: "select" })];
+
+    const [merged] = mergePageCapture(previous, scan, page);
+    expect(merged?.displayLabel).toBe("NPI (Type 1)");
+    expect(merged?.fieldType).toBe("text");
+  });
+
+  it("lets a re-scan correct a type the trainer never overrode", () => {
+    const previous = [row({ selector: "#state", pageStep: page, fieldType: "text" })];
+    const scan = [row({ selector: "#state", pageStep: page, fieldType: "select" })];
+    expect(mergePageCapture(previous, scan, page)[0]?.fieldType).toBe("select");
+  });
+
+  it("KEEPS an auto row whose selector the trainer rewrote by hand", () => {
+    // US-3.2: fixing a bad selector is exactly as much manual work as adding
+    // the field would have been, and the rewritten selector is by definition
+    // one the scanner does not produce — so the next scan reports the row as
+    // gone. Judging by origin alone would delete the fix on the very next
+    // re-capture, which is when a trainer is most likely to re-capture.
+    const previous = [
+      row({
+        selector: "#hand-written",
+        pageStep: page,
+        origin: "auto_detected",
+        selectorOverridden: true,
+        displayLabel: "NPI",
+      }),
+    ];
+    const scan = [row({ selector: "input:nth-of-type(4)", pageStep: page })];
+
+    const merged = mergePageCapture(previous, scan, page);
+    expect(merged.map((r) => r.selector).sort()).toEqual([
+      "#hand-written",
+      "input:nth-of-type(4)",
+    ]);
+  });
+
+  it("does not duplicate a rewritten selector the scan now produces itself", () => {
+    const previous = [
+      row({ selector: "#npi", pageStep: page, origin: "auto_detected", selectorOverridden: true }),
+    ];
+    expect(mergePageCapture(previous, [row({ selector: "#npi", pageStep: page })], page)).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps a user-mapped row belonging to ANOTHER page untouched", () => {
+    const previous = [
+      row({ selector: "#p1", pageStep: "Page 1", origin: "user_mapped" }),
+      row({ selector: "#p2", pageStep: "Page 2" }),
+    ];
+    const merged = mergePageCapture(previous, [row({ selector: "#p2b", pageStep: "Page 2" })], "Page 2");
+    expect(merged.map((r) => r.selector).sort()).toEqual(["#p1", "#p2b"]);
+  });
+});
+
+// US-3.2 — the per-row editor. Its one hard rule is the invariant the whole
+// capture session rests on: the SELECTOR IS THE KEY (diffCapture,
+// mergePageCapture and SET_CAPTURE_CHOICE all match rows on it), and the one
+// moment a duplicate can be introduced is a hand-written selector.
+describe("applyRowEdit", () => {
+  const rows = [
+    row({ selector: "#a", label: "Portal's name for A", fieldType: "text" }),
+    row({ selector: "#b", label: "B" }),
+  ];
+
+  it("renames without touching the payer's captured label", () => {
+    // The split is the point: a re-scan must be able to refresh what the
+    // portal says without discarding what the human called it.
+    const out = applyRowEdit(rows, "#a", { displayLabel: " NPI (Type 1) " });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.rows[0]).toMatchObject({
+      displayLabel: "NPI (Type 1)",
+      label: "Portal's name for A",
+    });
+  });
+
+  it("clears the trainer's name when it is blanked, back to the portal's", () => {
+    const named = [row({ selector: "#a", label: "Portal", displayLabel: "Mine" })];
+    const out = applyRowEdit(named, "#a", { displayLabel: "   " });
+    expect(out.ok && out.rows[0]?.displayLabel).toBeNull();
+  });
+
+  it("leaves a field alone when its key is ABSENT", () => {
+    // Present-with-empty means "clear it"; absent means "I did not touch it".
+    // Collapsing the two would wipe a name on any type-only edit.
+    const named = [row({ selector: "#a", displayLabel: "Mine", fieldType: "text" })];
+    const out = applyRowEdit(named, "#a", { fieldType: "select" });
+    expect(out.ok && out.rows[0]).toMatchObject({ displayLabel: "Mine", fieldType: "select" });
+  });
+
+  it("marks a type change as human-chosen so a re-scan cannot undo it", () => {
+    const out = applyRowEdit(rows, "#a", { fieldType: "date" });
+    expect(out.ok && out.rows[0]).toMatchObject({ fieldType: "date", typeOverridden: true });
+  });
+
+  it("rewrites a selector, flags the override, and re-opens it for sending", () => {
+    // sent:false is deliberate — the shared library still holds a row at the
+    // OLD selector, so the fix is a NEW proposal, not a no-op.
+    const sent = [row({ selector: "#old", sent: true })];
+    const out = applyRowEdit(sent, "#old", { newSelector: "  #new  " });
+    expect(out.ok && out.rows[0]).toMatchObject({
+      selector: "#new",
+      selectorOverridden: true,
+      sent: false,
+    });
+  });
+
+  it("REFUSES a rewrite that collides with another row", () => {
+    // Two rows sharing a selector would corrupt every diff and propose the
+    // same selector to the shared library twice.
+    const out = applyRowEdit(rows, "#a", { newSelector: "#b" });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toMatch(/already uses that selector/i);
+  });
+
+  it("allows a no-op rewrite to a row's own selector", () => {
+    // Pressing Save without touching the selector box must not read as a
+    // collision with itself.
+    const out = applyRowEdit(rows, "#a", { newSelector: "#a", displayLabel: "A" });
+    expect(out.ok && out.rows[0]).toMatchObject({ selector: "#a", displayLabel: "A" });
+    expect(out.ok && out.rows[0]?.selectorOverridden).toBeUndefined();
+  });
+
+  it("ignores a blank selector rather than erasing the row's key", () => {
+    const out = applyRowEdit(rows, "#a", { newSelector: "   " });
+    expect(out.ok && out.rows[0]?.selector).toBe("#a");
+  });
+
+  it("reports an unknown row instead of silently doing nothing", () => {
+    const out = applyRowEdit(rows, "#gone", { displayLabel: "x" });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toMatch(/no longer in this capture/i);
+  });
+
+  it("never mutates the input rows", () => {
+    const before = JSON.stringify(rows);
+    applyRowEdit(rows, "#a", { displayLabel: "X", fieldType: "select", newSelector: "#z" });
+    expect(JSON.stringify(rows)).toBe(before);
+  });
+});

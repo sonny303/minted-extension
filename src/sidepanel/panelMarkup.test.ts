@@ -95,6 +95,55 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(caseWork.contains(capture)).toBe(false);
   });
 
+  it("carries the manual-mapping affordances inside the trainer", () => {
+    // 2026-08-19: adding/correcting a field by hand is a Train-forms job, so
+    // these must live under #train-section like capture itself.
+    const train = doc.getElementById("train-section")!;
+    for (const id of ["capture-add-field", "capture-pick-status"]) {
+      const node = doc.getElementById(id);
+      expect(node, `#${id}`).not.toBeNull();
+      expect(train.contains(node), `#${id} inside #train-section`).toBe(true);
+    }
+  });
+
+  it("carries the batch bar inside the trainer", () => {
+    // US-3.3: bulk delete acts on capture rows, so it belongs to Train forms
+    // like the rows themselves.
+    const train = doc.getElementById("train-section")!;
+    for (const id of ["capture-batch", "capture-batch-count", "capture-batch-delete"]) {
+      expect(train.contains(doc.getElementById(id)), `#${id} inside #train-section`).toBe(true);
+    }
+  });
+
+  it("offers the sandbox from Search and its controls from Work cases", () => {
+    // US-5.1: the way IN is pinned above search results (it never depends on a
+    // query); the fill controls live where the fill happens.
+    expect(doc.getElementById("search-section")!.contains(doc.getElementById("sandbox-entry"))).toBe(
+      true,
+    );
+    const caseWork = doc.getElementById("case-work")!;
+    for (const id of ["sandbox-bar", "sandbox-fill", "sandbox-clear", "sandbox-exit"]) {
+      expect(caseWork.contains(doc.getElementById(id)), `#${id} inside #case-work`).toBe(true);
+    }
+  });
+
+  it("keeps every case-scoped surface inside #case-fill, and portal status OUT of it", () => {
+    // renderSandboxBar hides #case-fill wholesale in the sandbox, which has no
+    // case by design. Portal recognition is deliberately outside: a sandbox
+    // fill needs to know whether this page is a portal every bit as much as a
+    // real one does, so hiding it with the case block would blind the sandbox.
+    const caseFill = doc.getElementById("case-fill")!;
+    for (const id of ["case-select", "case-context", "coverage-panel", "fill-btn"]) {
+      expect(caseFill.contains(doc.getElementById(id)), `#${id} inside #case-fill`).toBe(true);
+    }
+    expect(caseFill.contains(doc.getElementById("portal-status"))).toBe(false);
+    // …but still within the fill section, so the location picker and the
+    // banner stay together.
+    expect(
+      doc.getElementById("fill-section")!.contains(doc.getElementById("portal-status")),
+    ).toBe(true);
+  });
+
   it("has retired the Browse-providers dropdown", () => {
     // Superseded by free-text search, which can name the group a provider
     // belongs to — the dropdown could not, so two same-named providers were

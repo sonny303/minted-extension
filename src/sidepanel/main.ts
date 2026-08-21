@@ -14,14 +14,30 @@ import type {
   ProviderProfileFacility,
   UserOrgMembership,
 } from "../shared/apiTypes";
-import type { FillCoverage, FillReportRecord, FillSummary, ReportedField } from "../shared/fill";
-import { sendToBackground, type AuthState, type SearchResults } from "../shared/messages";
+import type {
+  FillCoverage,
+  FillReportRecord,
+  FillSummary,
+  MockDryRunSummary,
+  ReportedField,
+} from "../shared/fill";
+import {
+  sendToBackground,
+  type AuthState,
+  type SearchResults,
+  type SelectorTestResult,
+} from "../shared/messages";
 import { formatDisplayDate, looksLikeIsoDate } from "../shared/detailFields";
-import { matchPortalByUrl, portalOriginPatterns, type MatchedPortal } from "../shared/portals";
+import {
+  matchPortalByUrl,
+  portalOriginPatterns,
+  type MatchedPortal,
+} from "../shared/portals";
 import type {
   CaseContextTaskStep,
   NextBestActionItem,
   PortalFieldMap,
+  PortalFieldType,
   PortalRegistryRow,
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
@@ -34,18 +50,41 @@ import {
   type QuickCards,
 } from "../shared/quickCards";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
-import { countBrokenSelectors, partitionGaps, providerFixPath, trainFlowPath } from "../shared/fixit";
-import { attestationLine, attestedOnFor, buildCaqhPushOffer } from "../shared/caqh";
+import {
+  countBrokenSelectors,
+  partitionGaps,
+  providerFixPath,
+  trainFlowPath,
+} from "../shared/fixit";
+import {
+  attestationLine,
+  attestedOnFor,
+  buildCaqhPushOffer,
+} from "../shared/caqh";
 import {
   canSendCapture,
   captureCounts,
+  CAPTURE_FIELD_TYPES,
+  isNamedRow,
   nextPageSequence,
-  recognitionSummary,
   restoredSummary,
   usedPageNames,
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
+import {
+  draftEdit,
+  draftForRow,
+  draftTestReport,
+  type CaptureRowDraft,
+} from "../shared/captureDraft";
+import { selectorVerdict } from "../shared/selectorMatch";
+import {
+  captureLibraryCounts,
+  captureLibrarySummary,
+  joinCaptureLibrary,
+  type CaptureListRow,
+} from "../shared/captureLibrary";
 import { accountGreeting } from "../shared/greeting";
 import {
   canTrainForms,
@@ -68,6 +107,11 @@ import {
   providerGroupsLabel,
   providerMatchesQuery,
 } from "../shared/browseProviders";
+import {
+  findSandboxProvider,
+  sandboxFillState,
+  SANDBOX_UNAVAILABLE_NOTE,
+} from "../shared/sandbox";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -76,7 +120,8 @@ import {
   type StructuredTouchDraft,
 } from "../shared/structuredTouch";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Story 10: warn before logging a second submission on a case that was marked
 // submitted within this window. The human can still log anyway (one click).
@@ -108,6 +153,8 @@ const trainProvenChip = el<HTMLElement>("train-proven-chip");
 const runMockDryRunBtn = el<HTMLButtonElement>("run-mock-dry-run");
 const markPortalProvenBtn = el<HTMLButtonElement>("mark-portal-proven");
 const mockDryRunStatus = el<HTMLElement>("mock-dry-run-status");
+const mockDryRunSkipped = el<HTMLElement>("mock-dry-run-skipped");
+const mockDryRunGaps = el<HTMLElement>("mock-dry-run-gaps");
 const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
@@ -153,6 +200,7 @@ const viewSettingsError = el<HTMLElement>("view-settings-error");
 const viewSettingsSave = el<HTMLButtonElement>("view-settings-save");
 const viewSettingsCancel = el<HTMLButtonElement>("view-settings-cancel");
 const fillSection = el<HTMLElement>("fill-section");
+const caseFill = el<HTMLElement>("case-fill");
 const caseSelect = el<HTMLSelectElement>("case-select");
 const caseStatusPill = el<HTMLElement>("case-status");
 const caseNote = el<HTMLElement>("case-note");
@@ -175,6 +223,21 @@ const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
 const captureNextPage = el<HTMLButtonElement>("capture-next-page");
+const captureAddField = el<HTMLButtonElement>("capture-add-field");
+const capturePickStatus = el<HTMLElement>("capture-pick-status");
+const captureBatch = el<HTMLElement>("capture-batch");
+const captureBatchCount = el<HTMLElement>("capture-batch-count");
+const captureBatchDelete = el<HTMLButtonElement>("capture-batch-delete");
+const captureBatchClear = el<HTMLButtonElement>("capture-batch-clear");
+const sandboxEntry = el<HTMLButtonElement>("sandbox-entry");
+const sandboxEntryMeta = el<HTMLElement>("sandbox-entry-meta");
+const sandboxUnavailable = el<HTMLElement>("sandbox-unavailable");
+const sandboxBar = el<HTMLElement>("sandbox-bar");
+const sandboxBarNote = el<HTMLElement>("sandbox-bar-note");
+const sandboxFillBtn = el<HTMLButtonElement>("sandbox-fill");
+const sandboxClearBtn = el<HTMLButtonElement>("sandbox-clear");
+const sandboxExitBtn = el<HTMLButtonElement>("sandbox-exit");
+const sandboxStatus = el<HTMLElement>("sandbox-status");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -379,7 +442,11 @@ function providerLabel(p: ProviderListItem): string {
 
 // The locked dropdown wording: "<payer> - <state> - <status>".
 function caseLabel(c: CaseListItem): string {
-  return [c.payerName ?? "Unknown payer", c.state, c.status ?? "No status"].join(" - ");
+  return [
+    c.payerName ?? "Unknown payer",
+    c.state,
+    c.status ?? "No status",
+  ].join(" - ");
 }
 
 // Design pill colors for the statuses the design shows; any other label gets
@@ -406,7 +473,8 @@ function renderCaseStatusPill(): void {
   const status = cases.find((c) => c.id === id)?.status ?? null;
   caseStatusPill.hidden = status == null;
   caseStatusPill.textContent = status ?? "";
-  caseStatusPill.className = status == null ? "pill" : `pill ${pillClassFor(status)}`.trim();
+  caseStatusPill.className =
+    status == null ? "pill" : `pill ${pillClassFor(status)}`.trim();
 }
 
 function renderProviderCard(provider: ProviderListItem | null): void {
@@ -458,13 +526,18 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
     const text = document.createElement("span");
     // Wrap, never truncate (S2.3) — long values break to the next line.
     text.className = "id-value mono wrap";
-    text.textContent = looksLikeIsoDate(field.value) ? formatDisplayDate(field.value) : field.value;
+    text.textContent = looksLikeIsoDate(field.value)
+      ? formatDisplayDate(field.value)
+      : field.value;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "id-copy";
     copy.textContent = "Copy";
     copy.setAttribute("aria-label", `Copy ${field.label}`);
-    copy.addEventListener("click", () => void copyValue(field.value ?? "", copy, field.key, text));
+    copy.addEventListener(
+      "click",
+      () => void copyValue(field.value ?? "", copy, field.key, text),
+    );
     if (copiedKeys.has(field.key)) dd.classList.add("copied-row");
     dd.append(text, copy);
   }
@@ -486,7 +559,8 @@ function renderGroupedDetails(
 
   const groupOf = new Map<string, { label: string; order: number }>();
   currentCatalog.forEach((f, i) => {
-    if (!groupOf.has(f.group)) groupOf.set(f.group, { label: f.groupLabel, order: i });
+    if (!groupOf.has(f.group))
+      groupOf.set(f.group, { label: f.groupLabel, order: i });
   });
 
   interface Section {
@@ -498,16 +572,26 @@ function renderGroupedDetails(
   const sections = new Map<string, Section>();
   for (const field of fields) {
     const prefix = field.key.split(".")[0] ?? "";
-    const meta = groupOf.get(prefix) ?? { label: prefix, order: Number.MAX_SAFE_INTEGER };
+    const meta = groupOf.get(prefix) ?? {
+      label: prefix,
+      order: Number.MAX_SAFE_INTEGER,
+    };
     let section = sections.get(prefix);
     if (!section) {
-      section = { group: prefix, label: meta.label, order: meta.order, fields: [] };
+      section = {
+        group: prefix,
+        label: meta.label,
+        order: meta.order,
+        fields: [],
+      };
       sections.set(prefix, section);
     }
     section.fields.push(field);
   }
 
-  for (const section of [...sections.values()].sort((a, b) => a.order - b.order)) {
+  for (const section of [...sections.values()].sort(
+    (a, b) => a.order - b.order,
+  )) {
     const heading = document.createElement("p");
     heading.className = "detail-section-heading";
     heading.textContent = section.label;
@@ -516,7 +600,10 @@ function renderGroupedDetails(
     grid.className = "ids qc-grid";
     for (const field of section.fields) grid.append(...idGridEntry(field));
     container.append(grid);
-    if (section.fields.some((f) => f.value == null || f.value === "") && providerId) {
+    if (
+      section.fields.some((f) => f.value == null || f.value === "") &&
+      providerId
+    ) {
       const note = document.createElement("a");
       note.className = "detail-fix-note";
       note.href = `${API_BASE_URL}${providerWebappPath(providerId)}`;
@@ -547,7 +634,10 @@ function renderQuickCards(cards: QuickCards | null): void {
   // Type 1 header: name + DOB (bold, compact). The profile's name wins over
   // the list row's when present.
   if (cards.name) {
-    providerName.textContent = providerDisplayName(cards.name, cards.credentials);
+    providerName.textContent = providerDisplayName(
+      cards.name,
+      cards.credentials,
+    );
   }
   providerDob.textContent = cards.dateOfBirth
     ? `DOB ${formatDisplayDate(cards.dateOfBirth)}`
@@ -632,7 +722,9 @@ function renderPickerRows(query: string): void {
     details.className = "view-settings-groupbox";
     // Matching groups auto-expand under a query; with no query, groups with
     // any picked field open, the rest start collapsed.
-    const pickedCount = group.fields.filter((f) => pickerSelection.has(f.key)).length;
+    const pickedCount = group.fields.filter((f) =>
+      pickerSelection.has(f.key),
+    ).length;
     details.open = q !== "" || pickedCount > 0;
 
     const summary = document.createElement("summary");
@@ -641,8 +733,12 @@ function renderPickerRows(query: string): void {
     name.textContent = group.groupLabel;
     const count = document.createElement("span");
     // "3 of 45" in primary when any picked, else "of 45" subtle (S2.2).
-    count.className = pickedCount > 0 ? "view-settings-count picked" : "view-settings-count";
-    count.textContent = pickedCount > 0 ? `${pickedCount} of ${group.fields.length}` : `of ${group.fields.length}`;
+    count.className =
+      pickedCount > 0 ? "view-settings-count picked" : "view-settings-count";
+    count.textContent =
+      pickedCount > 0
+        ? `${pickedCount} of ${group.fields.length}`
+        : `of ${group.fields.length}`;
     summary.append(name, count);
     details.append(summary);
 
@@ -657,9 +753,15 @@ function renderPickerRows(query: string): void {
         if (checkbox.checked) pickerSelection.add(field.key);
         else pickerSelection.delete(field.key);
         // Refresh the group counts without a full re-render churn.
-        const picked = group.fields.filter((f) => pickerSelection.has(f.key)).length;
-        count.className = picked > 0 ? "view-settings-count picked" : "view-settings-count";
-        count.textContent = picked > 0 ? `${picked} of ${group.fields.length}` : `of ${group.fields.length}`;
+        const picked = group.fields.filter((f) =>
+          pickerSelection.has(f.key),
+        ).length;
+        count.className =
+          picked > 0 ? "view-settings-count picked" : "view-settings-count";
+        count.textContent =
+          picked > 0
+            ? `${picked} of ${group.fields.length}`
+            : `of ${group.fields.length}`;
       });
       const text = document.createElement("span");
       text.textContent = field.label;
@@ -793,9 +895,10 @@ const dismissedDupCaseIds = new Set<string>();
 function renderDuplicateGuard(): void {
   const caseId = selectedCaseId();
   const caseItem = cases.find((c) => c.id === caseId);
-  const phrase = caseId && !dismissedDupCaseIds.has(caseId)
-    ? recentSubmissionPhrase(caseItem)
-    : null;
+  const phrase =
+    caseId && !dismissedDupCaseIds.has(caseId)
+      ? recentSubmissionPhrase(caseItem)
+      : null;
   dupPickup.hidden = phrase == null;
   dupPickup.replaceChildren();
   if (phrase == null || caseId == null) return;
@@ -850,7 +953,10 @@ function fmtContextDate(iso: string): string {
   return formatDisplayDate(iso);
 }
 
-function contextRow(label: string): { row: HTMLDivElement; labelEl: HTMLSpanElement } {
+function contextRow(label: string): {
+  row: HTMLDivElement;
+  labelEl: HTMLSpanElement;
+} {
   const row = document.createElement("div");
   row.className = "case-context-row";
   const labelEl = document.createElement("span");
@@ -883,13 +989,18 @@ const EXECUTION_TYPE_LABELS: Record<string, string> = {
 // the wrong org or case.
 function renderIdentityGuard(): void {
   const parts: string[] = [];
-  const org = orgs.length === 1 ? orgs[0] : (orgs.find((o) => o.orgId === activeOrgId) ?? null);
+  const org =
+    orgs.length === 1
+      ? orgs[0]
+      : (orgs.find((o) => o.orgId === activeOrgId) ?? null);
   if (org) parts.push(orgLabel(org));
   const caseId = selectedCaseId();
   const context = caseId != null ? caseContextData : null;
   if (context != null) {
     if (context.provider?.name) parts.push(context.provider.name);
-    const payerState = [context.payer?.name, context.state].filter(Boolean).join(" · ");
+    const payerState = [context.payer?.name, context.state]
+      .filter(Boolean)
+      .join(" · ");
     if (payerState) parts.push(payerState);
   } else {
     const provider = providers.find((p) => p.id === selectedProviderId());
@@ -939,13 +1050,18 @@ function maybeApplyCaseFacility(): void {
     // Already on the case location — still re-resolve cards so PRACTICE
     // LOCATION isn't left "Not on file" from the needs_facility profile fetch.
     const providerId = selectedProviderId();
-    if (providerId) void refreshFacilityCards(providerId, facility.id, loadGeneration);
+    if (providerId)
+      void refreshFacilityCards(providerId, facility.id, loadGeneration);
     return;
   }
   facilitySelect.value = facility.id;
   const providerId = selectedProviderId();
   if (providerId) {
-    void sendToBackground({ type: "SET_SELECTED_FACILITY", providerId, facilityId: facility.id });
+    void sendToBackground({
+      type: "SET_SELECTED_FACILITY",
+      providerId,
+      facilityId: facility.id,
+    });
     void refreshFacilityCards(providerId, facility.id, loadGeneration);
   }
   renderFacilityAddress();
@@ -988,7 +1104,10 @@ async function refreshFacilityCards(
 // PAGE chip and a row tint. Ticking writes through the server, which owns the
 // ordering rule; a rejection renders verbatim beneath the step and the
 // checkbox reverts — never a false success (the cross-cutting gate).
-function stepList(taskId: string, steps: readonly CaseContextTaskStep[]): HTMLElement {
+function stepList(
+  taskId: string,
+  steps: readonly CaseContextTaskStep[],
+): HTMLElement {
   const list = document.createElement("ul");
   list.className = "step-list";
   for (const step of steps) {
@@ -1061,7 +1180,11 @@ function renderCaseContext(context: CaseContext | null): void {
   const tasks = context?.openTasks ?? [];
   const pipeline = context?.payerPipelineState ?? null;
   const hasContent =
-    refs.length > 0 || note != null || touch != null || tasks.length > 0 || pipeline != null;
+    refs.length > 0 ||
+    note != null ||
+    touch != null ||
+    tasks.length > 0 ||
+    pipeline != null;
   caseContextBox.hidden = context == null || !hasContent;
   renderIdentityGuard();
   if (context == null || !hasContent) return;
@@ -1079,7 +1202,9 @@ function renderCaseContext(context: CaseContext | null): void {
 
   // Reference id(s) — the case's tracking ID. Hidden when the case has none.
   if (refs.length > 0) {
-    const { row } = contextRow(refs.length === 1 ? "Tracking ID" : "Tracking IDs");
+    const { row } = contextRow(
+      refs.length === 1 ? "Tracking ID" : "Tracking IDs",
+    );
     const value = document.createElement("span");
     value.className = "case-context-ref-value mono";
     value.textContent = refs.join(", ");
@@ -1095,7 +1220,9 @@ function renderCaseContext(context: CaseContext | null): void {
     // Scope to the portal in hand: a task counts when any of its steps names
     // the detected portal. Off a recognized page, all open tasks show.
     const scoped = portal
-      ? tasks.filter((t) => (t.steps ?? []).some((st) => st.portalKey === portal?.key))
+      ? tasks.filter((t) =>
+          (t.steps ?? []).some((st) => st.portalKey === portal?.key),
+        )
       : [];
     const shown = scoped.length > 0 ? scoped : tasks;
     const { row } = contextRow(`Progress (${shown.length})`);
@@ -1109,7 +1236,8 @@ function renderCaseContext(context: CaseContext | null): void {
       const chip = document.createElement("span");
       const isFill = task.executionType === "extension_fill";
       chip.className = isFill ? "exec-chip exec-chip-fill" : "exec-chip";
-      chip.textContent = EXECUTION_TYPE_LABELS[task.executionType] ?? task.executionType;
+      chip.textContent =
+        EXECUTION_TYPE_LABELS[task.executionType] ?? task.executionType;
       item.append(title, chip);
       if (task.dueDate) {
         const due = document.createElement("span");
@@ -1175,7 +1303,10 @@ function refreshCaseContext(): void {
   renderCaseContext(null);
   const generation = loadGeneration;
   void (async () => {
-    const response = await sendToBackground({ type: "GET_CASE_CONTEXT", caseId });
+    const response = await sendToBackground({
+      type: "GET_CASE_CONTEXT",
+      caseId,
+    });
     // Discard a stale response: a newer generation (provider/org switch) or a
     // different case selected while we were in flight.
     if (!isCurrent(generation) || caseId !== caseContextCaseId) return;
@@ -1240,7 +1371,9 @@ function renderTaskLink(): void {
 
 // Story 10: how long ago the selected case was last marked submitted, when
 // that is inside the duplicate window — else null (no warning).
-function recentSubmissionPhrase(caseItem: CaseListItem | undefined): string | null {
+function recentSubmissionPhrase(
+  caseItem: CaseListItem | undefined,
+): string | null {
   if (!caseItem?.lastSubmittedAt) return null;
   const at = new Date(caseItem.lastSubmittedAt);
   if (Number.isNaN(at.getTime())) return null;
@@ -1298,15 +1431,17 @@ function isFillReady(): boolean {
   // covers the selected case and expired, the gate closes (the worker also
   // refuses; this keeps the button honest).
   const expiredBlocked =
-    activeCaseStatus === "expired" && activeCase != null && activeCase.caseId === selectedCaseId();
+    activeCaseStatus === "expired" &&
+    activeCase != null &&
+    activeCase.caseId === selectedCaseId();
   return Boolean(
     portalOpen &&
-      orgResolved() &&
-      selectedProviderId() &&
-      facilitiesLoaded &&
-      !facilityBlocked &&
-      !expiredBlocked &&
-      selectedCaseId(),
+    orgResolved() &&
+    selectedProviderId() &&
+    facilitiesLoaded &&
+    !facilityBlocked &&
+    !expiredBlocked &&
+    selectedCaseId(),
   );
 }
 
@@ -1565,7 +1700,10 @@ function fieldList(
 function fmtReportTime(iso: string): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return "an earlier session";
-  const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const time = at.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return at.toDateString() === new Date().toDateString()
     ? time
     : `${formatDisplayDate(iso)}, ${time}`;
@@ -1583,7 +1721,8 @@ function renderFillSummary(
 ): void {
   fillResults.hidden = false;
   fillReportTime.hidden = restored == null;
-  if (restored) fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
+  if (restored)
+    fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const attempted = summary.filled + summary.skipped.length;
   // The heading carries the counts, so no pill; the rows are the filled field
   // LABELS from the page result — values are never retained (PHI). The page
@@ -1648,7 +1787,10 @@ function renderFillSummary(
   if (submitted) submitStatus.textContent = "Logged to the case.";
 }
 
-async function loadCases(providerId: string, generation: number): Promise<void> {
+async function loadCases(
+  providerId: string,
+  generation: number,
+): Promise<void> {
   clearFillResults();
   // Drop the previous provider's rows NOW — the active-cases list must never
   // show provider A's cases under provider B while the fetch is in flight.
@@ -1674,14 +1816,23 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   }
 
   cases = response.data;
-  const remembered = await sendToBackground({ type: "GET_SELECTED_CASE", providerId });
+  const remembered = await sendToBackground({
+    type: "GET_SELECTED_CASE",
+    providerId,
+  });
   if (!isCurrent(generation)) return;
   const rememberedId =
-    remembered.ok && cases.some((c) => c.id === remembered.data) ? remembered.data : null;
+    remembered.ok && cases.some((c) => c.id === remembered.data)
+      ? remembered.data
+      : null;
   // A remembered case that no longer exists (closed, or another org's) is
   // dropped silently — from storage too, not just the dropdown.
   if (remembered.ok && remembered.data != null && rememberedId == null) {
-    void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId: null });
+    void sendToBackground({
+      type: "SET_SELECTED_CASE",
+      providerId,
+      caseId: null,
+    });
   }
   caseSelect.replaceChildren();
   const placeholder = new Option(
@@ -1693,7 +1844,9 @@ async function loadCases(providerId: string, generation: number): Promise<void> 
   placeholder.disabled = cases.length > 0;
   caseSelect.add(placeholder);
   for (const c of cases) {
-    caseSelect.add(new Option(caseLabel(c), c.id, false, c.id === rememberedId));
+    caseSelect.add(
+      new Option(caseLabel(c), c.id, false, c.id === rememberedId),
+    );
   }
   caseSelect.disabled = cases.length === 0;
   renderCaseStatusPill();
@@ -1718,7 +1871,10 @@ async function restoreFillReport(
 ): Promise<void> {
   lastReportBrokenCount = 0;
   if (selectedCase == null) return;
-  const response = await sendToBackground({ type: "GET_FILL_REPORT", providerId });
+  const response = await sendToBackground({
+    type: "GET_FILL_REPORT",
+    providerId,
+  });
   if (!isCurrent(generation)) return;
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
@@ -1743,9 +1899,13 @@ async function restoreFillReport(
 // line per part: street (+ suite), then "city, state zip". Hidden when no
 // facility is selected or the facility carries no address fields.
 function renderFacilityAddress(): void {
-  const facility = facilities.find((f) => f.id === selectedFacilityId()) ?? null;
+  const facility =
+    facilities.find((f) => f.id === selectedFacilityId()) ?? null;
   const street = [facility?.street, facility?.suite].filter(Boolean).join(", ");
-  const locality = [facility?.city, [facility?.state, facility?.zip].filter(Boolean).join(" ")]
+  const locality = [
+    facility?.city,
+    [facility?.state, facility?.zip].filter(Boolean).join(" "),
+  ]
     .filter(Boolean)
     .join(", ");
   const lines = [street, locality].filter(Boolean);
@@ -1761,7 +1921,10 @@ function renderFacilityAddress(): void {
 // The provider's facility set, from the profile response. Exactly one:
 // auto-selected read-only (the server resolves it the same way). Several:
 // the user picks, remembered per provider and re-validated silently.
-async function loadFacilities(providerId: string, generation: number): Promise<void> {
+async function loadFacilities(
+  providerId: string,
+  generation: number,
+): Promise<void> {
   facilities = [];
   facilitiesLoaded = false;
   needsFacility = false;
@@ -1770,7 +1933,10 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
   renderFacilityAddress();
   updateFillReady();
 
-  const response = await sendToBackground({ type: "GET_PROVIDER_FACILITIES", providerId });
+  const response = await sendToBackground({
+    type: "GET_PROVIDER_FACILITIES",
+    providerId,
+  });
   // A newer provider/org selection superseded this load — discard silently.
   if (!isCurrent(generation)) return;
   if (!response.ok) {
@@ -1797,26 +1963,49 @@ async function loadFacilities(providerId: string, generation: number): Promise<v
 
   const sole = facilities.length === 1 ? facilities[0] : undefined;
   if (sole) {
-    facilitySelect.replaceChildren(new Option(sole.name || "Location", sole.id, true, true));
+    facilitySelect.replaceChildren(
+      new Option(sole.name || "Location", sole.id, true, true),
+    );
     renderFacilityAddress();
     renderIdentityGuard();
     updateFillReady();
     return;
   }
 
-  const remembered = await sendToBackground({ type: "GET_SELECTED_FACILITY", providerId });
+  const remembered = await sendToBackground({
+    type: "GET_SELECTED_FACILITY",
+    providerId,
+  });
   if (!isCurrent(generation)) return;
   const rememberedId =
-    remembered.ok && facilities.some((f) => f.id === remembered.data) ? remembered.data : null;
+    remembered.ok && facilities.some((f) => f.id === remembered.data)
+      ? remembered.data
+      : null;
   if (remembered.ok && remembered.data != null && rememberedId == null) {
-    void sendToBackground({ type: "SET_SELECTED_FACILITY", providerId, facilityId: null });
+    void sendToBackground({
+      type: "SET_SELECTED_FACILITY",
+      providerId,
+      facilityId: null,
+    });
   }
   facilitySelect.replaceChildren();
-  const placeholder = new Option("Select a location…", "", true, rememberedId == null);
+  const placeholder = new Option(
+    "Select a location…",
+    "",
+    true,
+    rememberedId == null,
+  );
   placeholder.disabled = true;
   facilitySelect.add(placeholder);
   for (const facility of facilities) {
-    facilitySelect.add(new Option(facility.name || facility.id, facility.id, false, facility.id === rememberedId));
+    facilitySelect.add(
+      new Option(
+        facility.name || facility.id,
+        facility.id,
+        false,
+        facility.id === rememberedId,
+      ),
+    );
   }
   facilitySelect.disabled = false;
   renderFacilityAddress();
@@ -1850,11 +2039,17 @@ async function loadProviders(generation: number): Promise<void> {
     return;
   }
   providers = browseableProviders(response.data);
+  // The sandbox entry is derived from the roster, so it can only be honest
+  // once the roster is in hand — before that it would claim "no test provider
+  // designated" for every org.
+  renderSandboxEntry();
 
   const selected = await sendToBackground({ type: "GET_SELECTED_PROVIDER" });
   if (!isCurrent(generation)) return;
   const selectedId =
-    selected.ok && providers.some((p) => p.id === selected.data) ? selected.data : null;
+    selected.ok && providers.some((p) => p.id === selected.data)
+      ? selected.data
+      : null;
   // A remembered provider that isn't in the current org's list anymore is
   // dropped silently — from storage too, not just the panel.
   if (selected.ok && selected.data != null && selectedId == null) {
@@ -1939,7 +2134,9 @@ async function loadOrgs(generation: number): Promise<void> {
     // the worker (SET_ACTIVE_ORG clears org-scoped state on change).
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
     if (!isCurrent(generation)) return;
-    orgSelect.replaceChildren(new Option(orgLabel(sole), sole.orgId, true, true));
+    orgSelect.replaceChildren(
+      new Option(orgLabel(sole), sole.orgId, true, true),
+    );
     orgReady = true;
     renderModeSurfaces();
     renderIdentityGuard();
@@ -1950,7 +2147,8 @@ async function loadOrgs(generation: number): Promise<void> {
 
   const stored = await sendToBackground({ type: "GET_ACTIVE_ORG" });
   if (!isCurrent(generation)) return;
-  const storedId = stored.ok && orgs.some((o) => o.orgId === stored.data) ? stored.data : null;
+  const storedId =
+    stored.ok && orgs.some((o) => o.orgId === stored.data) ? stored.data : null;
   if (stored.ok && stored.data != null && storedId == null) {
     // Membership to the remembered org is gone: drop silently (the worker
     // clears that org's dependent state too).
@@ -1960,11 +2158,18 @@ async function loadOrgs(generation: number): Promise<void> {
   activeOrgId = storedId;
   renderOrgContext();
   orgSelect.replaceChildren();
-  const placeholder = new Option("Select an organization…", "", true, storedId == null);
+  const placeholder = new Option(
+    "Select an organization…",
+    "",
+    true,
+    storedId == null,
+  );
   placeholder.disabled = true;
   orgSelect.add(placeholder);
   for (const org of orgs) {
-    orgSelect.add(new Option(orgLabel(org), org.orgId, false, org.orgId === storedId));
+    orgSelect.add(
+      new Option(orgLabel(org), org.orgId, false, org.orgId === storedId),
+    );
   }
   orgSelect.disabled = false;
   renderIdentityGuard();
@@ -1983,7 +2188,10 @@ async function loadOrgs(generation: number): Promise<void> {
 // it comes back undefined, which matchPortal already treats as "no portal".
 async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
     return tab ?? null;
   } catch {
     return null;
@@ -2036,7 +2244,9 @@ async function refreshPortalAccessPrompt(): Promise<void> {
   }
   // The origins to ask for come from whichever registry this job works
   // against: the org's in case mode, the shared library's while training.
-  const patterns = portalOriginPatterns(panelMode === "train" ? sharedPortalRows : portalRows);
+  const patterns = portalOriginPatterns(
+    panelMode === "train" ? sharedPortalRows : portalRows,
+  );
   if (patterns.length === 0) {
     portalAccess.hidden = true;
     return;
@@ -2053,7 +2263,9 @@ async function hasOriginPermissions(origins: string[]): Promise<boolean> {
 }
 
 portalAccessGrant.addEventListener("click", () => {
-  const patterns = portalOriginPatterns(panelMode === "train" ? sharedPortalRows : portalRows);
+  const patterns = portalOriginPatterns(
+    panelMode === "train" ? sharedPortalRows : portalRows,
+  );
   if (patterns.length === 0) return;
   portalAccessGrant.disabled = true;
   void (async () => {
@@ -2063,7 +2275,10 @@ portalAccessGrant.addEventListener("click", () => {
       const granted = await chrome.permissions.request({ origins: patterns });
       if (granted) await detectPortal();
     } catch (error) {
-      setError(mainError, error instanceof Error ? error.message : "Could not grant access");
+      setError(
+        mainError,
+        error instanceof Error ? error.message : "Could not grant access",
+      );
     } finally {
       portalAccessGrant.disabled = false;
     }
@@ -2087,7 +2302,10 @@ function syncQueueVisibility(): void {
 // hops to the portal tab to submit, then comes back for Mark submitted).
 chrome.tabs.onActivated.addListener(() => void detectPortal());
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-  if (tab.active && (changeInfo.url != null || changeInfo.status === "complete")) {
+  if (
+    tab.active &&
+    (changeInfo.url != null || changeInfo.status === "complete")
+  ) {
     void detectPortal();
   }
 });
@@ -2147,7 +2365,8 @@ avatarBtn.addEventListener("click", () => {
 document.addEventListener("click", (event) => {
   if (avatarMenu.hidden) return;
   const target = event.target as Node;
-  if (!avatarMenu.contains(target) && !avatarBtn.contains(target)) closeAvatarMenu();
+  if (!avatarMenu.contains(target) && !avatarBtn.contains(target))
+    closeAvatarMenu();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeAvatarMenu();
@@ -2199,6 +2418,10 @@ signoutBtn.addEventListener("click", () => {
   bumpGeneration();
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
+    // The sandbox's designated provider is org-specific and the panel is
+    // about to lose all org context — leaving it "active" would carry stale
+    // sandbox chrome into the next sign-in.
+    clearSandboxOnRealSelection();
     orgs = [];
     membershipsLoaded = false;
     orgReady = false;
@@ -2240,6 +2463,9 @@ orgSelect.addEventListener("change", () => {
   // invalidated the instant the switch happens.
   const generation = bumpGeneration();
   void (async () => {
+    // The sandbox's designated provider is org-specific — a stale sandbox
+    // from the org just left must not survive into the one being entered.
+    clearSandboxOnRealSelection();
     activeOrgId = orgId;
     renderOrgContext();
     // The worker wipes provider/case/facility/report state — including any
@@ -2290,6 +2516,13 @@ facilitySelect.addEventListener("change", () => {
 // the handoff apply passes recordEntry=false so it never overwrites the
 // handoff record it is applying.
 function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
+  // A real case selection always wins over a leftover sandbox: the sandbox
+  // bar previously stayed up (and hid the real Fill button) until the
+  // explicit Exit was clicked, which meant "Sandbox fill" could still run
+  // against whatever provider a real case pick had since loaded. Clearing it
+  // here — the funnel every real case pick goes through (dropdown,
+  // active-cases row, NBA handback, handoff apply) — closes that gap.
+  clearSandboxOnRealSelection();
   const providerId = selectedProviderId();
   // A case pick should land on that case's facility once context arrives —
   // not a leftover remembered location from another case on the same provider.
@@ -2298,7 +2531,12 @@ function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
     void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
     if (recordEntry && caseId != null) {
       void (async () => {
-        await sendToBackground({ type: "ENTER_ACTIVE_CASE", caseId, providerId, orgId: activeOrgId });
+        await sendToBackground({
+          type: "ENTER_ACTIVE_CASE",
+          caseId,
+          providerId,
+          orgId: activeOrgId,
+        });
         // Entering a case supersedes any expired/previous context — re-read so
         // the banner and gates reflect the fresh record.
         await refreshActiveCase(false);
@@ -2434,7 +2672,8 @@ markSubmittedBtn.addEventListener("click", () => {
   // cases (mutating matchingPortalTasks), so read the id + title now.
   const closedTaskId = selectedTaskId;
   const closedTaskTitle = closedTaskId
-    ? (matchingPortalTasks().find((t) => t.taskId === closedTaskId)?.title ?? null)
+    ? (matchingPortalTasks().find((t) => t.taskId === closedTaskId)?.title ??
+      null)
     : null;
   void (async () => {
     setError(mainError, null);
@@ -2487,10 +2726,16 @@ markSubmittedBtn.addEventListener("click", () => {
     // skipped bump is not a failed touch: the submission IS recorded, and the
     // reason (illegal edge, role, concurrency) comes from the server.
     const bump = response.data.statusBump;
-    const lines = [closedTaskTitle ? `Logged to the case. Task closed: ${closedTaskTitle}` : "Logged to the case."];
+    const lines = [
+      closedTaskTitle
+        ? `Logged to the case. Task closed: ${closedTaskTitle}`
+        : "Logged to the case.",
+    ];
     if (bump?.applied) lines.push("Case moved to Submitted.");
     else if (bump && !bump.applied) {
-      lines.push(`Status unchanged — ${bump.reason ?? "the case couldn't be moved to Submitted."}`);
+      lines.push(
+        `Status unchanged — ${bump.reason ?? "the case couldn't be moved to Submitted."}`,
+      );
     }
     submitStatus.textContent = lines.join(" ");
     submitStatus.classList.toggle("partial", bump != null && !bump.applied);
@@ -2528,17 +2773,25 @@ function renderActiveCases(): void {
   // this page" and matching cases sort FIRST, each carrying a THIS PAGE chip.
   // Off a recognized page the list renders in server order under the default
   // heading. Stable within each half (no invented priority).
-  const heading = activeCasesBox.querySelector<HTMLElement>(".active-cases-heading");
-  const anyMatch = portal != null && cases.some((c) => caseUsesDetectedPortal(c));
-  if (heading) heading.textContent = anyMatch ? "Cases that use this page" : "Open cases";
+  const heading = activeCasesBox.querySelector<HTMLElement>(
+    ".active-cases-heading",
+  );
+  const anyMatch =
+    portal != null && cases.some((c) => caseUsesDetectedPortal(c));
+  if (heading)
+    heading.textContent = anyMatch ? "Cases that use this page" : "Open cases";
   const ordered = anyMatch
-    ? [...cases.filter(caseUsesDetectedPortal), ...cases.filter((c) => !caseUsesDetectedPortal(c))]
+    ? [
+        ...cases.filter(caseUsesDetectedPortal),
+        ...cases.filter((c) => !caseUsesDetectedPortal(c)),
+      ]
     : cases;
 
   for (const c of ordered) {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = c.id === selected ? "case-row case-row-selected" : "case-row";
+    row.className =
+      c.id === selected ? "case-row case-row-selected" : "case-row";
     const title = document.createElement("span");
     title.className = "case-row-title";
     title.textContent = `${c.payerName ?? "Unknown payer"} · ${c.state}`;
@@ -2590,14 +2843,28 @@ function searchEmptyLine(text: string): HTMLElement {
 
 // Select a provider found via search (may not be in the browse list's first
 // page) — quick cards + active cases load exactly as a dropdown pick.
-async function selectProviderInPanel(provider: ProviderListItem): Promise<void> {
+async function selectProviderInPanel(
+  provider: ProviderListItem,
+): Promise<void> {
+  // Real provider selection always wins over a leftover sandbox — see the
+  // note on clearSandboxOnRealSelection. `enterSandbox` also routes through
+  // here for the sandbox provider itself; it sets `sandboxActive` back to
+  // true only AFTER this call returns, so clearing unconditionally here is
+  // safe and never fights that flow.
+  clearSandboxOnRealSelection();
   const generation = bumpGeneration();
   if (!providers.some((p) => p.id === provider.id)) providers.push(provider);
-  await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId: provider.id });
+  await sendToBackground({
+    type: "SET_SELECTED_PROVIDER",
+    providerId: provider.id,
+  });
   if (!isCurrent(generation)) return;
   setSelectedProviderId(provider.id);
   renderProviderCard(providers.find((p) => p.id === provider.id) ?? null);
-  await Promise.all([loadCases(provider.id, generation), loadFacilities(provider.id, generation)]);
+  await Promise.all([
+    loadCases(provider.id, generation),
+    loadFacilities(provider.id, generation),
+  ]);
 }
 
 // Select a case from anywhere (search result, NBA handback, handoff apply) —
@@ -2616,12 +2883,20 @@ async function selectCaseInPanel(
   // carry facilityId so search → case defaults to the case's practice site.
   preferredFacilityId?: string | null,
 ): Promise<void> {
+  // Real case selection always wins over a leftover sandbox — see the note
+  // on clearSandboxOnRealSelection.
+  clearSandboxOnRealSelection();
   const generation = bumpGeneration();
   preferCaseFacility = true;
   await sendToBackground({ type: "SET_SELECTED_PROVIDER", providerId });
   await sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
   if (recordEntry) {
-    await sendToBackground({ type: "ENTER_ACTIVE_CASE", caseId, providerId, orgId: activeOrgId });
+    await sendToBackground({
+      type: "ENTER_ACTIVE_CASE",
+      caseId,
+      providerId,
+      orgId: activeOrgId,
+    });
   }
   if (preferredFacilityId) {
     await sendToBackground({
@@ -2639,7 +2914,10 @@ async function selectCaseInPanel(
   }
   setSelectedProviderId(providerId);
   renderProviderCard(providers.find((p) => p.id === providerId) ?? null);
-  await Promise.all([loadCases(providerId, generation), loadFacilities(providerId, generation)]);
+  await Promise.all([
+    loadCases(providerId, generation),
+    loadFacilities(providerId, generation),
+  ]);
   if (recordEntry && isCurrent(generation)) await refreshActiveCase(false);
 }
 
@@ -2663,7 +2941,9 @@ function renderSearchResults(data: SearchResults): void {
 
   searchResults.append(searchGroupHeading("Cases"));
   if (data.casesError != null) {
-    searchResults.append(searchEmptyLine(`Case search unavailable: ${data.casesError}`));
+    searchResults.append(
+      searchEmptyLine(`Case search unavailable: ${data.casesError}`),
+    );
   } else if (data.cases.length === 0) {
     searchResults.append(searchEmptyLine("No matching cases."));
   } else {
@@ -2683,13 +2963,20 @@ function renderSearchResults(data: SearchResults): void {
       button.append(title);
       const meta = document.createElement("span");
       meta.className = "search-row-meta";
-      meta.textContent = [row.status, row.payerReferenceId].filter(Boolean).join(" · ");
+      meta.textContent = [row.status, row.payerReferenceId]
+        .filter(Boolean)
+        .join(" · ");
       if (meta.textContent) button.append(meta);
       button.addEventListener("click", () => {
         hideSearchResults();
         searchInput.value = "";
         void openInCaseWork(
-          selectCaseInPanel(row.providerId, row.id, true, row.facilityId ?? null),
+          selectCaseInPanel(
+            row.providerId,
+            row.id,
+            true,
+            row.facilityId ?? null,
+          ),
         );
       });
       searchResults.append(button);
@@ -2698,7 +2985,9 @@ function renderSearchResults(data: SearchResults): void {
 
   searchResults.append(searchGroupHeading("Providers"));
   if (data.providersError != null) {
-    searchResults.append(searchEmptyLine(`Provider search unavailable: ${data.providersError}`));
+    searchResults.append(
+      searchEmptyLine(`Provider search unavailable: ${data.providersError}`),
+    );
   } else if (data.providers.length === 0) {
     searchResults.append(searchEmptyLine("No matching providers."));
   } else {
@@ -2767,7 +3056,9 @@ async function runSearch(query: string): Promise<void> {
 function withGroupMatches(data: SearchResults, query: string): SearchResults {
   if (data.providersError != null) return data;
   const seen = new Set(data.providers.map((p) => p.id));
-  const extra = providers.filter((p) => !seen.has(p.id) && providerMatchesQuery(p, query));
+  const extra = providers.filter(
+    (p) => !seen.has(p.id) && providerMatchesQuery(p, query),
+  );
   if (extra.length === 0) return data;
   return { ...data, providers: [...data.providers, ...extra] };
 }
@@ -2856,7 +3147,8 @@ function renderHandoffBanner(): void {
   // member of: prompt the org switch (explicit, never silent).
   if (record.orgId != null && orgs.length > 0) {
     const membership = orgs.find((o) => o.orgId === record.orgId) ?? null;
-    const resolvedOrg = orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
+    const resolvedOrg =
+      orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
     if (membership != null && resolvedOrg !== record.orgId) {
       handoffBanner.hidden = false;
       const text = document.createElement("span");
@@ -2899,7 +3191,12 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   orgReady = true;
   renderModeSurfaces();
   renderIdentityGuard();
-  await selectCaseInPanel(record.providerId, record.caseId, true, record.facilityId);
+  await selectCaseInPanel(
+    record.providerId,
+    record.caseId,
+    true,
+    record.facilityId,
+  );
   renderHandoffBanner();
 }
 
@@ -2925,7 +3222,8 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
       renderHandoffBanner();
       return;
     }
-    const resolvedOrg = orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
+    const resolvedOrg =
+      orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
     if (resolvedOrg !== record.orgId) {
       // Member, but the panel is operating as a different org (or none yet):
       // the banner prompts the explicit switch. Nothing is applied.
@@ -2962,7 +3260,11 @@ async function refreshActiveCase(applyHandoff = true): Promise<void> {
     return;
   }
   updateFillReady();
-  if (applyHandoff && state.status === "active" && state.record.source === "handoff") {
+  if (
+    applyHandoff &&
+    state.status === "active" &&
+    state.record.source === "handoff"
+  ) {
     await maybeApplyHandoff(state.record);
   }
 }
@@ -2988,10 +3290,12 @@ function populateTouchSelects(): void {
   const placeholder = new Option("Select type…", "", true, true);
   placeholder.disabled = true;
   touchType.add(placeholder);
-  for (const t of STRUCTURED_TOUCH_TYPES) touchType.add(new Option(t.label, t.value));
+  for (const t of STRUCTURED_TOUCH_TYPES)
+    touchType.add(new Option(t.label, t.value));
   touchOutcome.replaceChildren();
   touchOutcome.add(new Option("None", "", true, true));
-  for (const d of TOUCH_DISPOSITIONS) touchOutcome.add(new Option(d.label, d.value));
+  for (const d of TOUCH_DISPOSITIONS)
+    touchOutcome.add(new Option(d.label, d.value));
 }
 populateTouchSelects();
 
@@ -3152,7 +3456,8 @@ function renderQueue(items: NextBestActionItem[]): void {
     queueSection.append(clear);
     return;
   }
-  for (const item of items.slice(0, QUEUE_PAGE_SIZE)) queueSection.append(queueRow(item));
+  for (const item of items.slice(0, QUEUE_PAGE_SIZE))
+    queueSection.append(queueRow(item));
   if (items.length > QUEUE_PAGE_SIZE) {
     const more = document.createElement("p");
     more.className = "queue-more";
@@ -3174,12 +3479,15 @@ async function loadQueue(generation: number): Promise<void> {
   const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
   if (!isCurrent(generation)) return;
   if (!response.ok) {
-    queueSection.replaceChildren(searchEmptyLine(`Queue unavailable: ${response.error}`));
+    queueSection.replaceChildren(
+      searchEmptyLine(`Queue unavailable: ${response.error}`),
+    );
     return;
   }
   // A server predating S3.3 sends only `item`; degrade to that single entry
   // rather than showing an empty queue.
-  const items = response.data.items ?? (response.data.item ? [response.data.item] : []);
+  const items =
+    response.data.items ?? (response.data.item ? [response.data.item] : []);
   renderQueue(items);
 }
 
@@ -3221,7 +3529,9 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   }
   if (item.deadline != null) {
     const deadline = document.createElement("p");
-    deadline.className = item.deadline.overdue ? "nba-deadline overdue" : "nba-deadline";
+    deadline.className = item.deadline.overdue
+      ? "nba-deadline overdue"
+      : "nba-deadline";
     deadline.textContent = `${item.deadline.overdue ? "Overdue" : "Due"} ${fmtContextDate(item.deadline.date)}`;
     card.append(deadline);
   }
@@ -3238,7 +3548,9 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
     });
     actions.append(work);
   }
-  actions.append(nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`));
+  actions.append(
+    nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`),
+  );
   card.append(actions);
   nbaSection.append(card);
 }
@@ -3325,6 +3637,26 @@ let captureSession: CaptureSession | null = null;
 /** Set when the last capture added a page to an existing session — drives the
  * "· Page N of N" summary suffix (BITE-CAP-05). */
 let captureAddedPage = false;
+// 2026-08-19 manual mapping: which row's inline editor is open (one at a time
+// — two open editors on one list is a way to save the wrong row), the last
+// re-test answer, and whether a pick is waiting on the page.
+let editingSelector: string | null = null;
+let selectorTestResult: SelectorTestResult | null = null;
+// BITE-TRAIN-01 — the open editor's UNSAVED values. Panel state, not DOM
+// state: renderCapture() rebuilds the editor for reasons the trainer did not
+// ask for (a selector test, a tab switch, a pick), and anything left in the
+// inputs would go with it.
+let rowDraft: CaptureRowDraft | null = null;
+let pickInFlight = false;
+// US-3.3 — rows ticked for a batch action, keyed by selector. Kept OUTSIDE the
+// DOM so a re-render (after an edit, a pick, a re-test) never silently drops a
+// selection the trainer made.
+const batchSelection = new Set<string>();
+
+// US-5 — is the sandbox profile in hand? Panel-only state: it is a way of
+// WORKING, not a stored selection, and it must never survive into a real case
+// (switching provider or case leaves it, below).
+let sandboxActive = false;
 
 // S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
 // blank) is QUARANTINED as of 3M Slice 2, not deleted.
@@ -3360,58 +3692,83 @@ function renderCapture(): void {
   // case workflow — never the field trainer. A leftover session from a prior
   // Train visit stays in the worker but stays hidden here until Train is on.
   const training = isCaptureMode(panelMode);
-  captureSection.hidden =
-    !training || portal == null || portalTabId == null;
+  captureSection.hidden = !training || portal == null || portalTabId == null;
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
   const pageCount = usedPageNames(captureSession).length;
-  let summary = captureSession
-    ? recognitionSummary(counts)
-    : "Not captured yet — read this form's fields into Minted Panel.";
+  // BITE-TRAIN-03 — the list is the scan JOINED to the shared library that is
+  // already in hand, so it survives the session storage dying with the browser
+  // and can say which library fields this page no longer has.
+  const listRows = joinCaptureLibrary(
+    captureSession?.rows ?? [],
+    trainFormMaps,
+  );
+  let summary = captureLibrarySummary(captureLibraryCounts(listRows));
+  if (captureSession == null && listRows.length > 0) {
+    summary = `${summary} Not captured in this browser — re-capture to check the form against the page.`;
+  }
   if (captureSession && captureAddedPage && pageCount > 0) {
     summary = `${summary} · Page ${pageCount} of ${pageCount}`;
   }
   captureSummary.textContent = summary;
-  captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+  captureStart.textContent = captureSession
+    ? "Re-capture"
+    : "Capture this form";
   // "Capture next page" only makes sense when there is already a session to
   // add a page to.
   captureNextPage.hidden = captureSession == null;
   captureNextPage.disabled = false;
+  // Adding a field by hand needs something to add it TO, and a live tab to
+  // point at.
+  captureAddField.hidden = captureSession == null;
+  captureAddField.disabled = pickInFlight || portalTabId == null;
 
   captureRows.replaceChildren();
   captureActions.hidden = !canSendCapture(captureSession);
   captureSend.disabled = false;
   captureSent.hidden = counts.sent === 0;
   if (counts.sent > 0) {
-    captureSent.textContent =
-      // Training writes the SHARED library, so the review happens in the
-      // Submit-form task editor (D18) — say where, not just "approve them".
-      `${counts.sent} sent to the shared form library. Map them in the web app's Submit-form task editor — nothing fills until you do.`;
+    // Training writes the SHARED library, so the review happens in the web
+    // app's Submit-form task editor (D18) — say where, and TAKE them there.
+    // Naming a destination the trainer then has to go and find, in a different
+    // product, is where this loop was ending; the registry row already carries
+    // the payer id, so the link costs nothing.
+    const note = document.createElement("span");
+    note.textContent = `${counts.sent} sent to the shared form library. Nothing fills until they are mapped in the web app's Submit-form task editor.`;
+    captureSent.replaceChildren(note);
+    if (portal?.payerId) {
+      captureSent.append(
+        " ",
+        nbaLink(
+          "Map them now ↗",
+          `${API_BASE_URL}/admin/payer-admin/setup/${portal.payerId}?tab=templates`,
+        ),
+      );
+    }
   }
-  if (captureSession == null) return;
-
-  for (const group of groupCaptureRowsByPage(captureSession.rows)) {
+  renderBatchBar();
+  for (const group of groupCaptureRowsByPage(listRows)) {
     if (group.page != null) {
       const heading = document.createElement("p");
       heading.className = "capture-page-heading";
       heading.textContent = group.page;
       captureRows.append(heading);
     }
-    for (const row of group.rows) {
-      captureRows.append(renderCaptureRow(row));
+    for (const item of group.rows) {
+      captureRows.append(renderCaptureRow(item));
     }
   }
 }
 
 /** Group rows by pageStep in the order pages were first walked. */
 function groupCaptureRowsByPage(
-  rows: readonly CaptureRow[],
-): Array<{ page: string | null; rows: CaptureRow[] }> {
+  rows: readonly CaptureListRow[],
+): Array<{ page: string | null; rows: CaptureListRow[] }> {
   const order: Array<string | null> = [];
-  const groups = new Map<string | null, CaptureRow[]>();
+  const groups = new Map<string | null, CaptureListRow[]>();
   for (const row of rows) {
-    const page = row.pageStep?.trim() ? row.pageStep.trim() : null;
+    const page = row.page;
     if (!groups.has(page)) {
       order.push(page);
       groups.set(page, []);
@@ -3421,34 +3778,531 @@ function groupCaptureRowsByPage(
   return order.map((page) => ({ page, rows: groups.get(page)! }));
 }
 
-function renderCaptureRow(row: CaptureRow): HTMLDivElement {
+function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
+  const row = entry.row;
   const item = document.createElement("div");
-  item.className = row.chosenToken || row.suggestedToken ? "capture-row" : "capture-row gap";
+  // A gap is a field with nothing behind it in the library — the trainer's
+  // actual to-do. A drifted row is worse, and says so in its own chip.
+  item.className = entry.library ? "capture-row" : "capture-row gap";
+
+  // Batch actions edit the LOCAL capture, so a library-only row has nothing
+  // to tick: deleting it here would suggest the library changed, and it does
+  // not.
+  if (row) {
+    const tick = document.createElement("input");
+    tick.type = "checkbox";
+    tick.className = "capture-row-tick";
+    tick.checked = batchSelection.has(row.selector);
+    tick.setAttribute("aria-label", `Select ${entry.name}`);
+    tick.addEventListener("change", () => {
+      if (tick.checked) batchSelection.add(row.selector);
+      else batchSelection.delete(row.selector);
+      renderBatchBar();
+    });
+    item.append(tick);
+  }
 
   const label = document.createElement("span");
   label.className = "capture-row-label";
-  label.textContent = row.label || row.selector;
+  label.textContent = entry.name;
+  // A row the portal never named needs a human name before anyone can act on
+  // it later; say so rather than rendering a blank and hoping.
+  if (row && !isNamedRow(row)) label.classList.add("id-empty");
+  label.title = entry.selector;
   item.append(label);
 
+  // BITE-TRAIN-03 — the second column is what the LIBRARY says about the
+  // field, which is the only thing here that decides whether it will fill.
   const value = document.createElement("span");
   value.className = "capture-row-token mono";
-  value.textContent = row.chosenToken ?? row.suggestedToken ?? "Not recognised";
+  value.textContent = entry.library
+    ? entry.library.note
+    : "Not in the shared library";
   item.append(value);
 
-  if (row.evidence) {
+  if (entry.state === "drifted") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "Not found on this page";
+    item.append(chip);
+  } else if (entry.state === "library-only") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "In the library";
+    item.append(chip);
+  } else if (entry.state === "new") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "New in this scan";
+    item.append(chip);
+  }
+
+  if (row?.origin === "user_mapped") {
+    const chip = document.createElement("span");
+    chip.className = "pill";
+    chip.textContent = "Added by hand";
+    item.append(chip);
+  }
+
+  if (row?.evidence) {
     const evidence = document.createElement("span");
     evidence.className = "capture-row-evidence";
     evidence.textContent = row.evidence;
     item.append(evidence);
   }
 
-  if (row.sent) {
+  if (row?.sent) {
     const chip = document.createElement("span");
     chip.className = "pill";
     chip.textContent = "Sent";
     item.append(chip);
   }
+
+  // A LIBRARY row (drifted, or library-only before a capture) has no captured
+  // row to edit — and used to have no actions at all, which made the "needs
+  // updating" half of the job a dead end: the list named the problem and
+  // offered nothing to do about it. Two things are honest here without
+  // deciding anything the web app owns.
+  if (row == null) item.append(renderLibraryRowActions(entry));
+
+  if (row) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "link capture-row-edit";
+    edit.textContent = "Edit";
+    edit.setAttribute(
+      "aria-expanded",
+      String(editingSelector === row.selector),
+    );
+    edit.addEventListener("click", () => {
+      editingSelector = editingSelector === row.selector ? null : row.selector;
+      selectorTestResult = null;
+      rowDraft = null;
+      renderCapture();
+    });
+    item.append(edit);
+
+    if (editingSelector === row.selector)
+      item.append(renderCaptureRowEditor(row));
+  }
   return item;
+}
+
+/**
+ * What a trainer can do about a field the LIBRARY holds and this page did not
+ * yield — the drift half of the job.
+ *
+ * "Check page" is first because "not found on this page" is a fact about the
+ * SCAN, not about the page: a field revealed only after an earlier answer is
+ * genuinely present and simply was not rendered when the scan ran, which is
+ * the exact situation the picker exists for. Testing the library's own
+ * selector live separates that from a selector that really has gone stale, and
+ * costs one click instead of a re-capture.
+ *
+ * "Re-point" is the repair: click where the field moved to, and the proposal
+ * carries the library's name for it. It PROPOSES at the new selector — the old
+ * map stays until someone retires it in the web app, because what a re-trained
+ * selector does to an approved map is the web app's decision, not this
+ * panel's. The copy says so rather than implying the library was edited.
+ */
+function renderLibraryRowActions(entry: CaptureListRow): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "capture-editor-actions";
+
+  const check = document.createElement("button");
+  check.type = "button";
+  check.className = "link";
+  check.textContent = "Check page";
+  check.disabled = portalTabId == null;
+  check.addEventListener(
+    "click",
+    () => void testCaptureSelector(entry.selector),
+  );
+  box.append(check);
+
+  // Re-pointing adds a row to the capture, so it needs one to add to.
+  if (captureSession != null) {
+    const repoint = document.createElement("button");
+    repoint.type = "button";
+    repoint.className = "link";
+    repoint.textContent = "Re-point";
+    repoint.disabled = pickInFlight || portalTabId == null;
+    repoint.addEventListener("click", () => void repointLibraryField(entry));
+    box.append(repoint);
+  }
+
+  // The verdict from a live check, keyed to THIS row's selector so one row's
+  // answer never appears under another.
+  if (
+    selectorTestResult != null &&
+    selectorTestResult.selector === entry.selector
+  ) {
+    const { valid, matches, fillable, radioGroup } = selectorTestResult;
+    const verdict = selectorVerdict(
+      { valid, matches, fillable, radioGroup },
+      entry.fieldType,
+    );
+    const line = document.createElement("p");
+    line.className = verdict.ok ? "capture-editor-note" : "capture-editor-warn";
+    line.textContent = verdict.ok
+      ? `${verdict.text} It was not in this scan — capture this page again to pick it up.`
+      : verdict.text;
+    box.append(line);
+  }
+  return box;
+}
+
+/** The inline correction panel for one captured row: rename it, re-type it,
+ * check the selector still resolves, or drop it. Everything here edits the
+ * LOCAL capture session; nothing is proposed until Send for approval. */
+function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
+  // BITE-TRAIN-01 — render FROM the draft, write back to it on every
+  // keystroke. The editor is thrown away and rebuilt whenever anything
+  // re-renders the list, so the inputs cannot be the source of truth.
+  const draft = draftForRow(row, rowDraft);
+  rowDraft = draft;
+
+  const box = document.createElement("div");
+  box.className = "capture-row-editor";
+
+  const nameField = document.createElement("label");
+  nameField.className = "capture-editor-field";
+  nameField.textContent = "Field name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = draft.displayLabel;
+  nameInput.placeholder = row.label || "Name this field";
+  nameInput.addEventListener("input", () => {
+    draft.displayLabel = nameInput.value;
+  });
+  nameField.append(nameInput);
+  box.append(nameField);
+
+  // The payer's own words, kept visible as the evidence behind a rename —
+  // renaming must never make it look like the portal said something it didn't.
+  if (row.label.trim()) {
+    const captured = document.createElement("p");
+    captured.className = "capture-editor-note";
+    captured.textContent = `Portal calls it: ${row.label.trim()}`;
+    box.append(captured);
+  }
+
+  const typeField = document.createElement("label");
+  typeField.className = "capture-editor-field";
+  typeField.textContent = "Control type";
+  const typeSelect = document.createElement("select");
+  for (const option of CAPTURE_FIELD_TYPES) {
+    typeSelect.add(
+      new Option(
+        option.label,
+        option.value,
+        false,
+        option.value === draft.fieldType,
+      ),
+    );
+  }
+  typeSelect.addEventListener("change", () => {
+    draft.fieldType = typeSelect.value as PortalFieldType;
+  });
+  typeField.append(typeSelect);
+  box.append(typeField);
+
+  // US-3.2 — the Selector Workshop. The auto-captured selector is a starting
+  // point, not a verdict: a fragile one can be replaced with anything CSS can
+  // express, and tested against the live page before it is saved.
+  const selectorField = document.createElement("label");
+  selectorField.className = "capture-editor-field";
+  selectorField.textContent = "CSS selector";
+  const selectorInput = document.createElement("input");
+  selectorInput.type = "text";
+  selectorInput.className = "mono";
+  selectorInput.value = draft.selectorText;
+  selectorInput.spellcheck = false;
+  selectorInput.addEventListener("input", () => {
+    draft.selectorText = selectorInput.value;
+  });
+  selectorField.append(selectorInput);
+  box.append(selectorField);
+
+  if (row.selectorOverridden) {
+    const note = document.createElement("p");
+    note.className = "capture-editor-note";
+    note.textContent =
+      "Selector written by hand — a re-capture will not overwrite it.";
+    box.append(note);
+  }
+
+  // The verdict answers the TYPED selector, so it is keyed to the draft —
+  // keyed to the stored one it could only ever appear for a selector the
+  // trainer had not edited, which is the case the workshop does not exist for.
+  // The words come from the shared `selectorVerdict`, which reads the match
+  // SHAPE: a bare count called a wrapper healthy, a radio group ambiguous and
+  // a typo a missing field, all three wrongly.
+  const report = draftTestReport(draft, selectorTestResult);
+  if (report != null) {
+    const verdict = selectorVerdict(report, draft.fieldType);
+    const result = document.createElement("p");
+    result.className = verdict.ok
+      ? "capture-editor-note"
+      : "capture-editor-warn";
+    result.textContent = verdict.text;
+    box.append(result);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "capture-editor-actions";
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary";
+  save.textContent = "Save";
+  // `draftEdit` sends only what actually changed: EDIT_CAPTURE_ROW reads a
+  // present fieldType/newSelector as a human override, which must not be set
+  // by merely opening the editor and saving a rename.
+  save.addEventListener(
+    "click",
+    () => void editCaptureRow(row, draftEdit(row, draft)),
+  );
+  actions.append(save);
+
+  const test = document.createElement("button");
+  test.type = "button";
+  test.className = "link";
+  test.textContent = "Test selector";
+  // Tests what is TYPED, not what is saved — the point is to try a candidate
+  // before committing to it. The matches flash green on the page.
+  test.addEventListener(
+    "click",
+    () => void testCaptureSelector(draft.selectorText.trim()),
+  );
+  actions.append(test);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "link";
+  remove.textContent = row.sent ? "Remove from list" : "Remove";
+  remove.addEventListener("click", () => void removeCaptureRow(row));
+  actions.append(remove);
+
+  box.append(actions);
+
+  if (row.sent) {
+    const note = document.createElement("p");
+    note.className = "capture-editor-note";
+    // Be honest about reach: the panel's propose call already happened.
+    note.textContent =
+      "Already sent — removing it here drops it from this list, not from the shared library.";
+    box.append(note);
+  }
+  return box;
+}
+
+/** US-3.3 — the batch bar appears on the first tick and states exactly what a
+ * bulk action would hit, because "Delete selected" is irreversible. */
+function renderBatchBar(): void {
+  // A selection can outlive the rows it named (a re-capture, a single delete),
+  // so prune to what is actually on screen before counting.
+  const live = new Set((captureSession?.rows ?? []).map((r) => r.selector));
+  for (const selector of [...batchSelection]) {
+    if (!live.has(selector)) batchSelection.delete(selector);
+  }
+  const count = batchSelection.size;
+  captureBatch.hidden = count === 0;
+  captureBatchCount.textContent = `${count} ${count === 1 ? "field" : "fields"} selected`;
+}
+
+async function deleteSelectedCaptureRows(): Promise<void> {
+  const selectors = [...batchSelection];
+  if (selectors.length === 0) return;
+  const plural = selectors.length === 1 ? "field" : "fields";
+  // Say the same thing the single-row editor says: this list is the local
+  // capture, and a row already proposed stays in the shared library either
+  // way. "Delete 12 fields" with no qualifier reads like a library purge.
+  const sent = (captureSession?.rows ?? []).filter(
+    (r) => r.sent && batchSelection.has(r.selector),
+  ).length;
+  const sentNote =
+    sent > 0
+      ? ` ${sent} of them ${sent === 1 ? "was" : "were"} already sent — removing them here drops them from this list, not from the shared library.`
+      : "";
+  if (
+    !window.confirm(
+      `Delete ${selectors.length} ${plural} from this capture?${sentNote}`,
+    )
+  ) {
+    return;
+  }
+  // ONE write: deleting row by row would leave the list and the stored session
+  // disagreeing if the worker failed halfway.
+  const response = await sendToBackground({
+    type: "REMOVE_CAPTURE_ROWS",
+    selectors,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  batchSelection.clear();
+  editingSelector = null;
+  selectorTestResult = null;
+  rowDraft = null;
+  setPickStatus(`Deleted ${selectors.length} ${plural}.`);
+  renderCapture();
+}
+
+async function editCaptureRow(
+  row: CaptureRow,
+  patch: {
+    displayLabel?: string | null;
+    fieldType?: PortalFieldType;
+    newSelector?: string;
+  },
+): Promise<void> {
+  const response = await sendToBackground({
+    type: "EDIT_CAPTURE_ROW",
+    selector: row.selector,
+    ...patch,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  editingSelector = null;
+  selectorTestResult = null;
+  rowDraft = null;
+  setPickStatus(null);
+  renderCapture();
+}
+
+async function removeCaptureRow(row: CaptureRow): Promise<void> {
+  const response = await sendToBackground({
+    type: "REMOVE_CAPTURE_ROW",
+    selector: row.selector,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  captureSession = response.data;
+  editingSelector = null;
+  selectorTestResult = null;
+  rowDraft = null;
+  renderCapture();
+}
+
+async function testCaptureSelector(selector: string): Promise<void> {
+  if (portalTabId == null) {
+    setPickStatus("Open the portal tab to test this field.", true);
+    return;
+  }
+  if (selector === "") {
+    setPickStatus("Type a selector to test.", true);
+    return;
+  }
+  const response = await sendToBackground({
+    type: "TEST_CAPTURE_SELECTOR",
+    tabId: portalTabId,
+    selector,
+    // Flash the matches on the page: a count alone cannot tell the trainer
+    // they matched the WRONG control, which is the failure that matters.
+    highlight: true,
+  });
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  selectorTestResult = response.data;
+  setPickStatus(null);
+  renderCapture();
+}
+
+function setPickStatus(message: string | null, isError = false): void {
+  capturePickStatus.hidden = message == null;
+  capturePickStatus.textContent = message ?? "";
+  capturePickStatus.classList.toggle("capture-editor-warn", isError);
+}
+
+/** F1 — "+ Add field": hand the page a crosshair and wait for the trainer to
+ * click the control the scan missed. The panel stays responsive throughout;
+ * the pick resolves when they click or press Escape. */
+async function addFieldByPicking(): Promise<void> {
+  if (portalTabId == null || captureSession == null) return;
+  const tabId = portalTabId;
+  pickInFlight = true;
+  captureAddField.disabled = true;
+  setPickStatus("Click the field on the portal page · Esc to cancel");
+  const response = await sendToBackground({
+    type: "PICK_CAPTURE_FIELD",
+    tabId,
+    pageStep: currentCapturePage(),
+  });
+  pickInFlight = false;
+  captureAddField.disabled = false;
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    return;
+  }
+  const before = captureSession?.rows.length ?? 0;
+  captureSession = response.data;
+  const added = captureSession.rows.length - before;
+  // Cancelling returns the session untouched — say nothing rather than
+  // claiming a field was added.
+  setPickStatus(
+    added > 0 ? "Field added. Name it under Edit if the portal didn't." : null,
+  );
+  renderCapture();
+}
+
+/**
+ * Re-point a drifted library field: the trainer clicks where it moved to, and
+ * the resulting proposal carries the LIBRARY's name for it rather than
+ * whatever the portal calls the new control — so a reviewer in the web app can
+ * see it is the same field, not a stranger.
+ *
+ * It PROPOSES; it does not retire the old map. That decision belongs to the
+ * web app (the extension has no approval write at all), so the status line
+ * says what actually happened instead of implying the library was repaired.
+ */
+async function repointLibraryField(entry: CaptureListRow): Promise<void> {
+  if (portalTabId == null || captureSession == null) return;
+  const tabId = portalTabId;
+  pickInFlight = true;
+  renderCapture();
+  setPickStatus(`Click "${entry.name}" where it is now · Esc to cancel`);
+  const response = await sendToBackground({
+    type: "PICK_CAPTURE_FIELD",
+    tabId,
+    pageStep: currentCapturePage(),
+    displayLabel: entry.name,
+  });
+  pickInFlight = false;
+  if (!response.ok) {
+    setPickStatus(response.error, true);
+    renderCapture();
+    return;
+  }
+  const before = captureSession?.rows.length ?? 0;
+  captureSession = response.data;
+  const added = captureSession.rows.length - before;
+  setPickStatus(
+    added > 0
+      ? `"${entry.name}" re-pointed. Send the capture to propose it — the old one stays in the library until it is retired in the web app.`
+      : null,
+  );
+  renderCapture();
+}
+
+/** The page a hand-added field belongs to: the one the trainer is looking at,
+ * which is the page the most recent rows were captured from. */
+function currentCapturePage(): string | null {
+  const rows = captureSession?.rows ?? [];
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const page = rows[i]?.pageStep?.trim();
+    if (page) return page;
+  }
+  return null;
 }
 
 async function startCapture(mode: "auto" | "next-page"): Promise<void> {
@@ -3473,7 +4327,9 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   if (!decision.ok) {
     captureStart.disabled = false;
     captureNextPage.disabled = false;
-    captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+    captureStart.textContent = captureSession
+      ? "Re-capture"
+      : "Capture this form";
     if (panelMode === "train") {
       await refreshTrainRecognition();
     } else {
@@ -3506,18 +4362,31 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   captureNextPage.disabled = false;
   if (!isCurrent(generation)) return;
   if (!response.ok) {
-    captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+    captureStart.textContent = captureSession
+      ? "Re-capture"
+      : "Capture this form";
     setError(mainError, response.error);
     return;
   }
   captureSession = response.data;
-  captureAddedPage = hadSession && usedPageNames(captureSession).length > pagesBefore;
+  captureAddedPage =
+    hadSession && usedPageNames(captureSession).length > pagesBefore;
   captureRestored.hidden = true;
   renderCapture();
 }
 
 captureStart.addEventListener("click", () => {
   void startCapture("auto");
+});
+
+captureAddField.addEventListener("click", () => void addFieldByPicking());
+captureBatchDelete.addEventListener(
+  "click",
+  () => void deleteSelectedCaptureRows(),
+);
+captureBatchClear.addEventListener("click", () => {
+  batchSelection.clear();
+  renderCapture();
 });
 
 captureNextPage.addEventListener("click", () => {
@@ -3566,6 +4435,177 @@ async function restoreCapture(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// US-5 — the sandbox test profile.
+//
+// Fills a real portal from the org's DESIGNATED test provider, with no case in
+// play: no touch, no status change, no case lifecycle consumed. That is what
+// makes testing a 100+ field form a matter of seconds instead of manufacturing
+// a case per attempt.
+// ---------------------------------------------------------------------------
+
+/** The sandbox provider for the loaded roster, or null when the org has
+ * designated none. */
+function sandboxProvider(): ProviderListItem | null {
+  return findSandboxProvider(providers);
+}
+
+/** The pinned Search entry. Rendered from the roster, so an org that has not
+ * designated a test provider gets the honest reason instead of a button that
+ * fails when pressed. */
+function renderSandboxEntry(): void {
+  const provider = sandboxProvider();
+  const offer = panelMode === "search" && orgReady;
+  sandboxEntry.hidden = !offer || provider == null;
+  sandboxUnavailable.hidden = !offer || provider != null;
+  if (provider) {
+    sandboxEntryMeta.textContent = `${providerLabel(provider)} · no case needed`;
+  } else {
+    sandboxUnavailable.textContent = SANDBOX_UNAVAILABLE_NOTE;
+  }
+}
+
+/** The in-case-work sandbox chrome. Clear portal form lives here and ONLY
+ * here: it resets every input on the page, which on a live case would wipe a
+ * coordinator's real typing. */
+function renderSandboxBar(): void {
+  const showing = sandboxActive && panelMode === "case";
+  sandboxBar.hidden = !showing;
+  // The sandbox has no case, so the whole case block goes with it — one
+  // container, the same rule renderModeSurfaces uses, for the same reason:
+  // reaching into the cards inside would clobber state they own. Portal
+  // recognition deliberately sits OUTSIDE it and stays visible.
+  caseFill.hidden = showing;
+  if (!showing) return;
+  const provider = providers.find((p) => p.id === selectedProviderId()) ?? null;
+  const state = sandboxFillState(provider);
+  sandboxBarNote.textContent = provider
+    ? `Filling as ${providerLabel(provider)}${state ? ` · ${state}` : ""}. Nothing is logged to a case.`
+    : "Sandbox provider is no longer on this roster.";
+  const ready = provider != null && portal != null && portalTabId != null;
+  sandboxFillBtn.disabled = !ready;
+  sandboxClearBtn.disabled = portalTabId == null;
+}
+
+function setSandboxStatus(message: string | null, isError = false): void {
+  sandboxStatus.hidden = message == null;
+  sandboxStatus.textContent = message ?? "";
+  sandboxStatus.classList.toggle("capture-editor-warn", isError);
+}
+
+/**
+ * Clear the sandbox because a REAL provider or case was just selected.
+ *
+ * Previously the Exit button was the ONLY thing that cleared `sandboxActive`,
+ * so picking a real case while the sandbox was up left the sandbox bar
+ * showing (hiding the real Fill button) and let "Sandbox fill" run against
+ * whatever real, non-designated provider had since loaded — a fill with no
+ * case attribution and no `is_test_provider` check of its own. Called from
+ * every funnel a real selection goes through (`applyCaseChoice`,
+ * `selectCaseInPanel`, `selectProviderInPanel`); a no-op when the sandbox
+ * isn't active, so it's safe to call unconditionally from all three.
+ */
+function clearSandboxOnRealSelection(): void {
+  if (!sandboxActive) return;
+  sandboxActive = false;
+  setSandboxStatus(null);
+  renderSandboxBar();
+}
+
+/** Enter the sandbox: select the designated provider and land in Work cases.
+ * Deliberately reuses the normal provider-selection path, so quick cards,
+ * facilities and the portal gate all behave exactly as they do for a real
+ * provider — the ONLY difference is that no case is required.
+ *
+ * `sandboxActive` is set only AFTER the provider selection resolves:
+ * `selectProviderInPanel` unconditionally clears a stale sandbox on every
+ * real selection (above), and this IS that selection, so flipping the flag
+ * first would have it immediately clobbered back to false. */
+async function enterSandbox(): Promise<void> {
+  const provider = sandboxProvider();
+  if (provider == null) return;
+  setSandboxStatus(null);
+  hideSearchResults();
+  searchInput.value = "";
+  await openInCaseWork(selectProviderInPanel(provider));
+  sandboxActive = true;
+  renderSandboxBar();
+  updateFillReady();
+}
+
+function leaveSandbox(): void {
+  clearSandboxOnRealSelection();
+  updateFillReady();
+}
+
+async function runSandboxFill(): Promise<void> {
+  const providerId = selectedProviderId();
+  const activePortal = portal;
+  if (providerId == null || activePortal == null || portalTabId == null) return;
+  const provider = providers.find((p) => p.id === providerId) ?? null;
+  sandboxFillBtn.disabled = true;
+  setSandboxStatus("Filling…");
+  const response = await sendToBackground({
+    type: "SANDBOX_FILL",
+    tabId: portalTabId,
+    providerId,
+    portalKey: activePortal.key,
+    state: sandboxFillState(provider),
+    facilityId: selectedFacilityId(),
+  });
+  sandboxFillBtn.disabled = false;
+  if (!response.ok) {
+    setSandboxStatus(response.error, true);
+    return;
+  }
+  const summary = response.data;
+  const parts = [
+    `Filled ${summary.filled} of ${summary.pageFields} fields on this page`,
+  ];
+  if (summary.skipped.length > 0)
+    parts.push(`${summary.skipped.length} skipped`);
+  if (summary.manual.length > 0)
+    parts.push(`${summary.manual.length} need manual entry`);
+  // A failed machine log is reported, never swallowed — but it does not make
+  // the fill a failure, because the fill happened.
+  setSandboxStatus(
+    summary.logError
+      ? `${parts.join(" · ")}. ${summary.logError}`
+      : `${parts.join(" · ")}.`,
+    summary.logError != null,
+  );
+}
+
+async function clearPortalFormFromPanel(): Promise<void> {
+  const providerId = selectedProviderId();
+  if (portalTabId == null || providerId == null) return;
+  sandboxClearBtn.disabled = true;
+  const response = await sendToBackground({
+    type: "CLEAR_PORTAL_FORM",
+    tabId: portalTabId,
+    providerId,
+  });
+  sandboxClearBtn.disabled = false;
+  if (!response.ok) {
+    setSandboxStatus(response.error, true);
+    return;
+  }
+  const { cleared } = response.data;
+  setSandboxStatus(
+    cleared === 0
+      ? "Nothing to clear — the form is already empty."
+      : `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. Ready to re-test.`,
+  );
+}
+
+sandboxEntry.addEventListener("click", () => void enterSandbox());
+sandboxExitBtn.addEventListener("click", () => leaveSandbox());
+sandboxFillBtn.addEventListener("click", () => void runSandboxFill());
+sandboxClearBtn.addEventListener(
+  "click",
+  () => void clearPortalFormFromPanel(),
+);
+
+// ---------------------------------------------------------------------------
 // E6.9 F6.9.7 + 2026-08-19 — the job chooser (Search / Work cases / Train
 // forms), and F6.9.9 — Train forms.
 // ---------------------------------------------------------------------------
@@ -3603,6 +4643,8 @@ function renderModeSurfaces(): void {
 
   if (training) hideSearchResults();
   renderSelectedProvider();
+  renderSandboxEntry();
+  renderSandboxBar();
   renderCapture();
   void refreshPortalAccessPrompt();
 }
@@ -3668,7 +4710,12 @@ async function loadSharedRegistry(): Promise<void> {
     trainRecognition.textContent = response.error;
     return;
   }
-  sharedPortalRows = response.data;
+  // A non-array here is fatal, not cosmetic: renderTrainPayers iterates this
+  // DURING render, so `for (… of null)` takes the whole panel down rather than
+  // just the payer select. An `ok` envelope carrying a null `data` is a shape
+  // the wire permits, so treat anything unexpected as an empty library — the
+  // trainer then sees "no payers" instead of a blank panel.
+  sharedPortalRows = Array.isArray(response.data) ? response.data : [];
   renderTrainPayers();
   await refreshTrainRecognition();
 }
@@ -3699,22 +4746,45 @@ function renderTrainPayers(): void {
  * F6.9.7 flow, for when the open tab is not the form (or is not yet granted). */
 function renderTrainPortals(): void {
   const payerName = trainPayer.value;
-  const rows = sharedPortalRows.filter((r) => (r.payerName ?? "") === payerName);
+  const rows = sharedPortalRows.filter(
+    (r) => (r.payerName ?? "") === payerName,
+  );
   trainPortalField.hidden = payerName === "" || rows.length === 0;
   const previous = trainPortal.value;
   trainPortal.replaceChildren();
   for (const row of rows) {
-    trainPortal.add(new Option(row.name, row.portalKey, false, row.portalKey === previous));
+    trainPortal.add(
+      new Option(row.name, row.portalKey, false, row.portalKey === previous),
+    );
   }
 }
 
 function renderTrainDryRun(): void {
-  const recognized = panelMode === "train" && portal != null && portalTabId != null;
+  const recognized =
+    panelMode === "train" && portal != null && portalTabId != null;
   trainDryRunSection.hidden = !recognized;
   runMockDryRunBtn.disabled = !recognized;
   markPortalProvenBtn.disabled = !recognized;
   trainProvenChip.hidden = !recognized || portal?.proven !== true;
-  if (!recognized) mockDryRunStatus.hidden = true;
+  if (!recognized) {
+    mockDryRunStatus.hidden = true;
+    clearMockDryRunDetail();
+  }
+}
+
+/** BITE-TRAIN-02 — the dry run's per-field diagnosis, in the same buckets the
+ * fill report uses. The engine already returns each failure with its reason;
+ * rendering only the counts made the trainer re-derive them on the page. */
+function renderMockDryRunDetail(summary: MockDryRunSummary): void {
+  fieldList(mockDryRunSkipped, "Not filled on the page:", summary.skipped);
+  fieldList(mockDryRunGaps, "Mapping gaps:", summary.gaps);
+}
+
+function clearMockDryRunDetail(): void {
+  mockDryRunSkipped.hidden = true;
+  mockDryRunSkipped.replaceChildren();
+  mockDryRunGaps.hidden = true;
+  mockDryRunGaps.replaceChildren();
 }
 
 /**
@@ -3744,8 +4814,7 @@ async function refreshTrainRecognition(): Promise<void> {
     });
     trainFormMaps = maps.ok ? maps.data : [];
     const state = formCaptureState(trainFormMaps);
-    trainRecognition.textContent =
-      `${view.portal.label} — already trained: ${captureStateSummary(state)}.`;
+    trainRecognition.textContent = `${view.portal.label} — already trained: ${captureStateSummary(state)}.`;
     trainHint.textContent =
       state.undecided > 0
         ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
@@ -3790,7 +4859,8 @@ runMockDryRunBtn.addEventListener("click", () => {
   runMockDryRunBtn.disabled = true;
   markPortalProvenBtn.disabled = true;
   mockDryRunStatus.hidden = false;
-  mockDryRunStatus.textContent = "Filling the live form with synthetic Sample values…";
+  mockDryRunStatus.textContent =
+    "Filling the live form with synthetic Sample values…";
   void (async () => {
     const tab = await queryActiveTab();
     const currentPortal = matchPortalByUrl(tab?.url, sharedPortalRows);
@@ -3812,6 +4882,7 @@ runMockDryRunBtn.addEventListener("click", () => {
     if (!response.ok) {
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();
+      clearMockDryRunDetail();
       mockDryRunStatus.hidden = false;
       return;
     }
@@ -3821,6 +4892,9 @@ runMockDryRunBtn.addEventListener("click", () => {
       ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
       : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
     renderTrainDryRun();
+    // A passing run has nothing in either bucket, so `fieldList` hides them
+    // and the result stays the one line it was.
+    renderMockDryRunDetail(response.data);
     mockDryRunStatus.hidden = false;
   })();
 });
@@ -3844,7 +4918,9 @@ markPortalProvenBtn.addEventListener("click", () => {
       mockDryRunStatus.hidden = false;
       return;
     }
-    const row = sharedPortalRows.find((candidate) => candidate.portalKey === activePortal.key);
+    const row = sharedPortalRows.find(
+      (candidate) => candidate.portalKey === activePortal.key,
+    );
     if (row) row.provenAt = new Date().toISOString();
     portal = { ...activePortal, proven: true };
     mockDryRunStatus.textContent =

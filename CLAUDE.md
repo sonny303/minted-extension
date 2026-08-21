@@ -39,13 +39,13 @@ An eslint rule enforces the boundary: only `src/background/` may import
 `@supabase/supabase-js`. Builds: `vite.config.ts` (panel + background) and
 `vite.content.config.ts` (content script — content scripts can't be ESM).
 
-## Commands (all verified passing 2026-07-17, clean clone + `npm ci`)
+## Commands (all verified passing 2026-08-20, clean clone + `npm ci`)
 
 - `npm run build` — panel/background then content builds; `dist/` = loadable
   unpacked extension
 - `npm run typecheck` — `tsc --noEmit`, clean
 - `npm run lint` — `eslint .`, clean
-- `npm run test` — vitest; 12 files, 133 tests, all pass (includes the TE-10
+- `npm run test` — vitest; 26 files, 336 tests, all pass (includes the TE-10
   mock harness: `src/harness/workbench.test.ts` drives the real background
   modules against `scripts/mock-panel-api.mjs`, an in-repo mirror of the
   panel /api contract — CI never touches a real portal or the real panel)
@@ -76,10 +76,10 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   `src/server/profileFieldMapJoin.test.ts`.)
 - **Profile response:** `GET /api/providers/:id/profile?state=XX&facilityId=…`
   returns `provider` + `tokens[{token, value}]` + `unresolved[{token, reason}]`
-  + `facilities` + `selected_facility_id`; ambiguous facility sets flag
-  `meta.needs_facility`. The snake_case keys `selected_facility_id` and
-  `needs_facility` are the locked wire contract, unlike the camelCased rows.
-  (Panel `src/services/providerProfile.ts`.)
+  - `facilities` + `selected_facility_id`; ambiguous facility sets flag
+    `meta.needs_facility`. The snake_case keys `selected_facility_id` and
+    `needs_facility` are the locked wire contract, unlike the camelCased rows.
+    (Panel `src/services/providerProfile.ts`.)
 - **portalTasks (portal-task close-out):** `GET /api/cases?providerId=…` rows
   optionally carry `portalTasks: [{ taskId, title, portalKey, status }]` — the
   case's open, portal-linked SOP tasks; `portalKey` arrives normalized
@@ -91,8 +91,8 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
 - **Touches body is snake_case** (locked R2 contract, 2026-07-05 — unlike
   fill-events' camelCase): `POST /api/cases/:id/touches` takes
   `{ kind: "portal_submission", portal_key, idempotency_id,
-  fill_session_id?, note?, payer_reference_id?, wip_note?, task_id?,
-  pdf_filename?, bump_status? }`. Server sets org + user from the JWT.
+fill_session_id?, note?, payer_reference_id?, wip_note?, task_id?,
+pdf_filename?, bump_status? }`. Server sets org + user from the JWT.
   **S4.4 (2026-07-28): `bump_status: true` also moves the case In Progress ->
   Submitted** through the panel's `set_case_status`, evidenced by that touch.
   Off by default and omitted from the body unless asked, so the R2 "never an
@@ -103,7 +103,7 @@ truth in `sonny303/mintedpanel` at the paths cited per item.
   `SubmissionTouchBody` in `src/shared/apiTypes.ts`.)
 - **Fill-events body is camelCase:** `POST /api/fill-events` takes
   `{ id, caseId, providerId, portalKey, fillMode: "web", startedAt,
-  completedAt, fieldsFilled, fieldsSkipped }`. (Panel
+completedAt, fieldsFilled, fieldsSkipped }`. (Panel
   `src/services/fillSessions.ts`; mirror `FillEventBody` in
   `src/background/api.ts`.)
 - **Idempotency:** fill-events — the client-generated `id`
@@ -258,6 +258,169 @@ portalUrl, portalKey?, facilityId? }` through
   contract (every `el()` id resolves, no duplicate ids, every case-work
   surface really is inside `#case-work`) — main.ts throws at import on a
   missing id, which means a blank panel, and nothing else would catch it.
+- **Manual field mapping (2026-08-19).** A scan only sees what is rendered AND
+  wired at the moment it runs, so a field a portal reveals after an earlier
+  answer is legitimately missed — that is what "only 1 of 2 fields" on the
+  Humana status form was (the NPI box is `display:none` until a certification
+  type is chosen; the radio WAS found, which also rules out an iframe).
+  **`+ Add field`** puts the page in pick mode (`src/content/elementPicker.ts`):
+  crosshair, hover highlight, click to add, Esc/right-click/blur to cancel.
+  Every listener is CAPTURE-phase and swallows its event, so picking a radio
+  does not also select it and picking near a submit cannot navigate the form
+  away mid-training — verified in a real browser, not just jsdom. The pick
+  describes the element through the SAME `describeControl` the scanner uses, so
+  a hand-picked and an auto-detected field can never drift apart.
+  `PICK_ELEMENT` is the ONE async `ContentRequest` (its listener returns true);
+  `MATCH_SELECTOR` backs "Re-test on page" (1 healthy / 0 will never fill / >1
+  ambiguous). Per-row inline editing renames, re-types, re-tests and removes.
+  **`CaptureRow` gained `origin`, `displayLabel` and `typeOverridden`:**
+  `displayLabel` is the trainer's name and is kept SEPARATE from `label` (the
+  payer's captured text) exactly as the panel splits display_label from
+  field_label — so a re-scan refreshes what the portal says without discarding
+  what the human called it. `SEND_CAPTURE` still proposes `field_label` as the
+  payer's text, falling back to the trainer's name ONLY when the portal never
+  labelled the field at all (otherwise there is nothing to preserve).
+  **`mergePageCapture` rescues `user_mapped` rows a fresh scan cannot see** —
+  those are precisely the conditionally-rendered fields the picker exists for,
+  and dropping them on the next re-capture would silently delete the manual
+  work. An `auto_detected` row the scan no longer sees is still dropped, so
+  drift repair is unchanged. Legacy rows parse as `auto_detected`.
+- **Selector Workshop + bulk delete (US-3.2/US-3.3, 2026-08-20).** The row
+  editor's selector is an EDITABLE CSS box, and **"Test selector" tests what is
+  TYPED, not what is stored** — otherwise it could only ever confirm the
+  selector you are trying to replace. `MATCH_SELECTOR` gained `highlight`, and
+  `highlightSelector` (`elementPicker.ts`) flashes every match in bright green
+  (`#16a34a`, class `__mp-selector-hit`, auto-clearing after 2.5s) so "3
+  matches" says WHICH three. It decorates with a CLASS, never inline styles:
+  inline styles would overwrite the portal's own and could not be undone
+  cleanly. Verified in a real browser (computed `outline-color` really is
+  `rgb(22,163,74)`), because a class name in jsdom proves nothing about paint.
+  XPath is deliberately NOT offered yet. A hand-written selector sets
+  `selectorOverridden`, which `mergePageCapture` rescues exactly like a
+  `user_mapped` row — the scan would re-produce the ORIGINAL fragile selector,
+  so without it the fix dies at the very next re-capture. The edit itself is
+  the pure `applyRowEdit` (`shared/capture.ts`), which lives beside
+  `mergePageCapture` because it guards the same invariant — **the selector IS
+  the row's key** — and REFUSES a rewrite colliding with another row.
+  Multi-select is panel state keyed by selector (outside the DOM, so a
+  re-render never drops a selection); the batch bar appears on the first tick
+  and offers **Delete selected only** — assign-to-section and mark-as-human are
+  deferred until sections exist.
+- **The Selector Workshop's verdict reads the match SHAPE, not a count
+  (2026-08-20).** `MATCH_SELECTOR` returns `{valid, matches, fillable,
+radioGroup}` (`describeSelectorMatches`, `content/elementPicker.ts`) and the
+  pure `selectorVerdict` (`shared/selectorMatch.ts`) turns it into the sentence
+  the trainer reads. A bare `querySelectorAll().length` got three common cases
+  wrong, each measured against the real engine before the fix: a **wrapper**
+  (`#npi-field` on the div around the input) matched exactly one element and so
+  showed the green "matches exactly one field", while `bySelector` accepts only
+  input/select/textarea and the fill skipped it as `field not found on this
+page` — the verdict said the opposite of the truth in the one place a trainer
+  goes to be sure; a **radio group** is one field made of N controls, and the
+  scanner's own `input[type="radio"][name="…"]` therefore matched N, so a
+  correct selector was called "ambiguous, and may fill the wrong one" — a false
+  alarm on the exact defect class this trainer was built for (the Humana status
+  form), whose advice, followed, breaks a working selector; and **invalid CSS**
+  was caught and reported as 0, i.e. as a valid selector finding nothing,
+  sending the trainer to re-capture over a typo. `fillable` is a COPY of the
+  engine's rule, so `fillEngine.test.ts` pins the two together over six element
+  shapes rather than trusting the comment. An N-way radio match under a
+  non-radio row now names the control type to change.
+- **A drifted library row is actionable (2026-08-21).** "In the library but not
+  on this page" IS the _needs updating_ half of the job, and those rows had no
+  tick, no Edit and no action at all — the list named the problem and offered
+  nothing to do about it. Two things are honest without deciding anything the
+  web app owns. **"Check page"** re-tests the LIBRARY's own selector live,
+  because "not found on this page" is a fact about the SCAN, not the page: a
+  field revealed only after an earlier answer is genuinely present and simply
+  was not rendered when the scan ran — the exact situation the picker exists
+  for. **"Re-point"** is the repair: click where the field moved to, and the
+  proposal carries the library's own name (`PICK_CAPTURE_FIELD` gained an
+  optional `displayLabel`), so a reviewer sees the same field rather than a
+  stranger. It PROPOSES at the new selector; the old map stays until someone
+  retires it in the web app, and the status line says exactly that instead of
+  implying the library was edited. `CaptureListRow` carries `fieldType` so a
+  library-only row's re-test can read an N-way radio match as one field.
+- **`label:` selectors resolve the way the fill does.** The shared library
+  really stores maps as `label:First Name`, which is not parseable CSS — so
+  `describeSelectorMatches` running raw `querySelectorAll` reported "matches
+  nothing" for a field that fills perfectly, and in the capture list every
+  label-addressed library field read as drift. `byLabel` is now exported from
+  `fillEngine.ts` and used by the workshop, and the parity test covers both a
+  present and an absent label.
+- **A sent capture links to where mapping happens.** Training proposes; the
+  decision is the web app's Submit-form task editor (D18). The note said so and
+  stopped there, so the loop ended on an instruction in a different product with
+  no way to follow it. `MatchedPortal` now carries `payerId` from the registry
+  row it is already built from, and the note links
+  `/admin/payer-admin/setup/{payerId}?tab=templates`. Null payer ⇒ text only,
+  never a dead link.
+- **Sandbox test profile (US-5, 2026-08-20).** A normal fill needs a case, and
+  the panel's 4-part case key means one case per provider × group × payer ×
+  state — so testing a 100+ field form meant manufacturing cases and leaving
+  junk behind. The sandbox fills from the org's DESIGNATED test provider
+  (`providers.is_test_provider`, which the panel already excludes from the
+  queue, generation and the scorecard) with NO case in play: no touch, no
+  status change, no case lifecycle. Not a synthetic identity — filling as a
+  real provider is what exercises the true profile pipeline. Pinned above
+  search results (it never depends on a query); entering reuses the ordinary
+  provider-selection path so quick cards, facilities and the portal gate behave
+  exactly as they do for real work. State comes from the provider's home state
+  since there is no case to take it from; null is a legitimate answer.
+  `sandboxFillPortal` logs through `postSharedTestFill` (`is_test`, no
+  case/provider), so a sandbox run can never pollute form-drift. **"Clear
+  portal form" is sandbox-only** — it resets every control on the page, which
+  on a live case would wipe a coordinator's real typing — and reports what it
+  actually changed, so an already-empty form reads "nothing to clear" rather
+  than a fake success. `renderSandboxBar` hides `#case-fill` wholesale (the
+  same one-container rule as `renderModeSurfaces`); `#portal-status` sits
+  OUTSIDE it, because a sandbox fill needs to know whether this page is a
+  portal every bit as much as a real one does.
+- **Sandbox state must be cleared on every REAL selection, not just Exit
+  (review fix, 2026-08-20).** `sandboxActive` used to be flipped false ONLY by
+  the Exit button, so picking a real case or provider while the sandbox was up
+  left the sandbox bar showing (hiding the real Fill button) and let "Sandbox
+  fill" run against whatever real, non-designated provider had since loaded —
+  a fill with no case attribution and no `is_test_provider` check of its own.
+  Fixed at BOTH layers, deliberately, since neither alone is enough: (1) the
+  panel now clears `sandboxActive` inside `clearSandboxOnRealSelection`,
+  called unconditionally from every funnel a real selection goes through
+  (`applyCaseChoice`, `selectCaseInPanel`, `selectProviderInPanel`) plus
+  org-switch and sign-out; `enterSandbox` sets `sandboxActive = true` only
+  AFTER its own call into `selectProviderInPanel` resolves, so entering the
+  sandbox doesn't immediately clobber itself. (2) the WORKER's `SANDBOX_FILL`
+  handler (`src/background/index.ts`) re-checks the roster's own
+  `is_test_provider` flag against the request's `providerId` before doing
+  anything else — a stale panel is not the only caller that could send a real
+  id, so the fill is refused server-of-truth-side regardless of what the panel
+  believed. Pinned in `src/harness/workbench.test.ts` (a real, non-designated
+  provider is refused before any tab message is sent; the designated sandbox
+  provider still fills) against a new `FIXTURES.SANDBOX_PROVIDER_ID` roster row.
+  **`CLEAR_PORTAL_FORM` carries the same guard** (`assertSandboxProvider`,
+  shared with `SANDBOX_FILL`): its message widened to carry `providerId`, and
+  the worker refuses to clear anything unless that id really is the
+  designated sandbox provider — resetting every control on a REAL case's form
+  would wipe a coordinator's live typing, the same blast radius as filling
+  one with the wrong data. The message comment previously CLAIMED this guard
+  existed when it did not (review nit); it now does.
+- **A list read that renders must never trust an `ok` envelope's `data`.**
+  `loadSharedRegistry` assigned `response.data` straight to the shared-portal
+  rows, and `renderTrainPayers` iterates it DURING render — so a null `data`
+  (a shape the wire permits) threw `for (… of null)` and took the WHOLE panel
+  down, not just the payer select. Now coerced with `Array.isArray(…) ? … :
+[]`, which degrades to an honest "no payers". Caught only by driving the
+  built panel in a browser; no unit test would have seen it.
+- **Scanner fixes shipped with it (2026-08-19), all three reproduced first.**
+  (1) The no-id/no-name fallback selector `tag:nth-of-type(queryIndex)` mixed
+  a document-wide query index with a sibling-scoped pseudo-class and resolved
+  to ZERO elements — replaced by a real `:nth-child()` path anchored at the
+  nearest id-bearing ancestor. (2) A radio group was named after whichever
+  option came first; `radioGroupLabel` now prefers the group's QUESTION
+  (fieldset legend / `[role=radiogroup]` aria) and the options keep their own
+  text. (3) A control the form wires no label for captured nameless;
+  `nearbyLabel` adopts a short preceding caption, never crossing into a
+  sibling that owns its own control, and never past 120 chars (prose is not a
+  label). Name-based selectors now carry the input TYPE too.
 - **Capture is per PAGE (E6.9 F6.9.8 / BITE-CAP-05).** The side panel sends a
   collision-free `pageStep` candidate from `derivePageStep` (heading → URL
   tail → capture sequence); the background names the page AFTER the scan via
@@ -284,7 +447,12 @@ portalUrl, portalKey?, facilityId? }` through
   to a template or task.
 - **Case selection is REQUIRED before fill** (locked decision) — via the
   E4.3 handoff, the unified search, the active-cases list, the NBA handback,
-  or the manual picker; all funnel into the same active-case state.
+  or the manual picker; all funnel into the same active-case state. **The
+  sandbox is the one deliberate exception (US-5, 2026-08-20)** and it does not
+  weaken the rule it excepts: the rule exists so a fill is always attributable
+  to a case, and a sandbox fill is attributable to NO case by construction —
+  it writes no touch, moves no status, and logs through the `is_test`
+  shared-test-fill route that carries neither a case nor a provider.
 - **Write boundary (widened 2026-07-28, supersedes the E4.3 R6 read-only
   posture — panel-first coordinated change, both repos in one session):** the
   sanctioned writes are the manual touch POST (both kinds; a
@@ -293,10 +461,11 @@ portalUrl, portalKey?, facilityId? }` through
   `set_case_status`, evidenced by the touch; the outcome rides
   `meta.status_bump`, a skipped bump is reported, never silent), the
   user-scoped layout PUT, the PROPOSE-ONLY field-map POST (never an
-  approval), and the CAQH attestation POST
-  (`/api/providers/:id/caqh-attestation`). Still NO task-state writes, no
-  mapping approvals, no auto-submit, no auto-touch, no IMPLICIT status
-  change.
+  approval), the CAQH attestation POST
+  (`/api/providers/:id/caqh-attestation`), and the US-5 sandbox's `is_test`
+  shared-test-fill log (no case, no provider, excluded from form-drift).
+  Still NO task-state writes, no mapping approvals, no auto-submit, no
+  auto-touch, no IMPLICIT status change.
 - **Never fill from expired context:** the active-case record expires on
   bound-tab close or 60 minutes idle; the panel closes the gate AND the
   worker refuses the FILL. Expiry/absence/mismatch are explicit UX states,

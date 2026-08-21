@@ -13,6 +13,12 @@ export interface MatchedPortal {
   key: string;
   label: string;
   formUrl: string | null;
+  /** The payer this form belongs to, when the registry names one. Carried so
+   * the panel can hand a finished capture straight to that payer's template
+   * editor in the web app, which is where mapping actually happens (D18) —
+   * naming the destination without a way to reach it is where the trainer's
+   * loop was ending. Null for a registry row with no payer. */
+  payerId: string | null;
   // A dry-run proved this form (S4.1 PROVEN chip).
   proven: boolean;
   verified: boolean;
@@ -32,6 +38,7 @@ export function toMatchedPortal(row: PortalRegistryRow): MatchedPortal {
     key: row.portalKey,
     label: row.name,
     formUrl: row.formUrl,
+    payerId: row.payerId,
     proven: row.provenAt != null,
     verified: row.isVerified,
   };

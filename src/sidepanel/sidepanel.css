@@ -547,6 +547,31 @@ button.link:hover {
   color: var(--mp-ink-600);
 }
 
+/* US-5 — sandbox chrome. Deliberately unlike a normal card: a dashed amber
+   frame says "this is a test rig", so nobody mistakes a sandbox fill for
+   work that landed on a case. */
+.sandbox-bar {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  background: #fffbeb;
+  border: 1px dashed #f59e0b;
+  border-radius: var(--mp-r-ctl);
+}
+
+.sandbox-bar-title {
+  margin: 0 0 2px;
+  font: 600 12px/1.4 var(--mp-font);
+  color: #92400e;
+}
+
+.sandbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* Portal detection banner: neutral by default, mint when a supported form is
    in the active tab (class toggled beside the existing status text). */
 .banner {
@@ -1305,6 +1330,14 @@ button.link:hover {
   white-space: nowrap;
 }
 
+/* US-5.1 — the sandbox is pinned above results and never depends on a query,
+   so it needs a border of its own to read as a fixture rather than a hit. */
+.sandbox-row {
+  margin-top: 6px;
+  border: 1px dashed var(--mp-line-100);
+  border-radius: var(--mp-radius-control);
+}
+
 .search-empty {
   margin: 0;
   padding: 6px 10px 8px;
@@ -1925,6 +1958,80 @@ button.link:hover {
   font-size: 11px;
   color: var(--mp-primary);
 }
+/* 2026-08-19 manual mapping: the inline per-row correction panel, the pick
+   status line, and the "added by hand" affordances. */
+.capture-row-edit {
+  flex: none;
+  font-size: 11px;
+}
+.capture-row-editor {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--mp-line-100);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.capture-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+.capture-editor-field input,
+.capture-editor-field select {
+  font-size: 12px;
+}
+.capture-editor-selector {
+  margin: 0;
+  font-size: 10px;
+  color: var(--mp-ink-secondary);
+  overflow-wrap: anywhere;
+}
+.capture-editor-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--mp-ink-secondary);
+}
+/* A selector that matches 0 or several controls is a real problem with the
+   mapping, so it reads as one rather than as a neutral note. */
+.capture-editor-warn {
+  margin: 0;
+  font-size: 11px;
+  color: #92400e;
+}
+.capture-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.capture-pick-status {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--mp-primary);
+}
+.capture-pick-status.capture-editor-warn {
+  color: #92400e;
+}
+/* US-3.3 — the batch bar appears with the first selection, so an un-selected
+   list carries no extra chrome. */
+.capture-row-tick {
+  flex: none;
+  margin: 0;
+}
+.capture-batch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 5px 8px;
+  border-radius: var(--mp-radius-control);
+  background: var(--mp-cream-100);
+  font-size: 11px;
+}
+
 .capture-actions {
   display: flex;
   align-items: center;

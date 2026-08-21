@@ -130,6 +130,11 @@
               </button>
             </div>
             <p id="mock-dry-run-status" class="btn-note" hidden></p>
+            <!-- BITE-TRAIN-02: the dry run already knows WHICH field failed
+                 and why; the counts alone sent the trainer back to the page
+                 to guess. -->
+            <div id="mock-dry-run-skipped" hidden></div>
+            <div id="mock-dry-run-gaps" hidden></div>
             <p class="btn-note">
               Review the filled form after a successful dry run before marking it proven.
             </p>
@@ -148,9 +153,25 @@
                 <button id="capture-next-page" class="link" type="button" hidden>
                   Capture next page
                 </button>
+                <!-- 2026-08-19: a scan only sees what is rendered AND wired at
+                     the moment it runs, so a field revealed by an earlier
+                     answer is legitimately missed. This adds it by hand. -->
+                <button id="capture-add-field" class="link" type="button" hidden>
+                  + Add field
+                </button>
               </div>
             </div>
             <p id="capture-restored" class="capture-restored" hidden></p>
+            <p id="capture-pick-status" class="capture-pick-status" hidden></p>
+            <!-- US-3.3: appears on the first selection, so an un-selected list
+                 carries no extra chrome. -->
+            <div id="capture-batch" class="capture-batch" hidden>
+              <span id="capture-batch-count"></span>
+              <button id="capture-batch-delete" class="link" type="button">
+                Delete selected
+              </button>
+              <button id="capture-batch-clear" class="link" type="button">Clear</button>
+            </div>
             <div id="capture-rows" class="capture-rows"></div>
             <div id="capture-actions" class="capture-actions" hidden>
               <button id="capture-send" class="secondary" type="button">
@@ -189,6 +210,19 @@
               Type at least 2 characters. Pick a result to open it in Work
               cases.
             </p>
+            <!-- US-5.1: the sandbox is pinned above results and does not
+                 depend on a query — it is a permanent way in, not a search
+                 hit. Hidden when the org has designated no test provider. -->
+            <button
+              id="sandbox-entry"
+              class="search-row sandbox-row"
+              type="button"
+              hidden
+            >
+              <span class="search-row-title">🧪 Sandbox test profile</span>
+              <span id="sandbox-entry-meta" class="search-row-meta"></span>
+            </button>
+            <p id="sandbox-unavailable" class="btn-note" hidden></p>
             <div id="search-results" class="search-results" hidden></div>
           </div>
         </div>
@@ -297,6 +331,38 @@
               <div id="facility-address" class="facility-address" hidden></div>
             </div>
 
+            <!-- Portal recognition is NOT case-scoped, so it sits above the
+                 case block: a sandbox fill needs to know whether this page is
+                 a portal every bit as much as a real fill does. -->
+            <p id="portal-status" class="banner"></p>
+
+            <!-- US-5: sandbox chrome, beside the location picker it shares
+                 with a real fill. Only rendered while the sandbox profile is
+                 active, which is also the only way to reach Clear portal
+                 form — on a live case it would wipe real typing. -->
+            <div id="sandbox-bar" class="sandbox-bar" hidden>
+              <p class="sandbox-bar-title">
+                🧪 Sandbox — no case, nothing logged to a case
+              </p>
+              <p id="sandbox-bar-note" class="btn-note"></p>
+              <div class="sandbox-actions">
+                <button id="sandbox-fill" class="primary" type="button">
+                  Run sandbox fill
+                </button>
+                <button id="sandbox-clear" class="secondary" type="button">
+                  Clear portal form
+                </button>
+                <button id="sandbox-exit" class="link" type="button">
+                  Leave sandbox
+                </button>
+              </div>
+              <p id="sandbox-status" class="btn-note" hidden></p>
+            </div>
+
+            <!-- Everything case-scoped. Hidden wholesale in the sandbox, which
+                 has no case by design — the same one-container rule
+                 renderModeSurfaces uses, for the same reason. -->
+            <div id="case-fill">
             <div class="field">
               <div class="label-row">
                 <label for="case-select" id="case-label">Case</label>
@@ -307,8 +373,6 @@
             </div>
 
             <div id="case-context" class="case-context" hidden></div>
-
-            <p id="portal-status" class="banner"></p>
 
             <!-- S4.2: the duplicate-work guard fires on PICKUP, above the offer
                  — never blocking, dismissible, with a link into the touchlog. -->
@@ -466,6 +530,8 @@
             </div>
 
             <div id="nba-section" class="nba" hidden></div>
+            </div>
+            <!-- /#case-fill -->
           </div>
         </div>
         <!-- /#case-work -->
