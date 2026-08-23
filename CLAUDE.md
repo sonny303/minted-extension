@@ -39,13 +39,13 @@ An eslint rule enforces the boundary: only `src/background/` may import
 `@supabase/supabase-js`. Builds: `vite.config.ts` (panel + background) and
 `vite.content.config.ts` (content script — content scripts can't be ESM).
 
-## Commands (all verified passing 2026-08-20, clean clone + `npm ci`)
+## Commands (all verified passing 2026-08-23, clean clone + `npm ci`)
 
 - `npm run build` — panel/background then content builds; `dist/` = loadable
   unpacked extension
 - `npm run typecheck` — `tsc --noEmit`, clean
 - `npm run lint` — `eslint .`, clean
-- `npm run test` — vitest; 26 files, 336 tests, all pass (includes the TE-10
+- `npm run test` — vitest; 29 files, 387 tests, all pass (includes the TE-10
   mock harness: `src/harness/workbench.test.ts` drives the real background
   modules against `scripts/mock-panel-api.mjs`, an in-repo mirror of the
   panel /api contract — CI never touches a real portal or the real panel)
