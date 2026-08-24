@@ -356,6 +356,21 @@ than a fake success.
 - **`PICK_ELEMENT` is the one async `ContentRequest`** (its listener returns
   true). `MATCH_SELECTOR` backs "Re-test on page".
 
+## Skills reference
+
+Recipes live in `.claude/skills/` rather than here — this file stays facts,
+they carry procedure:
+
+- **`chrome-extension-minted`** — MV3 architecture, worker/side-panel/content
+  messaging, the write boundary, and the common MV3 bugs.
+- **`chrome-devtools-minted`** — DevTools debugging: form state, `/api`
+  requests, both extension consoles, slow renders.
+- **`adhd`** — output shaping for the human reading the session.
+
+The panel repo (`sonny303/mintedpanel`) carries the same three plus
+`supabase-migrations`, `api-isolation-gate`, `e2e-harness`, and
+`minted-m3-audit`; attach both repos for cross-repo work.
+
 ## Keep this file honest
 
 At the end of a session that changes this repo: update what went stale (new
