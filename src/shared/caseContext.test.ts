@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   caseContextHasContent,
+  facilityAddressLines,
+  facilityPickerScope,
   resolveCaseFacilitySelection,
 } from "./caseContext";
 import type { CaseContext } from "./apiTypes";
@@ -130,5 +132,73 @@ describe("resolveCaseFacilitySelection", () => {
       currentFacilityId: "fac-2",
     });
     expect(result).toEqual({ apply: false });
+  });
+});
+
+describe("facilityPickerScope (E1.5)", () => {
+  const provider = [
+    { id: "fac-1", name: "Main Clinic" },
+    { id: "fac-2", name: "Satellite Office" },
+    { id: "fac-3", name: "Third Site" },
+  ];
+
+  it("scopes to the case's own locations when it has any", () => {
+    const caseFacilities = [
+      { id: "fac-2", name: "Satellite Office" },
+      { id: "fac-1", name: "Main Clinic" },
+    ];
+    expect(facilityPickerScope(caseFacilities, provider)).toEqual(caseFacilities);
+  });
+
+  it("falls back to the provider's full set when the case has none", () => {
+    expect(facilityPickerScope([], provider)).toBe(provider);
+    expect(facilityPickerScope(undefined, provider)).toBe(provider);
+  });
+
+  it("filters out a case location the provider's CURRENT set no longer carries", () => {
+    const caseFacilities = [
+      { id: "fac-1", name: "Main Clinic" },
+      { id: "fac-stale", name: "Since Unassigned" },
+    ];
+    expect(facilityPickerScope(caseFacilities, provider)).toEqual([
+      { id: "fac-1", name: "Main Clinic" },
+    ]);
+  });
+
+  it("falls back to the provider's full set rather than showing zero locations when NONE of the case's intersect", () => {
+    const caseFacilities = [{ id: "fac-stale", name: "Since Unassigned" }];
+    expect(facilityPickerScope(caseFacilities, provider)).toBe(provider);
+  });
+});
+
+describe("facilityAddressLines (E1.5)", () => {
+  it("joins street+suite and city/state/zip into two lines", () => {
+    expect(
+      facilityAddressLines({
+        street: "100 Main St",
+        suite: "Ste 2",
+        city: "Wichita",
+        state: "KS",
+        zip: "67202",
+      }),
+    ).toEqual(["100 Main St, Ste 2", "Wichita, KS 67202"]);
+  });
+
+  it("collapses a missing suite/state/zip without a stray comma", () => {
+    expect(
+      facilityAddressLines({
+        street: "100 Main St",
+        suite: null,
+        city: "Wichita",
+        state: null,
+        zip: null,
+      }),
+    ).toEqual(["100 Main St", "Wichita"]);
+  });
+
+  it("returns [] for a facility with no address fields at all", () => {
+    expect(facilityAddressLines({})).toEqual([]);
+    expect(facilityAddressLines(null)).toEqual([]);
+    expect(facilityAddressLines(undefined)).toEqual([]);
   });
 });

@@ -52,6 +52,8 @@ import {
 } from "../shared/quickCards";
 import {
   caseContextHasContent,
+  facilityAddressLines,
+  facilityPickerScope,
   resolveCaseFacilitySelection,
 } from "../shared/caseContext";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
@@ -187,6 +189,9 @@ const providerBarSwitch = el<HTMLButtonElement>("provider-bar-switch");
 const facilitySelect = el<HTMLSelectElement>("facility-select");
 const facilityHint = el<HTMLElement>("facility-hint");
 const facilityAddress = el<HTMLElement>("facility-address");
+// E1.5 — every location the SELECTED CASE has on file (facility-select stays
+// the one fill-target picker; this is read-only context beside it).
+const caseLocationsList = el<HTMLElement>("case-locations-list");
 const mainError = el<HTMLElement>("main-error");
 const providerCard = el<HTMLElement>("provider-card");
 const providerName = el<HTMLElement>("provider-name");
@@ -1240,6 +1245,13 @@ function stepList(
 function renderCaseContext(context: CaseContext | null): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
+  // E1.5 — rescope #facility-select to this case's own locations (or widen
+  // back to the provider's full set) BEFORE maybeApplyCaseFacility runs, so
+  // the case's primary has an <option> to land on. Independent of the
+  // hasContent gate below (a "quiet" case's location still matters) and of
+  // the render list, which is purely cosmetic beside it.
+  rescopeFacilitySelectOptions();
+  renderCaseLocations(context);
   // B1.2: location adoption must never be gated on whether the card has
   // anything to SHOW — a freshly generated case with no note/touch/tasks/
   // pipeline/refs yet ("quiet") still has its own selectedFacility, and that
@@ -1967,14 +1979,7 @@ async function restoreFillReport(
 function renderFacilityAddress(): void {
   const facility =
     facilities.find((f) => f.id === selectedFacilityId()) ?? null;
-  const street = [facility?.street, facility?.suite].filter(Boolean).join(", ");
-  const locality = [
-    facility?.city,
-    [facility?.state, facility?.zip].filter(Boolean).join(" "),
-  ]
-    .filter(Boolean)
-    .join(", ");
-  const lines = [street, locality].filter(Boolean);
+  const lines = facilityAddressLines(facility);
   facilityAddress.hidden = lines.length === 0;
   facilityAddress.replaceChildren();
   for (const line of lines) {
@@ -1982,6 +1987,102 @@ function renderFacilityAddress(): void {
     row.textContent = line;
     facilityAddress.append(row);
   }
+}
+
+// E1.5 — every location the selected CASE has on file (context.facilities),
+// primary badged. Read-only context beside the Location picker, which stays
+// the ONE fill-target control. No new chrome for the common case: hidden
+// entirely with 0 or 1 case location (a lone location is already what the
+// select and the address box above show — this list only earns its place
+// once there is more than one to disambiguate).
+function renderCaseLocations(context: CaseContext | null): void {
+  const locations = context?.facilities ?? [];
+  caseLocationsList.replaceChildren();
+  if (locations.length < 2) {
+    caseLocationsList.hidden = true;
+    return;
+  }
+  for (const loc of locations) {
+    const li = document.createElement("li");
+    li.className = "case-locations-row";
+    const name = document.createElement("span");
+    name.className = "case-locations-name";
+    name.textContent = loc.name || "Location";
+    li.append(name);
+    if (loc.isPrimary) {
+      const badge = document.createElement("span");
+      badge.className = "pill pill-blue";
+      badge.textContent = "Primary";
+      li.append(badge);
+    }
+    const addressLine = facilityAddressLines(loc).join(" · ");
+    if (addressLine) {
+      const address = document.createElement("span");
+      address.className = "case-locations-address";
+      address.textContent = addressLine;
+      li.append(address);
+    }
+    caseLocationsList.append(li);
+  }
+  caseLocationsList.hidden = false;
+}
+
+// E1.5 — rescopes #facility-select's populated OPTIONS to the case's own
+// location set (facilityPickerScope, src/shared/caseContext.ts) whenever one
+// is known, falling back to the provider's full assigned set otherwise —
+// which is also what this is a no-op over when facilities aren't loaded yet,
+// or the case carries none (today's loadFacilities-built options, untouched).
+// Never performs a network call: it only rebuilds DOM from what's already in
+// hand, preserving the CURRENT selection when it's still a member of the new
+// scope (both a narrow — the case's own scope is always a subset of the
+// provider's loaded set — and a widen-back, e.g. switching off a
+// multi-location case, keep whatever was picked). maybeApplyCaseFacility,
+// which runs right after every call site, is what actually PICKS the case's
+// primary when nothing is picked yet — this function only makes sure the
+// right <option> exists for it to land on.
+function rescopeFacilitySelectOptions(): void {
+  if (!facilitiesLoaded) return;
+  const scope = facilityPickerScope(caseContextData?.facilities, facilities);
+  const scopeIds = new Set(scope.map((f) => f.id));
+  const currentOptionIds = new Set(
+    Array.from(facilitySelect.options)
+      .map((o) => o.value)
+      .filter((v) => v !== ""),
+  );
+  if (
+    currentOptionIds.size === scopeIds.size &&
+    [...scopeIds].every((id) => currentOptionIds.has(id))
+  ) {
+    return; // already showing exactly this scope — nothing to rebuild
+  }
+  if (scope.length === 0) {
+    facilitySelect.replaceChildren(new Option("No locations on file", ""));
+    facilitySelect.disabled = true;
+    return;
+  }
+  const only = scope.length === 1 ? scope[0] : undefined;
+  if (only) {
+    facilitySelect.replaceChildren(
+      new Option(only.name || "Location", only.id, true, true),
+    );
+    facilitySelect.disabled = false;
+    return;
+  }
+  const currentId = selectedFacilityId();
+  const preselect = currentId != null && scopeIds.has(currentId) ? currentId : null;
+  facilitySelect.replaceChildren();
+  const placeholder = new Option(
+    "Select a location…",
+    "",
+    true,
+    preselect == null,
+  );
+  placeholder.disabled = true;
+  facilitySelect.add(placeholder);
+  for (const f of scope) {
+    facilitySelect.add(new Option(f.name || f.id, f.id, false, f.id === preselect));
+  }
+  facilitySelect.disabled = false;
 }
 
 // The provider's facility set, from the profile response. Exactly one:
@@ -2124,6 +2225,11 @@ async function loadFacilities(
     );
   }
   facilitySelect.disabled = false;
+  // E1.5 — covers the ordering where case context already arrived (a case was
+  // picked) before this facilities load completed: rescope down to it before
+  // the freshly-built full-provider-set options above get a pick applied
+  // over them. A no-op when no case (or a case with no locations) is in play.
+  rescopeFacilitySelectOptions();
   renderFacilityAddress();
   // E4.3: the case's explicit facility (from the context read) resolves the
   // pick when the user hasn't chosen one — the case selected it, not a guess.

@@ -593,6 +593,62 @@ describe("B1.2 — a quiet case still carries (and resolves) its own location", 
   });
 });
 
+// E1.5 — CASE3 (PROVIDER2, the two-facility provider from B1.4) doubles as
+// the E1.4 multi-location fixture: its context.facilities carries BOTH of
+// PROVIDER2's assigned locations, primary marked, so the Workbench can list
+// every location while still filling exactly one at a time. The DOM list and
+// the #facility-select rescope have no unit surface here (main.ts — see
+// panelMarkup.test.ts, plus facilityPickerScope/facilityAddressLines's own
+// pure-logic coverage in src/shared/caseContext.test.ts); this pins the
+// WIRE-level guarantee those functions consume: the served shape, and that
+// picking either of a case's two locations really does resolve DIFFERENT
+// facility tokens (not the same one twice).
+describe("E1.5 — a multi-location case's context carries every location, primary marked", () => {
+  it("CASE3's context.facilities holds BOTH of PROVIDER2's locations, primary first", async () => {
+    const context = await getCaseContext(FIXTURES.CASE3_ID);
+    expect(context.facilities?.map((f) => ({ id: f.id, isPrimary: f.isPrimary }))).toEqual([
+      { id: FIXTURES.FACILITY_ID, isPrimary: true },
+      { id: FIXTURES.FACILITY2_ID, isPrimary: false },
+    ]);
+    // selectedFacility is the UNCHANGED primary mirror — still the same id.
+    expect(context.selectedFacility?.id).toBe(FIXTURES.FACILITY_ID);
+  });
+
+  it("switching the fill target between the case's two locations re-resolves DIFFERENT facility.* tokens", async () => {
+    const context = await getCaseContext(FIXTURES.CASE3_ID);
+    const [primary, secondary] = context.facilities ?? [];
+    expect(primary).toBeDefined();
+    expect(secondary).toBeDefined();
+
+    const { profile: primaryProfile } = await getProviderProfile(FIXTURES.PROVIDER2_ID, {
+      facilityId: primary!.id,
+      state: context.state,
+    });
+    const { profile: secondaryProfile } = await getProviderProfile(FIXTURES.PROVIDER2_ID, {
+      facilityId: secondary!.id,
+      state: context.state,
+    });
+    const nameOf = (p: typeof primaryProfile) =>
+      p.tokens.find((t) => t.token === "facility.name")?.value;
+    expect(nameOf(primaryProfile)).toBe("Fitness Physio - Leavenworth");
+    expect(nameOf(secondaryProfile)).toBe("Fitness Physio - Lee's Summit");
+    expect(nameOf(primaryProfile)).not.toBe(nameOf(secondaryProfile));
+  });
+
+  it("a single-location case's facilities holds exactly its one primary location — every existing single-location shape is untouched", async () => {
+    const context = await getCaseContext(FIXTURES.CASE_ID);
+    expect(context.facilities).toEqual([
+      expect.objectContaining({ id: FIXTURES.FACILITY_ID, isPrimary: true }),
+    ]);
+  });
+
+  it("a case with no case_facilities rows carries an empty array (the common case — falls back to the provider's full set client-side, facilityPickerScope)", async () => {
+    const context = await getCaseContext(FIXTURES.CASE2_ID);
+    expect(context.facilities).toEqual([]);
+    expect(context.selectedFacility).toBeNull();
+  });
+});
+
 // B1.3 — the race the retry path guards against: concurrent requests for two
 // different providers must never cross-contaminate a response. This is the
 // wire-level guarantee main.ts's generation/provider/facility guards rely on;

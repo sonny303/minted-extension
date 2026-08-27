@@ -90,3 +90,59 @@ export function resolveCaseFacilitySelection(
     alreadyCurrent: input.currentFacilityId === facility.id,
   };
 }
+
+// E1.5 — which set of facilities backs the #facility-select fill-target
+// picker. Minimal shape so this works against both CaseContextFacility
+// (context.facilities) and ProviderProfileFacility (the provider's loaded
+// set) without importing either — the caller decides what T/P actually are.
+export interface FacilityPickerOption {
+  id: string;
+  name: string;
+}
+
+/**
+ * The CASE's own location set scopes the picker when it has any — filtered
+ * to ids the provider's CURRENTLY loaded set still carries, so a location the
+ * provider was since unassigned from is never offered as if it still were.
+ * Falls back to the provider's full assigned set when the case carries none
+ * (most cases today: case_facilities is additive since E1.1, so a case
+ * created before it — or one nobody has added a second location to — has
+ * zero rows despite having a perfectly good primary location on
+ * `credential_cases.facility_id`) OR when the case's locations don't
+ * intersect the provider's current set at all (never show "no locations" for
+ * a provider who plainly has some — the same "never force a phantom
+ * selection" posture `resolveCaseFacilitySelection` already takes).
+ */
+export function facilityPickerScope<
+  T extends FacilityPickerOption,
+  P extends FacilityPickerOption,
+>(caseFacilities: readonly T[] | undefined, providerFacilities: readonly P[]): readonly (T | P)[] {
+  if (caseFacilities != null && caseFacilities.length > 0) {
+    const providerIds = new Set(providerFacilities.map((f) => f.id));
+    const scoped = caseFacilities.filter((f) => providerIds.has(f.id));
+    if (scoped.length > 0) return scoped;
+  }
+  return providerFacilities;
+}
+
+// E1.5 — the two-line practice-address format shared by the Location
+// picker's address box (renderFacilityAddress) and the case-locations list,
+// so the two surfaces can never render address text differently. Blank
+// fields collapse (never a lone comma); no address fields at all yields [].
+export interface FacilityAddressLike {
+  street?: string | null;
+  suite?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}
+
+export function facilityAddressLines(
+  f: FacilityAddressLike | null | undefined,
+): string[] {
+  const street = [f?.street, f?.suite].filter(Boolean).join(", ");
+  const locality = [f?.city, [f?.state, f?.zip].filter(Boolean).join(" ")]
+    .filter(Boolean)
+    .join(", ");
+  return [street, locality].filter(Boolean);
+}

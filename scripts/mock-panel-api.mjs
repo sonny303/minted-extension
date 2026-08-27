@@ -417,6 +417,40 @@ const CASES = [
   },
 ];
 
+// E1.4/E1.5 — case_facilities: a case's full location set, mirroring the
+// panel's case_facilities table (context.facilities). CASE_ID keeps the
+// single-location shape every existing test assumes (one row, primary,
+// matching its facilityId above); CASE2_ID carries none — most cases today,
+// since case_facilities is additive and a case predating it (or one nobody
+// has added a second location to) has zero rows despite a perfectly good
+// primary on the legacy facilityId. CASE3_ID (PROVIDER2, the two-facility
+// provider from B1.4) is the E1.5 multi-location fixture: two rows, the SAME
+// facility its own facilityId/selectedFacility already names as primary, plus
+// its provider's OTHER assigned facility as a non-primary second location.
+const CASE_FACILITIES = {
+  [FIXTURES.CASE_ID]: [{ facilityId: FIXTURES.FACILITY_ID, isPrimary: true }],
+  [FIXTURES.CASE2_ID]: [],
+  [FIXTURES.CASE3_ID]: [
+    { facilityId: FIXTURES.FACILITY_ID, isPrimary: true },
+    { facilityId: FIXTURES.FACILITY2_ID, isPrimary: false },
+  ],
+};
+
+// Project a case's case_facilities rows the way the real server does:
+// primary first, then alphabetical by name, `isPrimary` riding each row.
+function caseFacilitiesFor(caseId) {
+  return (CASE_FACILITIES[caseId] ?? [])
+    .map((row) => {
+      const f = FACILITIES.find((x) => x.id === row.facilityId);
+      return f ? { ...f, isPrimary: row.isPrimary } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
 function fieldMapRow(id, portalKey, selector, token, overrides = {}) {
   return {
     id,
@@ -785,6 +819,8 @@ export async function createMockPanelApi(options = {}) {
           const facility = FACILITIES.find((f) => f.id === id);
           return facility ?? null;
         })(),
+        // E1.4 — the case's full location set; caseFacilitiesFor() above.
+        facilities: caseFacilitiesFor(c.id),
         openTasks: c.openTasks,
         latestNote: c.latestNote
           ? { content: c.latestNote.text, createdAt: c.latestNote.at, authorName: c.latestNote.author }
