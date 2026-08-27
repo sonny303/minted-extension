@@ -213,6 +213,42 @@ export function projectQuickCards(
   };
 }
 
+// B1.3: after a card render with a location selected, are any facility.*/
+// assignment.* fields STILL unresolved? Usually a dropped refresh — a
+// concurrent loadFacilities replaced the <select>'s options mid-flight and
+// tripped refreshFacilityCards's own provider/facility guard, discarding a
+// resolved response for good. The caller uses this to trigger exactly ONE
+// bounded re-read (never a loop) for the current provider+location; a
+// genuinely unassigned location legitimately stays unresolved after that
+// retry, which this same check can't (and shouldn't try to) distinguish from
+// the race — it only answers "is there still something to resolve".
+export function hasUnresolvedFacilityFields(cards: QuickCards): boolean {
+  return [...cards.type1Fields, ...cards.type2Fields].some(
+    (f) =>
+      f.value == null &&
+      (f.key.startsWith("facility.") || f.key.startsWith("assignment.")),
+  );
+}
+
+/** The pure gate behind maybeRetryFacilityCards: given what's CURRENTLY known
+ * (a location is selected, at least one facility exists, the last rendered
+ * cards) and whether this exact provider+location has already had its one
+ * retry, should the caller fire another GET_PROVIDER_FACILITIES read? The
+ * caller supplies providerId/facilityId (session/DOM-sourced, not this
+ * function's business) only to key `alreadyRetried` — everything this
+ * function judges is passed in explicitly, so the "never a loop" bound and
+ * the "never fires with zero locations" rule are both testable without a DOM. */
+export function shouldRetryFacilityCards(params: {
+  facilitiesLoaded: boolean;
+  facilityCount: number;
+  cards: QuickCards | null;
+  alreadyRetried: boolean;
+}): boolean {
+  if (!params.facilitiesLoaded || params.facilityCount === 0) return false;
+  if (params.cards == null || !hasUnresolvedFacilityFields(params.cards)) return false;
+  return !params.alreadyRetried;
+}
+
 /**
  * Order a picked field set the way the Edit-layout picker lists it
  * (2026-08-19).

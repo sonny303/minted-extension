@@ -149,11 +149,17 @@ export type BgRequest =
   // The provider's facility set + the Quick Cards projection, from ONE
   // audited profile read — the panel never receives the raw token payload.
   // Optional facilityId re-resolves facility.*/assignment.* tokens after the
-  // user (or case) picks a location among several.
+  // user (or case) picks a location among several. Optional state (B1.1,
+  // sourced the same way the fill path already does — selectedCaseState())
+  // resolves license.* the same read, when the case's state is already known
+  // — otherwise a provider with more than one state license stays "Not on
+  // file" until a later refetch. Both are the FIRST read's inputs, never a
+  // guess: an invalid facilityId still 404s server-side (never guessed past).
   | {
       type: "GET_PROVIDER_FACILITIES";
       providerId: string;
       facilityId?: string | null;
+      state?: string;
     }
   | { type: "GET_SELECTED_PROVIDER" }
   | { type: "SET_SELECTED_PROVIDER"; providerId: string | null }

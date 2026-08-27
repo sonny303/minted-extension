@@ -137,6 +137,10 @@ interface MockApi {
       }
     >;
     sharedOrgHeaders: Array<string | null>;
+    // B1.1/B1.4: every request the mock handled, in order — so a test can
+    // assert exactly one /profile request went out, and what its query
+    // string carried.
+    requests: Array<{ method: string; path: string }>;
   };
   close(): Promise<void>;
 }
@@ -477,6 +481,145 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     // The fixture license expires 20 days out — inside the amber window.
     expect(cards.license.expiry).toBe("expiring");
     expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+  });
+});
+
+// B1.1/B1.4 — a case whose location + state are known before the first read
+// resolves PRACTICE LOCATION / FACILITY ASSIGNMENT / STATE LICENSE in ONE
+// profile request, never a guessed facilityId, and never a second request
+// when nothing needed correcting.
+describe("B1.1/B1.4 — location + state resolve on the first profile read", () => {
+  it("GET_PROVIDER_FACILITIES forwards a known facilityId+state to exactly ONE profile request, and it resolves (no needs_facility)", async () => {
+    const { handleRequest } = await import("../background/index");
+    mock.state.requests.length = 0;
+    const info = (await handleRequest({
+      type: "GET_PROVIDER_FACILITIES",
+      providerId: FIXTURES.PROVIDER2_ID,
+      // Pat's NON-primary location — the one CASE3 points at.
+      facilityId: FIXTURES.FACILITY_ID,
+      state: "MO",
+    })) as import("../shared/messages").ProviderFacilitiesInfo;
+
+    const profileRequests = mock.state.requests.filter((r) =>
+      r.path.startsWith(`/api/providers/${FIXTURES.PROVIDER2_ID}/profile`),
+    );
+    expect(profileRequests).toHaveLength(1);
+    expect(profileRequests[0]!.path).toContain(`facilityId=${FIXTURES.FACILITY_ID}`);
+    expect(profileRequests[0]!.path).toContain("state=MO");
+    expect(info.needsFacility).toBe(false);
+    expect(info.facilities.map((f) => f.id)).toContain(FIXTURES.FACILITY_ID);
+  });
+
+  it("the location, its assignment, and the matching state license all resolve — not nulls", async () => {
+    const { profile } = await getProviderProfile(FIXTURES.PROVIDER2_ID, {
+      facilityId: FIXTURES.FACILITY_ID,
+      state: "MO",
+    });
+    const cards = projectQuickCards(
+      profile.tokens,
+      profile.unresolved,
+      {
+        fields: [
+          "facility.name",
+          "facility.street",
+          "facility.city",
+          "assignment.startDate",
+          "license.licenseNumber",
+          "license.state",
+        ],
+        source: "saved",
+      },
+      new Date().toISOString().slice(0, 10),
+    );
+    const value = (key: string) =>
+      cards.type1Fields.find((f) => f.key === key)?.value;
+    expect(value("facility.name")).toBe("Fitness Physio - Leavenworth");
+    expect(value("facility.street")).toBe("100 Main St");
+    expect(value("facility.city")).toBe("Leavenworth");
+    expect(value("assignment.startDate")).toBe("2023-05-01");
+    expect(value("license.licenseNumber")).toBe("MO-88888");
+    expect(value("license.state")).toBe("MO");
+  });
+
+  it("never guesses a facility for a provider with several locations and no known pick — needs_facility stays up, nothing resolves", async () => {
+    const { profile, meta } = await getProviderProfile(FIXTURES.PROVIDER2_ID);
+    expect(meta?.needs_facility).toBe(true);
+    const facilityName = profile.tokens.find((t) => t.token === "facility.name");
+    expect(facilityName?.value).toBeNull();
+    expect(profile.unresolved.some((u) => u.token === "facility.name")).toBe(true);
+  });
+
+  it("an unrecognized facilityId 404s rather than being guessed past", async () => {
+    await expect(
+      getProviderProfile(FIXTURES.PROVIDER2_ID, { facilityId: "00000000-0000-4000-8000-000000000000" }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("several state licenses with no matching state param stay unresolved, not guessed", async () => {
+    const { profile } = await getProviderProfile(FIXTURES.PROVIDER2_ID, {
+      facilityId: FIXTURES.FACILITY2_ID,
+    });
+    const licenseNumber = profile.tokens.find((t) => t.token === "license.licenseNumber");
+    expect(licenseNumber?.value).toBeNull();
+  });
+});
+
+// B1.2 — a "quiet" case context (no note/touch/tasks/pipeline/refs) carries
+// ONLY selectedFacility. This is the exact shape renderCaseContext's early
+// return used to skip past before applying the facility (main.ts has no unit
+// surface of its own — see panelMarkup.test.ts — so this pins the CONTRACT
+// the fix depends on: the shape is real, and resolving that facility's own
+// profile does populate the cards).
+describe("B1.2 — a quiet case still carries (and resolves) its own location", () => {
+  it("CASE3's context carries ONLY selectedFacility — no note/touch/tasks/pipeline/refs", async () => {
+    const context = await getCaseContext(FIXTURES.CASE3_ID);
+    expect(context.selectedFacility?.id).toBe(FIXTURES.FACILITY_ID);
+    expect(context.referenceNumbers).toEqual([]);
+    expect(context.latestNote).toBeNull();
+    expect(context.latestTouch).toBeNull();
+    expect(context.openTasks).toEqual([]);
+    expect(context.payerPipelineState).toBe("not_started");
+  });
+
+  it("adopting that quiet case's own facility resolves its cards", async () => {
+    const context = await getCaseContext(FIXTURES.CASE3_ID);
+    const facilityId = context.selectedFacility?.id as string;
+    const { profile } = await getProviderProfile(FIXTURES.PROVIDER2_ID, {
+      facilityId,
+      state: context.state,
+    });
+    const facilityName = profile.tokens.find((t) => t.token === "facility.name");
+    expect(facilityName?.value).toBe("Fitness Physio - Leavenworth");
+  });
+});
+
+// B1.3 — the race the retry path guards against: concurrent requests for two
+// different providers must never cross-contaminate a response. This is the
+// wire-level guarantee main.ts's generation/provider/facility guards rely on;
+// the DOM-side retry orchestration itself has no unit surface (main.ts —
+// see panelMarkup.test.ts), so shouldRetryFacilityCards (src/shared/
+// quickCards.ts) carries the retry DECISION's own unit coverage instead.
+describe("B1.3 — concurrent facility reads never cross-contaminate", () => {
+  it("two GET_PROVIDER_FACILITIES calls in flight together each resolve their OWN provider+facility", async () => {
+    const { handleRequest } = await import("../background/index");
+    const [a, b] = await Promise.all([
+      handleRequest({
+        type: "GET_PROVIDER_FACILITIES",
+        providerId: FIXTURES.PROVIDER_ID,
+        facilityId: FIXTURES.FACILITY_ID,
+      }) as Promise<import("../shared/messages").ProviderFacilitiesInfo>,
+      handleRequest({
+        type: "GET_PROVIDER_FACILITIES",
+        providerId: FIXTURES.PROVIDER2_ID,
+        facilityId: FIXTURES.FACILITY2_ID,
+        state: "KS",
+      }) as Promise<import("../shared/messages").ProviderFacilitiesInfo>,
+    ]);
+    expect(a.facilities.map((f) => f.id)).toEqual([FIXTURES.FACILITY_ID]);
+    expect(b.facilities.map((f) => f.id).sort()).toEqual(
+      [FIXTURES.FACILITY_ID, FIXTURES.FACILITY2_ID].sort(),
+    );
+    expect(b.needsFacility).toBe(false);
   });
 });
 

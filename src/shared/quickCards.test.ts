@@ -5,11 +5,13 @@ import type { ProfileToken, UnresolvedToken } from "./apiTypes";
 import {
   DEFAULT_QUICK_CARD_LAYOUT,
   expiryStatus,
+  hasUnresolvedFacilityFields,
   isType2Field,
   orderLayoutByCatalog,
   projectQuickCards,
   providerWebappPath,
   resolveLayout,
+  shouldRetryFacilityCards,
 } from "./quickCards";
 
 const TODAY = "2026-07-17";
@@ -222,5 +224,137 @@ describe("orderLayoutByCatalog", () => {
 
   it("survives an empty catalog by preserving the caller's order", () => {
     expect(orderLayoutByCatalog(["b", "a"], [])).toEqual(["b", "a"]);
+  });
+});
+
+// B1.3 — the bounded-retry trigger's detection half.
+describe("hasUnresolvedFacilityFields", () => {
+  const today = "2026-07-17";
+
+  it("is true when a facility.* field in the layout is still unresolved", () => {
+    const cards = projectQuickCards(
+      tokens, // carries no facility.*/assignment.* tokens at all
+      unresolved,
+      { fields: ["facility.name", "provider.npi"], source: "saved" },
+      today,
+    );
+    expect(hasUnresolvedFacilityFields(cards)).toBe(true);
+  });
+
+  it("is true when an assignment.* field is unresolved", () => {
+    const cards = projectQuickCards(
+      tokens,
+      unresolved,
+      { fields: ["assignment.startDate"], source: "saved" },
+      today,
+    );
+    expect(hasUnresolvedFacilityFields(cards)).toBe(true);
+  });
+
+  it("is false once facility.* resolves", () => {
+    const cards = projectQuickCards(
+      [...tokens, { token: "facility.name", value: "Fitness Physio - Leavenworth" }],
+      unresolved,
+      { fields: ["facility.name"], source: "saved" },
+      today,
+    );
+    expect(hasUnresolvedFacilityFields(cards)).toBe(false);
+  });
+
+  it("is false when the layout carries no facility.*/assignment.* fields — an unresolved provider.* gap is not this check's business", () => {
+    const cards = projectQuickCards(
+      tokens,
+      unresolved,
+      { fields: [...DEFAULT_QUICK_CARD_LAYOUT], source: "default" },
+      today,
+    );
+    // provider.caqhId IS unresolved here (that's the honest-empty test above),
+    // but it isn't a facility/assignment field, so this stays false.
+    expect(cards.type1Fields.some((f) => f.value == null)).toBe(true);
+    expect(hasUnresolvedFacilityFields(cards)).toBe(false);
+  });
+});
+
+// B1.3 — the bounded-retry decision, over explicit inputs (no DOM, no Set —
+// main.ts owns keying/firing; this owns whether to).
+describe("shouldRetryFacilityCards", () => {
+  const today = "2026-07-17";
+  const unresolvedFacilityCards = projectQuickCards(
+    tokens,
+    unresolved,
+    { fields: ["facility.name"], source: "saved" },
+    today,
+  );
+  const resolvedFacilityCards = projectQuickCards(
+    [...tokens, { token: "facility.name", value: "Fitness Physio - Leavenworth" }],
+    unresolved,
+    { fields: ["facility.name"], source: "saved" },
+    today,
+  );
+
+  it("fires on the first unresolved render with a location selected", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: true,
+        facilityCount: 2,
+        cards: unresolvedFacilityCards,
+        alreadyRetried: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("never fires a second time for the same provider+location (bounded, not a loop)", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: true,
+        facilityCount: 2,
+        cards: unresolvedFacilityCards,
+        alreadyRetried: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never fires once the cards are resolved", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: true,
+        facilityCount: 2,
+        cards: resolvedFacilityCards,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never fires for a provider with zero assigned locations", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: true,
+        facilityCount: 0,
+        cards: unresolvedFacilityCards,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never fires before the facility list has loaded", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: false,
+        facilityCount: 2,
+        cards: unresolvedFacilityCards,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("never fires with no cards rendered yet", () => {
+    expect(
+      shouldRetryFacilityCards({
+        facilitiesLoaded: true,
+        facilityCount: 2,
+        cards: null,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
   });
 });

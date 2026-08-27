@@ -46,9 +46,14 @@ import type { ActiveCaseRecord } from "../shared/handoff";
 import {
   orderLayoutByCatalog,
   providerWebappPath,
+  shouldRetryFacilityCards,
   type QuickCardField,
   type QuickCards,
 } from "../shared/quickCards";
+import {
+  caseContextHasContent,
+  resolveCaseFacilitySelection,
+} from "../shared/caseContext";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import {
   countBrokenSelectors,
@@ -655,6 +660,40 @@ function renderQuickCards(cards: QuickCards | null): void {
   // No fixed Malpractice row: those groupInsurance.* fields are ordinary
   // catalog fields now, so they render through the layout above like any
   // other (removed 2026-08-19 — see the note on the QuickCards type).
+
+  // B1.3: still unresolved after this render, with a location selected? One
+  // bounded re-read, never a loop — see maybeRetryFacilityCards.
+  maybeRetryFacilityCards();
+}
+
+// B1.3: a location is selected but facility.*/assignment.* tokens are still
+// unresolved after a card render — usually a dropped refresh (a concurrent
+// loadFacilities reset the <select>'s value mid-flight and tripped
+// refreshFacilityCards's own generation/provider/facility guard, discarding a
+// resolved response for good; see the guard comments there). Keyed by
+// provider+facility so this fires AT MOST ONCE per selection: a genuinely
+// unassigned location still ends on "Not on file" with the server's own
+// reason after that one retry, which is correct, not a bug to keep chasing.
+const retriedFacilityCards = new Set<string>();
+
+function maybeRetryFacilityCards(): void {
+  const providerId = selectedProviderId();
+  const facilityId = selectedFacilityId();
+  if (providerId == null || facilityId == null) return;
+  const key = `${providerId}|${facilityId}`;
+  // The gate itself is pure (src/shared/quickCards.ts, B1.3) — this function
+  // only supplies the live session state and fires the bounded retry.
+  if (
+    !shouldRetryFacilityCards({
+      facilitiesLoaded,
+      facilityCount: facilities.length,
+      cards: currentCards,
+      alreadyRetried: retriedFacilityCards.has(key),
+    })
+  )
+    return;
+  retriedFacilityCards.add(key);
+  void refreshFacilityCards(providerId, facilityId, loadGeneration);
 }
 
 function closeViewSettings(): void {
@@ -839,7 +878,16 @@ viewSettingsSave.addEventListener("click", () => {
       return;
     }
     closeViewSettings();
-    if (providerId) await loadFacilities(providerId, generation);
+    // The layout changed, not the selection — carry the current pick + case
+    // state along so this reload resolves in one request instead of losing
+    // and re-discovering what was already known (B1.1).
+    if (providerId) {
+      const state = selectedCaseState();
+      await loadFacilities(providerId, generation, {
+        facilityId: selectedFacilityId(),
+        ...(state ? { state } : {}),
+      });
+    }
   })();
 });
 
@@ -1033,36 +1081,32 @@ function maybeApplyCaseFacility(): void {
   // Wait for both the facility list and case context — clearing preferCaseFacility
   // here would race loadFacilities finishing before GET_CASE_CONTEXT returns.
   if (!facilitiesLoaded || caseContextData == null) return;
-  const facility = caseContextData.selectedFacility ?? null;
-  if (facility == null) {
-    preferCaseFacility = false;
-    return;
-  }
-  if (!facilities.some((f) => f.id === facility.id)) {
-    preferCaseFacility = false;
-    return;
-  }
-  const current = selectedFacilityId();
-  const shouldApply = preferCaseFacility || current == null;
+  // The decision itself is pure (src/shared/caseContext.ts, B1.2) — this
+  // function is only the DOM/network side effects of whatever it decides.
+  const decision = resolveCaseFacilitySelection({
+    selectedFacility: caseContextData.selectedFacility,
+    facilityIds: facilities.map((f) => f.id),
+    preferCaseFacility,
+    currentFacilityId: selectedFacilityId(),
+  });
   preferCaseFacility = false;
-  if (!shouldApply) return;
-  if (current === facility.id) {
+  if (!decision.apply) return;
+  const providerId = selectedProviderId();
+  if (decision.alreadyCurrent) {
     // Already on the case location — still re-resolve cards so PRACTICE
     // LOCATION isn't left "Not on file" from the needs_facility profile fetch.
-    const providerId = selectedProviderId();
     if (providerId)
-      void refreshFacilityCards(providerId, facility.id, loadGeneration);
+      void refreshFacilityCards(providerId, decision.facilityId, loadGeneration);
     return;
   }
-  facilitySelect.value = facility.id;
-  const providerId = selectedProviderId();
+  facilitySelect.value = decision.facilityId;
   if (providerId) {
     void sendToBackground({
       type: "SET_SELECTED_FACILITY",
       providerId,
-      facilityId: facility.id,
+      facilityId: decision.facilityId,
     });
-    void refreshFacilityCards(providerId, facility.id, loadGeneration);
+    void refreshFacilityCards(providerId, decision.facilityId, loadGeneration);
   }
   renderFacilityAddress();
   updateFillReady();
@@ -1071,27 +1115,49 @@ function maybeApplyCaseFacility(): void {
 /** Re-fetch the profile with a chosen facilityId so facility.* / assignment.*
  * quick-card tokens resolve. The initial multi-facility load intentionally
  * omits facilityId (server sets needs_facility); without this refresh the
- * PRACTICE LOCATION card stays "Not on file" even after a dropdown pick. */
+ * PRACTICE LOCATION card stays "Not on file" even after a dropdown pick.
+ * B1.1: the case's state (selectedCaseState() — the same source the fill path
+ * uses) rides along too, so a provider with several state licenses resolves
+ * the right one instead of staying ambiguous. */
 async function refreshFacilityCards(
   providerId: string,
   facilityId: string,
   generation: number,
 ): Promise<void> {
+  const state = selectedCaseState();
   const response = await sendToBackground({
     type: "GET_PROVIDER_FACILITIES",
     providerId,
     facilityId,
+    ...(state ? { state } : {}),
   });
-  if (!isCurrent(generation)) return;
-  if (selectedProviderId() !== providerId) return;
-  if (selectedFacilityId() !== facilityId) return;
-  if (!response.ok) return;
-  needsFacility = response.data.needsFacility;
-  currentCatalog = response.data.catalog;
-  renderQuickCards(response.data.cards);
-  renderFacilityAddress();
-  renderIdentityGuard();
-  updateFillReady();
+  // Stale-response guards (generation/provider/facility all changed under us)
+  // still discard this response's DATA exactly as before — a superseded
+  // fetch must never paint the wrong provider's cards. B1.3 adds only a
+  // retry PATH, never removes this staleness protection: even when one of
+  // these trips, maybeRetryFacilityCards() below still runs and re-checks the
+  // CURRENT (post-race) selection on its own terms, live, rather than acting
+  // on anything this now-discarded response resolved.
+  if (
+    isCurrent(generation) &&
+    selectedProviderId() === providerId &&
+    selectedFacilityId() === facilityId &&
+    response.ok
+  ) {
+    needsFacility = response.data.needsFacility;
+    currentCatalog = response.data.catalog;
+    renderQuickCards(response.data.cards);
+    renderFacilityAddress();
+    renderIdentityGuard();
+    updateFillReady();
+  }
+  // B1.3: whether the response above was accepted or discarded, settle the
+  // CURRENT selection once more — a discarded response (the race this ticket
+  // targets: a concurrent loadFacilities reset the <select>'s value between
+  // this request and its response) must not leave facility.*/assignment.*
+  // stuck unresolved with nothing left to retry it. Bounded to one retry per
+  // provider+facility regardless of how many times this runs.
+  maybeRetryFacilityCards();
 }
 
 // Epic 3d + E4.3 TE-2: render the selected case's workbench context — identity
@@ -1174,21 +1240,21 @@ function stepList(
 function renderCaseContext(context: CaseContext | null): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
+  // B1.2: location adoption must never be gated on whether the card has
+  // anything to SHOW — a freshly generated case with no note/touch/tasks/
+  // pipeline/refs yet ("quiet") still has its own selectedFacility, and that
+  // must still get adopted. Run this before the hasContent early return,
+  // unconditionally (its own internal guards handle a null context safely).
+  maybeApplyCaseFacility();
   const refs = context?.referenceNumbers ?? [];
   const note = context?.latestNote ?? null;
   const touch = context?.latestTouch ?? null;
   const tasks = context?.openTasks ?? [];
   const pipeline = context?.payerPipelineState ?? null;
-  const hasContent =
-    refs.length > 0 ||
-    note != null ||
-    touch != null ||
-    tasks.length > 0 ||
-    pipeline != null;
+  const hasContent = caseContextHasContent(context);
   caseContextBox.hidden = context == null || !hasContent;
   renderIdentityGuard();
   if (context == null || !hasContent) return;
-  maybeApplyCaseFacility();
 
   // Pipeline state (E4.0): where the payer is, read-only.
   if (pipeline != null) {
@@ -1921,9 +1987,23 @@ function renderFacilityAddress(): void {
 // The provider's facility set, from the profile response. Exactly one:
 // auto-selected read-only (the server resolves it the same way). Several:
 // the user picks, remembered per provider and re-validated silently.
+//
+// B1.1: `known` carries a location/state the CALLER already has in hand —
+// a case-search row, an NBA item, a handoff payload, or a case already
+// selected in the dropdown — sourced the same way the fill path already
+// does (selectedCaseState()). When present, the FIRST GET_PROVIDER_FACILITIES
+// read carries it, so a case whose location is known resolves PRACTICE
+// LOCATION / FACILITY ASSIGNMENT / STATE LICENSE in that one request instead
+// of a second round trip. When the caller doesn't know a facility, the
+// provider's remembered pick (session-local, no network cost) is tried next
+// — but never guessed past a 404: the server 404s a facilityId that isn't a
+// live member of the provider's set (a remembered pick can go stale between
+// sessions), and that failure retries ONCE with it dropped rather than
+// taking the whole facility load down over it.
 async function loadFacilities(
   providerId: string,
   generation: number,
+  known: { facilityId?: string | null; state?: string } = {},
 ): Promise<void> {
   facilities = [];
   facilitiesLoaded = false;
@@ -1933,12 +2013,35 @@ async function loadFacilities(
   renderFacilityAddress();
   updateFillReady();
 
-  const response = await sendToBackground({
+  let speculativeFacilityId = known.facilityId ?? null;
+  if (speculativeFacilityId == null) {
+    const remembered = await sendToBackground({
+      type: "GET_SELECTED_FACILITY",
+      providerId,
+    });
+    if (!isCurrent(generation)) return;
+    if (remembered.ok && remembered.data != null) {
+      speculativeFacilityId = remembered.data;
+    }
+  }
+
+  let response = await sendToBackground({
     type: "GET_PROVIDER_FACILITIES",
     providerId,
+    ...(speculativeFacilityId ? { facilityId: speculativeFacilityId } : {}),
+    ...(known.state ? { state: known.state } : {}),
   });
   // A newer provider/org selection superseded this load — discard silently.
   if (!isCurrent(generation)) return;
+  if (!response.ok && speculativeFacilityId != null && response.code === 404) {
+    speculativeFacilityId = null;
+    response = await sendToBackground({
+      type: "GET_PROVIDER_FACILITIES",
+      providerId,
+      ...(known.state ? { state: known.state } : {}),
+    });
+    if (!isCurrent(generation)) return;
+  }
   if (!response.ok) {
     facilitySelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
@@ -1961,6 +2064,16 @@ async function loadFacilities(
     return;
   }
 
+  // The server accepted the speculative id above (response.ok), so if it's
+  // still a live member of this provider's set it's already proven — no
+  // second GET_SELECTED_FACILITY round trip needed to re-derive what this
+  // read just resolved.
+  const resolvedSpeculativeId =
+    speculativeFacilityId != null &&
+    facilities.some((f) => f.id === speculativeFacilityId)
+      ? speculativeFacilityId
+      : null;
+
   const sole = facilities.length === 1 ? facilities[0] : undefined;
   if (sole) {
     facilitySelect.replaceChildren(
@@ -1972,21 +2085,24 @@ async function loadFacilities(
     return;
   }
 
-  const remembered = await sendToBackground({
-    type: "GET_SELECTED_FACILITY",
-    providerId,
-  });
-  if (!isCurrent(generation)) return;
-  const rememberedId =
-    remembered.ok && facilities.some((f) => f.id === remembered.data)
-      ? remembered.data
-      : null;
-  if (remembered.ok && remembered.data != null && rememberedId == null) {
-    void sendToBackground({
-      type: "SET_SELECTED_FACILITY",
+  let rememberedId = resolvedSpeculativeId;
+  if (rememberedId == null) {
+    const remembered = await sendToBackground({
+      type: "GET_SELECTED_FACILITY",
       providerId,
-      facilityId: null,
     });
+    if (!isCurrent(generation)) return;
+    rememberedId =
+      remembered.ok && facilities.some((f) => f.id === remembered.data)
+        ? remembered.data
+        : null;
+    if (remembered.ok && remembered.data != null && rememberedId == null) {
+      void sendToBackground({
+        type: "SET_SELECTED_FACILITY",
+        providerId,
+        facilityId: null,
+      });
+    }
   }
   facilitySelect.replaceChildren();
   const placeholder = new Option(
@@ -2014,11 +2130,17 @@ async function loadFacilities(
   maybeApplyCaseFacility();
   renderIdentityGuard();
   updateFillReady();
-  // Multi-facility: the first profile fetch left facility.* unresolved. Once
-  // a location is selected (remembered pick, case facility, or sole — sole
-  // already resolved server-side), re-fetch so PRACTICE LOCATION populates.
+  // Multi-facility: a selection that ISN'T the id this read already resolved
+  // (the case's own facility, applied above, differing from the speculative
+  // pick — or a remembered pick the caller didn't already know) still needs a
+  // re-fetch so PRACTICE LOCATION/FACILITY ASSIGNMENT populate. When it IS the
+  // same id, this read already resolved it — no second profile request.
   const selectedId = selectedFacilityId();
-  if (selectedId != null && facilities.length > 1) {
+  if (
+    selectedId != null &&
+    facilities.length > 1 &&
+    selectedId !== resolvedSpeculativeId
+  ) {
     await refreshFacilityCards(providerId, selectedId, generation);
   }
 }
@@ -2882,6 +3004,13 @@ async function selectCaseInPanel(
   // stored pick against the real set). Also set from case-search rows that
   // carry facilityId so search → case defaults to the case's practice site.
   preferredFacilityId?: string | null,
+  // B1.1: the case's state, when the caller already has it (a case-search row
+  // or NBA item carries `state`) — threaded straight into the FIRST
+  // GET_PROVIDER_FACILITIES read so STATE LICENSE resolves without a second
+  // round trip. A handoff carries no state (not part of that locked payload),
+  // so this stays undefined there — the case-context read that follows fills
+  // it in via refreshFacilityCards once it lands.
+  preferredState?: string | null,
 ): Promise<void> {
   // Real case selection always wins over a leftover sandbox — see the note
   // on clearSandboxOnRealSelection.
@@ -2916,7 +3045,10 @@ async function selectCaseInPanel(
   renderProviderCard(providers.find((p) => p.id === providerId) ?? null);
   await Promise.all([
     loadCases(providerId, generation),
-    loadFacilities(providerId, generation),
+    loadFacilities(providerId, generation, {
+      facilityId: preferredFacilityId,
+      ...(preferredState ? { state: preferredState } : {}),
+    }),
   ]);
   if (recordEntry && isCurrent(generation)) await refreshActiveCase(false);
 }
@@ -2976,6 +3108,7 @@ function renderSearchResults(data: SearchResults): void {
             row.id,
             true,
             row.facilityId ?? null,
+            row.state,
           ),
         );
       });
@@ -3233,7 +3366,16 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   }
 
   appliedHandoffKey = key;
-  await selectCaseInPanel(record.providerId, record.caseId, false);
+  // B1.1: the same-org handoff path was dropping record.facilityId entirely
+  // (switchOrgForHandoff, just above, already threads it) — a launch from the
+  // webapp that named a location still had to wait for the case-context
+  // refresh to discover it. No state: not part of the locked handoff payload.
+  await selectCaseInPanel(
+    record.providerId,
+    record.caseId,
+    false,
+    record.facilityId,
+  );
   renderHandoffBanner();
 }
 
@@ -3437,7 +3579,10 @@ function queueRow(item: NextBestActionItem): HTMLElement {
 
   row.addEventListener("click", () => {
     queueSection.hidden = true;
-    void selectCaseInPanel(item.providerId, item.caseId, true);
+    // B1.1: the queue item already names the case's state — no facilityId on
+    // this row (NBA doesn't carry one), so the location still resolves via
+    // the case-context refresh once it lands.
+    void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
   });
   return row;
 }
@@ -3544,7 +3689,9 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
     work.textContent = "Work this case";
     work.addEventListener("click", () => {
       nbaSection.hidden = true;
-      void selectCaseInPanel(item.providerId, item.caseId, true);
+      // B1.1: same as the queue row — state rides along, no facilityId on
+      // this row.
+      void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
     });
     actions.append(work);
   }
