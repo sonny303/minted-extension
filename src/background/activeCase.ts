@@ -1,12 +1,7 @@
-// E4.3 F4.3.1 / TE-1 — the worker-owned active-case context: receipt of the
-// webapp's SET_ACTIVE_CASE handoff, the one stored record (last launch wins),
-// portal-tab binding, and the tab-close / 60-minute-idle expiry. All the pure
-// rules live in src/shared/handoff.ts; this module is the Chrome glue.
+// Worker-owned active-case state: handoff receipt, tab binding, expiry.
+// Pure rules live in src/shared/handoff.ts; this module handles Chrome storage.
 //
-// The record carries IDENTIFIERS + URL only (parseSetActiveCase drops
-// everything else), so chrome.storage.session stays PHI-free. Profile/token
-// values only ever flow through the audited /api reads, never through the
-// external message.
+// The stored record holds identifiers and URL only — no profile or token values.
 import { writePanelMode } from "./mode";
 import {
   isAllowedHandoffOrigin,

@@ -1,11 +1,6 @@
-// S5.2/S5.4 — capture: read the form's SHAPE off the page so an unknown
-// portal can become a known one.
-//
-// Boundary (the PHI gate, and the reason this file is short): it collects
-// LABELS, SELECTORS and CONTROL TYPES only. It never reads a control's VALUE,
-// never touches the page's data, and returns nothing that could carry a
-// provider's information. A captured field is "there is a box called NPI at
-// this selector", never "the box says 1234567890".
+// Form capture scan — reads labels, selectors, and control types only.
+// Never reads control values. A captured field is "there is an NPI box here",
+// not "the box contains 1234567890".
 import type { PortalFieldType } from "../shared/apiTypes";
 
 export interface CapturedField {

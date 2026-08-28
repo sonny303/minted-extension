@@ -383,15 +383,9 @@ let touchDraftId: string | null = null;
 let searchTimer: number | undefined;
 let searchSeq = 0;
 
-// Request-generation guard against stale async responses (fill-safety: a slow
-// response for provider A must never render A's cases or facilities under
-// provider B after a fast switch — that is a wrong-record-fill risk). Any
-// context switch that changes what the pickers should show — the initial /
-// restore load, org switch, provider switch, refresh, sign-out — bumps this
-// counter via bumpGeneration(). Every async loader captures the value at entry
-// and, after each await, discards its result (no module-state write, no DOM
-// rebuild) when a newer context has superseded it. The restore flow runs as a
-// single uninterrupted generation, so the guard never starves it.
+// Drop stale async results after a provider/org/case switch.
+// Each loader captures loadGeneration at start; after every await, discard
+// the result if a newer switch bumped the counter. Prevents wrong-record fills.
 let loadGeneration = 0;
 function bumpGeneration(): number {
   return ++loadGeneration;
@@ -413,10 +407,7 @@ function setError(box: HTMLElement, message: string | null): void {
   box.textContent = message ?? "";
 }
 
-// The selected provider (2026-08-19). It used to BE the retired dropdown's
-// value; now it is plain panel state, set by a search pick, a case pick, a
-// hand-off, or the worker's remembered selection on load. Every generation
-// guard around it is unchanged — only the storage moved.
+// Currently selected provider id (set by search, case pick, handoff, or restore).
 let selectedProvider: string | null = null;
 
 function selectedProviderId(): string | null {
@@ -666,19 +657,12 @@ function renderQuickCards(cards: QuickCards | null): void {
   // catalog fields now, so they render through the layout above like any
   // other (removed 2026-08-19 — see the note on the QuickCards type).
 
-  // B1.3: still unresolved after this render, with a location selected? One
-  // bounded re-read, never a loop — see maybeRetryFacilityCards.
+  // Location tokens still empty after render? Retry once (see maybeRetryFacilityCards).
   maybeRetryFacilityCards();
 }
 
-// B1.3: a location is selected but facility.*/assignment.* tokens are still
-// unresolved after a card render — usually a dropped refresh (a concurrent
-// loadFacilities reset the <select>'s value mid-flight and tripped
-// refreshFacilityCards's own generation/provider/facility guard, discarding a
-// resolved response for good; see the guard comments there). Keyed by
-// provider+facility so this fires AT MOST ONCE per selection: a genuinely
-// unassigned location still ends on "Not on file" with the server's own
-// reason after that one retry, which is correct, not a bug to keep chasing.
+// Retry facility cards once per provider+facility when location tokens stay unresolved.
+// Usually fixes a race where a concurrent facilities load discarded a good response.
 const retriedFacilityCards = new Set<string>();
 
 function maybeRetryFacilityCards(): void {
@@ -686,8 +670,7 @@ function maybeRetryFacilityCards(): void {
   const facilityId = selectedFacilityId();
   if (providerId == null || facilityId == null) return;
   const key = `${providerId}|${facilityId}`;
-  // The gate itself is pure (src/shared/quickCards.ts, B1.3) — this function
-  // only supplies the live session state and fires the bounded retry.
+  // Gate logic is in shouldRetryFacilityCards (shared/quickCards.ts).
   if (
     !shouldRetryFacilityCards({
       facilitiesLoaded,
@@ -1117,13 +1100,7 @@ function maybeApplyCaseFacility(): void {
   updateFillReady();
 }
 
-/** Re-fetch the profile with a chosen facilityId so facility.* / assignment.*
- * quick-card tokens resolve. The initial multi-facility load intentionally
- * omits facilityId (server sets needs_facility); without this refresh the
- * PRACTICE LOCATION card stays "Not on file" even after a dropdown pick.
- * B1.1: the case's state (selectedCaseState() — the same source the fill path
- * uses) rides along too, so a provider with several state licenses resolves
- * the right one instead of staying ambiguous. */
+/** Re-fetch profile for a facility pick so facility.* and assignment.* tokens resolve. */
 async function refreshFacilityCards(
   providerId: string,
   facilityId: string,
@@ -1136,13 +1113,7 @@ async function refreshFacilityCards(
     facilityId,
     ...(state ? { state } : {}),
   });
-  // Stale-response guards (generation/provider/facility all changed under us)
-  // still discard this response's DATA exactly as before — a superseded
-  // fetch must never paint the wrong provider's cards. B1.3 adds only a
-  // retry PATH, never removes this staleness protection: even when one of
-  // these trips, maybeRetryFacilityCards() below still runs and re-checks the
-  // CURRENT (post-race) selection on its own terms, live, rather than acting
-  // on anything this now-discarded response resolved.
+  // Discard stale responses — never paint another provider's cards.
   if (
     isCurrent(generation) &&
     selectedProviderId() === providerId &&
@@ -1156,16 +1127,11 @@ async function refreshFacilityCards(
     renderIdentityGuard();
     updateFillReady();
   }
-  // B1.3: whether the response above was accepted or discarded, settle the
-  // CURRENT selection once more — a discarded response (the race this ticket
-  // targets: a concurrent loadFacilities reset the <select>'s value between
-  // this request and its response) must not leave facility.*/assignment.*
-  // stuck unresolved with nothing left to retry it. Bounded to one retry per
-  // provider+facility regardless of how many times this runs.
+  // Retry once even if this response was discarded (concurrent load race).
   maybeRetryFacilityCards();
 }
 
-// Epic 3d + E4.3 TE-2: render the selected case's workbench context — identity
+// Render the selected case's workbench context (identity, pipeline, tasks, notes).
 // (provider/payer/state), pipeline state, tracking ID, open SOP tasks with
 // execution types, latest note and touch — as a read-only card. A null
 // argument (no case, an error, or nothing to show) hides the block. Purely
@@ -1648,10 +1614,8 @@ function gapActionLink(
   return link;
 }
 
-// "Can fill M of N mapped fields." plus one row per gap (label + reason + the
-// F4.3.3 fix action). A null argument hides the panel. The gap list is empty
-// (and CSS-collapsed) at full coverage. Read-only — no field values are shown,
-// only labels and reasons.
+// Coverage panel: "Can fill M of N mapped fields" plus one row per gap.
+// Read-only — labels and reasons only, never field values.
 function renderCoverage(coverage: FillCoverage | null): void {
   coveragePanel.hidden = coverage == null;
   if (coverage == null) {
@@ -3911,27 +3875,9 @@ const batchSelection = new Set<string>();
 // (switching provider or case leaves it, below).
 let sandboxActive = false;
 
-// S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
-// blank) is QUARANTINED as of 3M Slice 2, not deleted.
-//
-// The panel-side half of it — a `caqhGapRows: CaqhGap[]` that was only ever
-// `[]`, the row rendering that looped over it, the `#caqh-gaps` container and
-// its CSS — is REMOVED here. Nothing ever populated that array, so every one
-// of those branches was unreachable: the strip could not appear, and the code
-// read as shippable UI when it was a stub.
-//
-// What REMAINS, deliberately, is the finished and tested machinery the feature
-// would be rebuilt on: the pure `findCaqhGaps` reducer (shared/caqh.ts, with
-// its unit tests) and the PULL_CAQH_FIELD message + worker handler. Those are
-// correct; they just have no producer.
-//
-// The missing half is a PHI boundary decision, not an oversight: populating
-// gaps means reading VALUES off the CAQH page, whereas the S5.2 capture scan
-// reads form SHAPE only (labels and selectors, never values). Restoring the
-// strip means a value-reading content script and a real CAQH account to verify
-// against — a deliberate capability change, not a wiring task.
-//
-// The PUSH half of S6.2 (offer + attestation) is live and untouched.
+// CAQH exception strip UI is not shipped yet.
+// findCaqhGaps + PULL_CAQH_FIELD remain for a future value-reading path.
+// Capture is shape-only today; reading CAQH values would cross that boundary.
 
 // Date-only today for the pure CAQH module (it never reads a clock itself).
 function localToday(): string {
@@ -3941,9 +3887,7 @@ function localToday(): string {
 }
 
 function renderCapture(): void {
-  // Capture lives ONLY on Train forms (E6.9 two-job split). Work cases is the
-  // case workflow — never the field trainer. A leftover session from a prior
-  // Train visit stays in the worker but stays hidden here until Train is on.
+  // Capture UI is Train-forms only.
   const training = isCaptureMode(panelMode);
   captureSection.hidden = !training || portal == null || portalTabId == null;
   if (captureSection.hidden) return;
@@ -4858,24 +4802,9 @@ sandboxClearBtn.addEventListener(
   () => void clearPortalFormFromPanel(),
 );
 
-// ---------------------------------------------------------------------------
-// E6.9 F6.9.7 + 2026-08-19 — the job chooser (Search / Work cases / Train
-// forms), and F6.9.9 — Train forms.
-// ---------------------------------------------------------------------------
+// Mode chooser + Train-forms surfaces (Search / Work cases / Train forms).
 
-/**
- * THE one place that decides what is on screen.
- *
- * Two inputs: the current job, and whether an org has resolved (everything
- * org-scoped stays hidden until it has — the F4.3.5 rule, which now covers
- * Search too since it reads org-scoped routes).
- *
- * It sets only the four top-level containers and never the individual cards
- * inside #case-work. That is deliberate: those manage their own `hidden` as
- * data arrives, and a mode switch that reached in would either reveal a card
- * with nothing in it or clobber a state it did not set. Hiding the parent
- * hides them regardless; showing it restores exactly what each had decided.
- */
+/** Toggle the four top-level mode containers. Child cards manage their own visibility. */
 function renderModeSurfaces(): void {
   const training = panelMode === "train";
   const searching = panelMode === "search";
@@ -4963,11 +4892,7 @@ async function loadSharedRegistry(): Promise<void> {
     trainRecognition.textContent = response.error;
     return;
   }
-  // A non-array here is fatal, not cosmetic: renderTrainPayers iterates this
-  // DURING render, so `for (… of null)` takes the whole panel down rather than
-  // just the payer select. An `ok` envelope carrying a null `data` is a shape
-  // the wire permits, so treat anything unexpected as an empty library — the
-  // trainer then sees "no payers" instead of a blank panel.
+  // Coerce to [] — null data crashes `for…of` during render and blanks the panel.
   sharedPortalRows = Array.isArray(response.data) ? response.data : [];
   renderTrainPayers();
   await refreshTrainRecognition();

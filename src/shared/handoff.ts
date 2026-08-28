@@ -1,30 +1,19 @@
-// E4.3 F4.3.1 / TE-1 — the platform → extension case handoff, extension side.
-// The webapp's "Work in portal" sends the locked SET_ACTIVE_CASE message
-// through Chrome external messaging; this module owns the PURE half of the
-// receipt: message validation, the active-case record shape, expiry math, and
-// portal-origin matching. Everything Chrome-flavored (listeners, storage)
-// lives in src/background/activeCase.ts so this file is unit-testable.
+// Platform → extension case handoff (pure logic).
+// Validates SET_ACTIVE_CASE messages, defines the active-case record shape,
+// expiry rules, and portal-origin matching. Chrome storage/listeners live in
+// src/background/activeCase.ts so this file stays unit-testable.
 //
-// The locked TE-1 shape (panel `src/lib/extensionHandoff.ts` — panel-first,
-// mirrored here; never change unilaterally):
-//   { type: "SET_ACTIVE_CASE", caseId, providerId, orgId, portalUrl,
-//     portalKey?, facilityId? }
-// IDENTIFIERS + URL ONLY — the message never carries profile or token values,
-// and parseSetActiveCase deliberately drops every unknown field so nothing
-// beyond the contract can ride along into storage. The last two are the S3.5
-// (doc 06 C1) additions and are OPTIONAL in both directions: an older webapp
-// omits them, and a malformed one is dropped rather than rejecting the whole
-// handoff — losing the location is a picker prompt, losing the case is a
-// broken launch.
+// Wire shape: { type, caseId, providerId, orgId, portalUrl, portalKey?, facilityId? }
+// Identifiers and URL only — never profile or token values. Unknown fields are dropped.
 
-/** The locked SET_ACTIVE_CASE message (TE-1). Identifiers + portal URL only. */
+/** Parsed SET_ACTIVE_CASE message. Identifiers and portal URL only. */
 export interface SetActiveCaseMessage {
   type: "SET_ACTIVE_CASE";
   caseId: string;
   providerId: string;
   orgId: string;
   portalUrl: string;
-  // S3.5: the launched portal's registry key, and the case's location.
+  // Optional: launched portal key and case facility id.
   portalKey?: string;
   facilityId?: string;
 }

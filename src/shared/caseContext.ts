@@ -1,27 +1,15 @@
-// Pure logic for the case-context card (E4.3 TE-2). No fetches, no DOM — the
-// side panel (src/sidepanel/main.ts) owns the render and the network call;
-// this file owns the two decisions that were bug-prone when they lived inline
-// in renderCaseContext/maybeApplyCaseFacility (B1.2):
+// Case-context card helpers (pure logic — no fetches, no DOM).
 //
-//   1. Whether the context card has anything worth SHOWING.
-//   2. Whether the case's own location should be ADOPTED as the facility pick.
+// Two separate decisions:
+// 1. Does the context card have anything to show? (notes, tasks, pipeline, etc.)
+// 2. Should the case's own facility be adopted into the location picker?
 //
-// These are deliberately two separate questions. A case with only a
-// selectedFacility and nothing else (no note/touch/tasks/pipeline/refs) has
-// NOTHING to show — the card should stay hidden — but its location should
-// still be adopted; adoption must never be gated on visibility. Coupling the
-// two (checking "hasContent" before applying the facility) was exactly the
-// B1.2 bug: a freshly generated case with no activity yet never adopted its
-// own selectedFacility, and PRACTICE LOCATION / FACILITY ASSIGNMENT / STATE
-// LICENSE stayed "Not on file" even though the case named a location.
+// A case can have a facility worth adopting even when the card stays hidden
+// (e.g. a new case with no notes yet). Never gate adoption on card visibility.
 import type { CaseContext } from "./apiTypes";
 
-/** Does this context carry anything the read-only card would actually render?
- * Mirrors the fields renderCaseContext lays out below the identity guard —
- * deliberately EXCLUDES selectedFacility, which drives location adoption
- * (see resolveCaseFacilitySelection below) but is not itself a rendered row.
- * `caseContextBox.hidden` must track this exactly: only whether the box has
- * anything to show, never whether a location got applied. */
+/** True when the read-only context card has rows to render.
+ * Excludes selectedFacility — that drives location adoption, not card content. */
 export function caseContextHasContent(context: CaseContext | null): boolean {
   if (context == null) return false;
   const refs = context.referenceNumbers ?? [];
@@ -91,28 +79,15 @@ export function resolveCaseFacilitySelection(
   };
 }
 
-// E1.5 — which set of facilities backs the #facility-select fill-target
-// picker. Minimal shape so this works against both CaseContextFacility
-// (context.facilities) and ProviderProfileFacility (the provider's loaded
-// set) without importing either — the caller decides what T/P actually are.
+// Which facilities populate #facility-select.
 export interface FacilityPickerOption {
   id: string;
   name: string;
 }
 
-/**
- * The CASE's own location set scopes the picker when it has any — filtered
- * to ids the provider's CURRENTLY loaded set still carries, so a location the
- * provider was since unassigned from is never offered as if it still were.
- * Falls back to the provider's full assigned set when the case carries none
- * (most cases today: case_facilities is additive since E1.1, so a case
- * created before it — or one nobody has added a second location to — has
- * zero rows despite having a perfectly good primary location on
- * `credential_cases.facility_id`) OR when the case's locations don't
- * intersect the provider's current set at all (never show "no locations" for
- * a provider who plainly has some — the same "never force a phantom
- * selection" posture `resolveCaseFacilitySelection` already takes).
- */
+/** Scope the location picker to the case's facilities when the case has any.
+ * Falls back to the provider's full facility list when the case has none,
+ * or when none of the case's facilities are still on the provider's roster. */
 export function facilityPickerScope<
   T extends FacilityPickerOption,
   P extends FacilityPickerOption,
@@ -125,10 +100,7 @@ export function facilityPickerScope<
   return providerFacilities;
 }
 
-// E1.5 — the two-line practice-address format shared by the Location
-// picker's address box (renderFacilityAddress) and the case-locations list,
-// so the two surfaces can never render address text differently. Blank
-// fields collapse (never a lone comma); no address fields at all yields [].
+// Two-line address format for the location picker and case-location list.
 export interface FacilityAddressLike {
   street?: string | null;
   suite?: string | null;

@@ -314,26 +314,13 @@ function isHumanAuthored(row: CaptureRow): boolean {
 }
 
 /**
- * Fold a fresh scan of ONE page into an existing capture of the same portal
- * (E6.9 F6.9.8).
+ * Merge a fresh page scan into an existing multi-page capture.
  *
- * Drift repair is per PAGE. `diffCapture` alone would be wrong for a multi-page
- * wizard: scanning page 2 sees none of page 1's selectors, so every page-1 row
- * would read as "removed" and be dropped — the trainer would walk five pages
- * and keep only the fifth. Rows belonging to OTHER pages are therefore carried
- * verbatim, and only the rows on the page being scanned are diffed, so a
- * re-scan of page 2 still preserves the decisions already made there.
+ * Drift repair is per page — diffing the whole session would drop other pages'
+ * rows when scanning page 2 of a wizard.
  *
- * Rows captured before pages existed (`pageStep` null) diff against an unnamed
- * scan, which is exactly the old single-page behaviour.
- *
- * USER-MAPPED rows on the scanned page are kept even when the fresh scan does
- * not see them (2026-08-19). That is not a special case — it is the whole
- * reason the picker exists: the fields a trainer adds by hand are precisely
- * the ones an auto-scan cannot find (revealed only after a radio choice, or
- * rendered by script after the scan ran). Dropping them on the next
- * re-capture would delete the manual work silently, which is worse than never
- * having offered the feature.
+ * Hand-picked or selector-overridden rows on the scanned page are kept even
+ * when the scan no longer sees them (conditional fields the scan missed).
  */
 export function mergePageCapture(
   previous: readonly CaptureRow[],
