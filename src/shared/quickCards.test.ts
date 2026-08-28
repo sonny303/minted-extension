@@ -26,8 +26,8 @@ const tokens: ProfileToken[] = [
   { token: "license.licenseNumber", value: "KS-12345" },
   { token: "license.state", value: "KS" },
   { token: "license.expirationDate", value: "2026-08-01" }, // 15 days out
-  { token: "group.name", value: "Kansas Fitness Physio Group" },
-  { token: "group.tin", value: "48-1234567" },
+  { token: "group.name", value: "Northside Therapy Group" },
+  { token: "group.tin", value: "12-3456789" },
   { token: "group.npiType2", value: "1098765432" },
   { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
   { token: "groupInsurance.policyNumber", value: "MP-889900" },
@@ -150,7 +150,7 @@ describe("projectQuickCards (TS-101)", () => {
   });
 
   it("carries the group name and the layout provenance", () => {
-    expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+    expect(cards.groupName).toBe("Northside Therapy Group");
     expect(cards.layoutSource).toBe("default");
   });
 
@@ -253,7 +253,7 @@ describe("hasUnresolvedFacilityFields", () => {
 
   it("is false once facility.* resolves", () => {
     const cards = projectQuickCards(
-      [...tokens, { token: "facility.name", value: "Fitness Physio - Leavenworth" }],
+      [...tokens, { token: "facility.name", value: "Northside Clinic - West" }],
       unresolved,
       { fields: ["facility.name"], source: "saved" },
       today,
@@ -286,7 +286,7 @@ describe("shouldRetryFacilityCards", () => {
     today,
   );
   const resolvedFacilityCards = projectQuickCards(
-    [...tokens, { token: "facility.name", value: "Fitness Physio - Leavenworth" }],
+    [...tokens, { token: "facility.name", value: "Northside Clinic - West" }],
     unresolved,
     { fields: ["facility.name"], source: "saved" },
     today,

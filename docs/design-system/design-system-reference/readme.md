@@ -26,10 +26,10 @@ How Minted Panel writes.
 - **Person:** address the coordinator's work, not the coordinator. Prefer the task ("Needs action", "Clear filters", "Add a note…") over "you" or "we". No first person.
 - **Casing:** Sentence case for headings, buttons, and body ("Change case status", "Save changes"). UPPERCASE only for the small letter-spaced field labels and column headers ("PROVIDER STATUS", "NPI"). Never Title Case a sentence.
 - **Action-first framing:** every screen opens with what needs a human now. Copy names the state and the reason: "License expired — upload a renewal to continue.", "Three payers still need action before month end."
-- **Numbers & IDs:** real, tabular, monospaced. NPIs are 10 digits (1841293756), CAQH is 8 (14237788), licenses carry their prefix (KS-PT-009214). Never lorem, never "John Doe".
+- **Numbers & IDs:** tabular, monospaced. Use synthetic 10-digit NPIs (1000000004), 8-digit CAQH IDs (12345678), and prefixed licenses (KS-PT-100001). Never lorem, never a real provider's identifiers.
 - **Empty & error copy:** say what's absent and the next move — "No cases match these filters" + "Try clearing a filter or widening the date range." Calm, never blaming.
 - **Emoji:** none. Ever. Status is carried by tone + dot, not glyphs.
-- **Sample vocabulary:** Org *Kansas Fitness Physio* (KS / MO); providers *Brian Hershberger, PT* · *Sarah Nguyen, DPT* · *Marcus Bell, PT, DPT*; payers *BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military*; coordinator *Sowmya*; statuses *Submitted, Under review, Info requested, Approved, In-network, Not started*.
+- **Sample vocabulary:** Org *Northside Therapy* (KS / MO); providers *Alex Rivera, PT* · *Jordan Chen, DPT* · *Riley Park, PT, DPT*; payers *BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military*; coordinator *Jamie*; statuses *Submitted, Under review, Info requested, Approved, In-network, Not started*.
 
 ---
 

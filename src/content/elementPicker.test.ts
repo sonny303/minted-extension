@@ -145,11 +145,11 @@ describe("startElementPick", () => {
   });
 
   it("never reads the control's value", async () => {
-    document.body.innerHTML = `<input type="text" id="npi" value="1891243838" />`;
+    document.body.innerHTML = `<input type="text" id="npi" value="1234567893" />`;
     const pick = startElementPick();
     clickOn(document.getElementById("npi")!);
     const outcome = await pick;
-    expect(JSON.stringify(outcome)).not.toContain("1891243838");
+    expect(JSON.stringify(outcome)).not.toContain("1234567893");
   });
 });
 

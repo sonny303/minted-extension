@@ -33,9 +33,8 @@ export const FIXTURES = {
   // facilityId:null assertion (TS-100) stays untouched.
   CASE3_ID: "b7a90000-0000-4000-a000-0000000000c3",
   FACILITY_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d64",
-  // B1.4: PROVIDER2's primary facility — Brian Hershberger's real-data shape
-  // (several assigned locations, one primary) that the panel bug report was
-  // filed against.
+  // B1.4: PROVIDER2's primary facility — multi-location fixture shape
+  // (several assigned locations, one primary).
   FACILITY2_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d65",
   TASK_ID: "b7a90000-0000-4000-a000-0000000000d1",
   TOKEN: "tok-kansas",
@@ -85,8 +84,8 @@ const PROVIDERS = [
     // can tell two same-named people apart. Two here, deliberately — the
     // truncation and the "+N" both have something to act on.
     groups: [
-      { id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true },
-      { id: "g-2", name: "Wellspring PT", isPrimary: false },
+      { id: "g-1", name: "Northside Therapy Group", isPrimary: true },
+      { id: "g-2", name: "Riverside PT", isPrimary: false },
     ],
     specialty: "Physical Therapy",
     email: "kay.one@example.com",
@@ -95,7 +94,7 @@ const PROVIDERS = [
   {
     id: FIXTURES.PROVIDER2_ID,
     firstName: "Pat",
-    lastName: "Ostrander",
+    lastName: "Morgan",
     credentials: "PT",
     npi: "1987654321",
     homeState: "KS",
@@ -104,7 +103,7 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Northside Therapy Group", isPrimary: true }],
     specialty: "Physical Therapy",
     email: "pat.o@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -121,7 +120,7 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Northside Therapy Group", isPrimary: true }],
     specialty: "Physical Therapy",
     email: "sandy.testworthy@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -141,22 +140,22 @@ function isoDaysFromNow(days) {
 const FACILITIES = [
   {
     id: FIXTURES.FACILITY_ID,
-    name: "Fitness Physio - Leavenworth",
+    name: "Northside Clinic - West",
     street: "100 Main St",
     suite: null,
-    city: "Leavenworth",
+    city: "Springfield",
     state: "KS",
-    zip: "66048",
+    zip: "62701",
   },
   // B1.4
   {
     id: FIXTURES.FACILITY2_ID,
-    name: "Fitness Physio - Lee's Summit",
-    street: "220 Commerce Dr",
+    name: "Northside Clinic - East",
+    street: "200 Oak Ave",
     suite: "Suite 200",
-    city: "Lee's Summit",
+    city: "Fairview",
     state: "MO",
-    zip: "64063",
+    zip: "64030",
   },
 ];
 
@@ -164,7 +163,7 @@ const FACILITIES = [
 // above (a facility can be shared context; the assignment is the provider's
 // own relationship to it, carrying isPrimary + the assignment's own start
 // date). Kay One keeps the single-facility shape every existing test assumes.
-// Pat Ostrander (B1.4) carries the real bug-report shape: several assigned
+// Pat Morgan (B1.4) carries the multi-location shape: several assigned
 // locations, one primary, one not.
 const PROVIDER_FACILITIES = {
   [FIXTURES.PROVIDER_ID]: [
@@ -181,7 +180,7 @@ const PROVIDER_FACILITIES = {
 };
 
 // Per-provider state licenses. Kay One keeps the existing single-license
-// "rich" shape (used by the <30-day expiry badge test). Pat Ostrander (B1.4)
+// "rich" shape (used by the <30-day expiry badge test). Pat Morgan (B1.4)
 // carries TWO — the exact shape that left STATE LICENSE ambiguous without a
 // state param.
 const PROVIDER_LICENSES = {
@@ -283,8 +282,8 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "license.state", value: license?.state ?? null },
     { token: "license.expirationDate", value: license?.expirationDate ?? null },
     { token: "license.issueDate", value: license?.issueDate ?? null },
-    { token: "group.name", value: "Kansas Fitness Physio Group" },
-    { token: "group.tin", value: "48-1234567" },
+    { token: "group.name", value: "Northside Therapy Group" },
+    { token: "group.tin", value: "12-3456789" },
     { token: "group.npiType2", value: "1098765432" },
     { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
     { token: "groupInsurance.policyNumber", value: "MP-889900" },
@@ -295,7 +294,7 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "assignment.startDate", value: assignment?.assignmentStartDate ?? null },
     { token: "payer.name", value: null },
     { token: "user.name", value: "Test Kansas" },
-    { token: "user.email", value: "testkansas@minted.com" },
+    { token: "user.email", value: "testkansas@example.com" },
   ];
 }
 
@@ -577,7 +576,7 @@ export async function createMockPanelApi(options = {}) {
 
     // --- /api/me/orgs (user-scoped) ---
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
-      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Kansas Fitness Physio", role: "admin" }];
+      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Northside Therapy", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
@@ -713,9 +712,9 @@ export async function createMockPanelApi(options = {}) {
         {
           caseId: FIXTURES.CASE2_ID,
           providerId: FIXTURES.PROVIDER2_ID,
-          providerName: "Pat Ostrander",
+          providerName: "Pat Morgan",
           payerName: "Humana",
-          groupName: "Kansas Fitness Physio Group",
+          groupName: "Northside Therapy Group",
           state: "KS",
           actionKind: "follow_up",
           action: "Follow up with Humana",
@@ -729,7 +728,7 @@ export async function createMockPanelApi(options = {}) {
           providerId: FIXTURES.PROVIDER_ID,
           providerName: "Kay One",
           payerName: "BCBS of Kansas",
-          groupName: "Kansas Fitness Physio Group",
+          groupName: "Northside Therapy Group",
           state: "KS",
           actionKind: "task",
           action: "Enroll on BCBS portal",

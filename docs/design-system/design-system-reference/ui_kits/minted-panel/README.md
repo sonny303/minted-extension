@@ -15,4 +15,4 @@ Both screens are static HTML that link the root `styles.css` and consume the des
 
 ## Sample data
 
-Org **Kansas Fitness Physio** (KS / MO); providers **Brian Hershberger, PT**, **Sarah Nguyen, DPT**, **Marcus Bell, PT, DPT**; payers BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military; coordinator **Sowmya**.
+Org **Northside Therapy** (KS / MO); providers **Alex Rivera, PT**, **Jordan Chen, DPT**, **Riley Park, PT, DPT**; payers BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military; coordinator **Jamie**.

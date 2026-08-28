@@ -433,7 +433,7 @@ export interface SubmissionTouch {
 
 // One group a provider works under, as carried on a list row. The grain is
 // M:N — the same human can be on two groups' rosters — which is exactly why
-// the search shows it: two rows reading "Jones, Addie" are otherwise
+// the search shows it: two rows reading "Reed, Casey" are otherwise
 // indistinguishable. Group names are not PHI.
 export interface ProviderGroupRef {
   id: string;

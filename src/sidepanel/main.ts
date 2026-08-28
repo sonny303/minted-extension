@@ -627,7 +627,7 @@ function renderGroupedDetails(
 
 function renderQuickCards(cards: QuickCards | null): void {
   // A provider switch/sign-out clears the session copy marks — they are
-  // per-provider (a copied NPI for Kay is not "copied" for Eric).
+  // per-provider (a copied NPI for Kay is not "copied" for Pat).
   if (cards == null || cards !== currentCards) copiedKeys.clear();
   currentCards = cards;
   // Any cards change (provider switch, refetch) closes the layout form — it
@@ -3284,7 +3284,7 @@ async function runSearch(query: string): Promise<void> {
  *
  * `/api/providers?search=` matches name / NPI / email — not group names. But
  * the group is exactly what a user reaches for when two people share a name
- * ("addie wellspring"), so we also narrow the roster the panel already holds
+ * ("casey riverside"), so we also narrow the roster the panel already holds
  * and merge anything the server missed. Local-only, no extra request, and
  * server rows keep their order and their position at the top: this ADDS
  * reach, it never reorders or hides what the server decided.
