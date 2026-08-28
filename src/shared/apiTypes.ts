@@ -232,6 +232,10 @@ export interface CaseContextFacility {
   city: string | null;
   state: string | null;
   zip: string | null;
+  // E1.4 — present on `facilities[]` entries only (true for the case's
+  // primary row, so the Workbench can badge it without a second lookup).
+  // Absent on `selectedFacility`, which is already known to be the primary.
+  isPrimary?: boolean;
 }
 
 // E4.3 TE-2 — the case's provider/payer identity for the panel header
@@ -278,6 +282,13 @@ export interface CaseContext {
   // this field (the portalTasks precedent): absent and null both mean "no
   // case-selected facility to show".
   selectedFacility?: CaseContextFacility | null;
+  // E1.4 — the case's FULL location set (case_facilities joined to
+  // facilities), primary row first then alphabetical by name, `isPrimary`
+  // badged per row. Optional: a panel that predates this key degrades to
+  // hidden rows, falling back to selectedFacility-only behavior.
+  // selectedFacility is UNCHANGED and still means "the primary" — this is
+  // additive, for the Workbench to show every location while filling one.
+  facilities?: CaseContextFacility[];
   // --- E4.3 TE-2 additions (all optional: the production server may predate
   // the redesign contract; absent fields degrade to hidden rows, never a
   // crash). camelCase keys per the panel's context contract (the

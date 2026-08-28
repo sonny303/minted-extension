@@ -27,7 +27,16 @@ export const FIXTURES = {
   PROVIDER2_ID: "6f0e73c2-51f1-4be9-9f2e-0a4c7f2fbb02",
   CASE_ID: "b7a90000-0000-4000-a000-0000000000c1",
   CASE2_ID: "b7a90000-0000-4000-a000-0000000000c2",
+  // B1.4: a second case on PROVIDER2, pointing at PROVIDER2's NON-primary
+  // facility (FACILITY2_ID below is the primary one) — the "case picks the
+  // second location" fixture. Distinct from CASE2 so CASE2's existing
+  // facilityId:null assertion (TS-100) stays untouched.
+  CASE3_ID: "b7a90000-0000-4000-a000-0000000000c3",
   FACILITY_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d64",
+  // B1.4: PROVIDER2's primary facility — Brian Hershberger's real-data shape
+  // (several assigned locations, one primary) that the panel bug report was
+  // filed against.
+  FACILITY2_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d65",
   TASK_ID: "b7a90000-0000-4000-a000-0000000000d1",
   TOKEN: "tok-kansas",
   USER_ID: "user-kansas",
@@ -129,43 +138,6 @@ function isoDaysFromNow(days) {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// The provider profile's resolved tokens (TE-12: quick cards are a rendering
-// of this endpoint). Kay One carries honest gaps: caqhId empty (data gap) and
-// a license expiring inside the 30-day badge window.
-function profileTokens(providerId) {
-  const p = PROVIDERS.find((row) => row.id === providerId);
-  const rich = providerId === FIXTURES.PROVIDER_ID;
-  return [
-    { token: "provider.firstName", value: p.firstName },
-    { token: "provider.lastName", value: p.lastName },
-    { token: "provider.credentials", value: p.credentials },
-    { token: "provider.dateOfBirth", value: "1980-01-15" },
-    { token: "provider.npi", value: p.npi },
-    { token: "provider.caqhId", value: p.caqhId },
-    { token: "provider.specialty", value: p.specialty },
-    { token: "provider.email", value: p.email },
-    { token: "license.licenseNumber", value: rich ? "KS-12345" : null },
-    { token: "license.state", value: rich ? "KS" : null },
-    { token: "license.expirationDate", value: rich ? isoDaysFromNow(20) : null },
-    { token: "license.issueDate", value: rich ? "2020-01-01" : null },
-    { token: "group.name", value: "Kansas Fitness Physio Group" },
-    { token: "group.tin", value: "48-1234567" },
-    { token: "group.npiType2", value: "1098765432" },
-    { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
-    { token: "groupInsurance.policyNumber", value: "MP-889900" },
-    { token: "groupInsurance.policyEndDate", value: isoDaysFromNow(200) },
-    { token: "facility.name", value: "Fitness Physio - Leavenworth" },
-    { token: "payer.name", value: null },
-    { token: "user.name", value: "Test Kansas" },
-    { token: "user.email", value: "testkansas@minted.com" },
-  ];
-}
-
-const PROFILE_UNRESOLVED = [
-  { token: "provider.caqhId", reason: "empty on provider" },
-  { token: "payer.name", reason: "case-scoped source (payers); resolve at fill time" },
-];
-
 const FACILITIES = [
   {
     id: FIXTURES.FACILITY_ID,
@@ -176,7 +148,196 @@ const FACILITIES = [
     state: "KS",
     zip: "66048",
   },
+  // B1.4
+  {
+    id: FIXTURES.FACILITY2_ID,
+    name: "Fitness Physio - Lee's Summit",
+    street: "220 Commerce Dr",
+    suite: "Suite 200",
+    city: "Lee's Summit",
+    state: "MO",
+    zip: "64063",
+  },
 ];
+
+// Per-provider facility ASSIGNMENTS — distinct from the FACILITIES catalog
+// above (a facility can be shared context; the assignment is the provider's
+// own relationship to it, carrying isPrimary + the assignment's own start
+// date). Kay One keeps the single-facility shape every existing test assumes.
+// Pat Ostrander (B1.4) carries the real bug-report shape: several assigned
+// locations, one primary, one not.
+const PROVIDER_FACILITIES = {
+  [FIXTURES.PROVIDER_ID]: [
+    { facilityId: FIXTURES.FACILITY_ID, isPrimary: true, assignmentStartDate: "2024-01-01" },
+  ],
+  [FIXTURES.PROVIDER2_ID]: [
+    // Non-primary — CASE3 points here.
+    { facilityId: FIXTURES.FACILITY_ID, isPrimary: false, assignmentStartDate: "2023-05-01" },
+    { facilityId: FIXTURES.FACILITY2_ID, isPrimary: true, assignmentStartDate: "2022-03-15" },
+  ],
+  [FIXTURES.SANDBOX_PROVIDER_ID]: [
+    { facilityId: FIXTURES.FACILITY_ID, isPrimary: true, assignmentStartDate: "2024-01-01" },
+  ],
+};
+
+// Per-provider state licenses. Kay One keeps the existing single-license
+// "rich" shape (used by the <30-day expiry badge test). Pat Ostrander (B1.4)
+// carries TWO — the exact shape that left STATE LICENSE ambiguous without a
+// state param.
+const PROVIDER_LICENSES = {
+  [FIXTURES.PROVIDER_ID]: [
+    {
+      state: "KS",
+      licenseNumber: "KS-12345",
+      expirationDate: isoDaysFromNow(20),
+      issueDate: "2020-01-01",
+    },
+  ],
+  [FIXTURES.PROVIDER2_ID]: [
+    {
+      state: "KS",
+      licenseNumber: "KS-77777",
+      expirationDate: isoDaysFromNow(200),
+      issueDate: "2019-01-01",
+    },
+    {
+      state: "MO",
+      licenseNumber: "MO-88888",
+      expirationDate: isoDaysFromNow(220),
+      issueDate: "2019-06-01",
+    },
+  ],
+};
+
+// Resolve a provider's facility SELECTION the way the real server does
+// (mintedpanel CLAUDE.md: "?facilityId must be in the provider's set (else
+// 404); sole facility auto-selects; several with no param → facility/
+// assignment tokens come back null with meta.needs_facility"). Returns
+// { facilities, assignments, selected, needsFacility, notFound }.
+function resolveFacilitySelection(providerId, facilityId) {
+  const assignments = PROVIDER_FACILITIES[providerId] ?? [];
+  const facilities = assignments
+    .map((a) => FACILITIES.find((f) => f.id === a.facilityId))
+    .filter(Boolean);
+  if (facilityId) {
+    const assignment = assignments.find((a) => a.facilityId === facilityId);
+    if (!assignment) return { facilities, assignments, selected: null, needsFacility: false, notFound: true };
+    return {
+      facilities,
+      assignments,
+      selected: { facility: FACILITIES.find((f) => f.id === facilityId), assignment },
+      needsFacility: false,
+      notFound: false,
+    };
+  }
+  if (assignments.length === 1) {
+    const assignment = assignments[0];
+    return {
+      facilities,
+      assignments,
+      selected: { facility: FACILITIES.find((f) => f.id === assignment.facilityId), assignment },
+      needsFacility: false,
+      notFound: false,
+    };
+  }
+  return {
+    facilities,
+    assignments,
+    selected: null,
+    needsFacility: assignments.length > 1,
+    notFound: false,
+  };
+}
+
+// Resolve a provider's license the way STATE LICENSE needs it: one license,
+// no ambiguity regardless of a state param; several, only a matching state
+// param resolves one (no param or no match ⇒ unresolved — never a guess).
+function resolveLicense(providerId, state) {
+  const licenses = PROVIDER_LICENSES[providerId] ?? [];
+  if (licenses.length === 1) return licenses[0];
+  if (licenses.length > 1 && state) {
+    return licenses.find((l) => l.state === state) ?? null;
+  }
+  return null;
+}
+
+// The provider profile's resolved tokens (TE-12: quick cards are a rendering
+// of this endpoint). Kay One carries honest gaps: caqhId empty (data gap) and
+// a license expiring inside the 30-day badge window. facility.*/assignment.*
+// resolve only for a selected facility (B1.4); license.* only for a resolved
+// license (B1.1) — both come back null, with an unresolved reason, otherwise.
+function profileTokens(providerId, selectedFacility, license) {
+  const p = PROVIDERS.find((row) => row.id === providerId);
+  const facility = selectedFacility?.facility ?? null;
+  const assignment = selectedFacility?.assignment ?? null;
+  return [
+    { token: "provider.firstName", value: p.firstName },
+    { token: "provider.lastName", value: p.lastName },
+    { token: "provider.credentials", value: p.credentials },
+    { token: "provider.dateOfBirth", value: "1980-01-15" },
+    { token: "provider.npi", value: p.npi },
+    { token: "provider.caqhId", value: p.caqhId },
+    { token: "provider.specialty", value: p.specialty },
+    { token: "provider.email", value: p.email },
+    { token: "license.licenseNumber", value: license?.licenseNumber ?? null },
+    { token: "license.state", value: license?.state ?? null },
+    { token: "license.expirationDate", value: license?.expirationDate ?? null },
+    { token: "license.issueDate", value: license?.issueDate ?? null },
+    { token: "group.name", value: "Kansas Fitness Physio Group" },
+    { token: "group.tin", value: "48-1234567" },
+    { token: "group.npiType2", value: "1098765432" },
+    { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
+    { token: "groupInsurance.policyNumber", value: "MP-889900" },
+    { token: "groupInsurance.policyEndDate", value: isoDaysFromNow(200) },
+    { token: "facility.name", value: facility?.name ?? null },
+    { token: "facility.street", value: facility?.street ?? null },
+    { token: "facility.city", value: facility?.city ?? null },
+    { token: "assignment.startDate", value: assignment?.assignmentStartDate ?? null },
+    { token: "payer.name", value: null },
+    { token: "user.name", value: "Test Kansas" },
+    { token: "user.email", value: "testkansas@minted.com" },
+  ];
+}
+
+// Unresolved reasons for the fields above that came back null — dynamic,
+// unlike the static provider.caqhId/payer.name gaps, because whether
+// facility.*/license.* resolve depends on the request's facilityId/state.
+function profileUnresolved(providerId, selection, license) {
+  const reasons = [
+    { token: "provider.caqhId", reason: "empty on provider" },
+    { token: "payer.name", reason: "case-scoped source (payers); resolve at fill time" },
+  ];
+  if (selection.notFound) {
+    // handled as a 404 by the caller — this branch is unreachable in
+    // practice, kept only so a future refactor can't silently swallow it.
+    return reasons;
+  }
+  if (selection.selected == null) {
+    const facilityReason = selection.needsFacility
+      ? "several locations on file; pick one to resolve"
+      : "no location on file";
+    reasons.push(
+      { token: "facility.name", reason: facilityReason },
+      { token: "facility.street", reason: facilityReason },
+      { token: "facility.city", reason: facilityReason },
+      { token: "assignment.startDate", reason: facilityReason },
+    );
+  }
+  if (license == null) {
+    const licenses = PROVIDER_LICENSES[providerId] ?? [];
+    const licenseReason =
+      licenses.length > 1
+        ? "several state licenses on file; pass state to resolve"
+        : "no license on file";
+    reasons.push(
+      { token: "license.licenseNumber", reason: licenseReason },
+      { token: "license.state", reason: licenseReason },
+      { token: "license.expirationDate", reason: licenseReason },
+      { token: "license.issueDate", reason: licenseReason },
+    );
+  }
+  return reasons;
+}
 
 const CASES = [
   {
@@ -235,7 +396,60 @@ const CASES = [
     portalTasks: [],
     openTasks: [],
   },
+  // B1.4: PROVIDER2's NON-primary facility (FACILITY_ID — FACILITY2_ID is
+  // PROVIDER2's primary, per PROVIDER_FACILITIES above) and a state (MO)
+  // matching one of PROVIDER2's two licenses.
+  {
+    id: FIXTURES.CASE3_ID,
+    providerId: FIXTURES.PROVIDER2_ID,
+    facilityId: FIXTURES.FACILITY_ID,
+    payerName: "Cigna",
+    state: "MO",
+    status: "In Progress",
+    submittedDate: null,
+    payerReferenceId: null,
+    caseNumber: 1003,
+    latestNote: null,
+    lastSubmittedAt: null,
+    payerPipelineState: "not_started",
+    portalTasks: [],
+    openTasks: [],
+  },
 ];
+
+// E1.4/E1.5 — case_facilities: a case's full location set, mirroring the
+// panel's case_facilities table (context.facilities). CASE_ID keeps the
+// single-location shape every existing test assumes (one row, primary,
+// matching its facilityId above); CASE2_ID carries none — most cases today,
+// since case_facilities is additive and a case predating it (or one nobody
+// has added a second location to) has zero rows despite a perfectly good
+// primary on the legacy facilityId. CASE3_ID (PROVIDER2, the two-facility
+// provider from B1.4) is the E1.5 multi-location fixture: two rows, the SAME
+// facility its own facilityId/selectedFacility already names as primary, plus
+// its provider's OTHER assigned facility as a non-primary second location.
+const CASE_FACILITIES = {
+  [FIXTURES.CASE_ID]: [{ facilityId: FIXTURES.FACILITY_ID, isPrimary: true }],
+  [FIXTURES.CASE2_ID]: [],
+  [FIXTURES.CASE3_ID]: [
+    { facilityId: FIXTURES.FACILITY_ID, isPrimary: true },
+    { facilityId: FIXTURES.FACILITY2_ID, isPrimary: false },
+  ],
+};
+
+// Project a case's case_facilities rows the way the real server does:
+// primary first, then alphabetical by name, `isPrimary` riding each row.
+function caseFacilitiesFor(caseId) {
+  return (CASE_FACILITIES[caseId] ?? [])
+    .map((row) => {
+      const f = FACILITIES.find((x) => x.id === row.facilityId);
+      return f ? { ...f, isPrimary: row.isPrimary } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
 
 function fieldMapRow(id, portalKey, selector, token, overrides = {}) {
   return {
@@ -439,19 +653,37 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 405, null, "Method not allowed");
     }
 
-    // --- /api/providers/:id/profile ---
+    // --- /api/providers/:id/profile?state=&facilityId= ---
+    // B1.1/B1.4: facilityId/state are now REAL inputs, mirroring the panel
+    // contract exactly (mintedpanel CLAUDE.md): an unrecognized facilityId
+    // 404s the whole read (never guessed past); several locations and no
+    // facilityId flags meta.needs_facility; several licenses and no matching
+    // state leaves license.* unresolved rather than picking one.
     const profileMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/profile\/?$/);
     if (profileMatch) {
       const p = PROVIDERS.find((row) => row.id === profileMatch[1]);
       if (!p) return envelope(res, 404, null, "Provider not found");
+      const facilityId = url.searchParams.get("facilityId");
+      const state = url.searchParams.get("state");
+      const selection = resolveFacilitySelection(p.id, facilityId);
+      if (selection.notFound) {
+        return envelope(res, 404, null, "Facility not found for this provider");
+      }
+      const license = resolveLicense(p.id, state);
       res.setHeader("cache-control", "no-store");
-      return envelope(res, 200, {
-        provider: { id: p.id, ssnLast4: "0000", dateOfBirth: "1980-01-15" },
-        tokens: profileTokens(p.id),
-        unresolved: PROFILE_UNRESOLVED,
-        facilities: FACILITIES,
-        selected_facility_id: FIXTURES.FACILITY_ID,
-      });
+      return envelope(
+        res,
+        200,
+        {
+          provider: { id: p.id, ssnLast4: "0000", dateOfBirth: "1980-01-15" },
+          tokens: profileTokens(p.id, selection.selected, license),
+          unresolved: profileUnresolved(p.id, selection, license),
+          facilities: selection.facilities,
+          selected_facility_id: selection.selected?.facility.id ?? null,
+        },
+        null,
+        selection.needsFacility ? { needs_facility: true } : null,
+      );
     }
 
     // --- /api/providers (list + ?search=) ---
@@ -587,6 +819,8 @@ export async function createMockPanelApi(options = {}) {
           const facility = FACILITIES.find((f) => f.id === id);
           return facility ?? null;
         })(),
+        // E1.4 — the case's full location set; caseFacilitiesFor() above.
+        facilities: caseFacilitiesFor(c.id),
         openTasks: c.openTasks,
         latestNote: c.latestNote
           ? { content: c.latestNote.text, createdAt: c.latestNote.at, authorName: c.latestNote.author }

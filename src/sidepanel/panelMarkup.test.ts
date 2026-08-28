@@ -144,6 +144,15 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     ).toBe(true);
   });
 
+  it("keeps the E1.5 case-locations list beside the Location picker, inside #fill-section", () => {
+    // Read-only context alongside facility-select, which stays the one
+    // fill-target control — never inside #case-fill (it isn't case-SCOPED
+    // work, it's location context) but still inside #fill-section, hence
+    // #case-work, so renderModeSurfaces still hides it correctly.
+    const fillSection = doc.getElementById("fill-section")!;
+    expect(fillSection.contains(doc.getElementById("case-locations-list"))).toBe(true);
+  });
+
   it("has retired the Browse-providers dropdown", () => {
     // Superseded by free-text search, which can name the group a provider
     // belongs to — the dropdown could not, so two same-named providers were

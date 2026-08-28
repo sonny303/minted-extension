@@ -329,6 +329,12 @@
                 Pick a location first.
               </p>
               <div id="facility-address" class="facility-address" hidden></div>
+              <!-- E1.5: every location the selected CASE has on file, primary
+                   badged. facility-select above stays the ONE fill-target
+                   picker; this is read-only context beside it, and stays
+                   hidden with 0-1 case location (no new chrome for the common
+                   case). -->
+              <ul id="case-locations-list" class="case-locations-list" hidden></ul>
             </div>
 
             <!-- Portal recognition is NOT case-scoped, so it sits above the

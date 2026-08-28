@@ -122,9 +122,14 @@ close-out loop silently.
   message costs the launch).
 - **Case context:** `GET /api/cases/:id/context` → `referenceNumbers`,
   `payerPipelineState`, `provider`/`payer`, `state`, `selectedFacility`,
-  `openTasks` (with `executionType` — `extension_fill` tasks are the fillable
-  ones), `latestNote`, `latestTouch`. Typed **optional** here so a panel that
-  predates a key degrades to hidden rows.
+  `facilities` (E1.4 — the case's FULL location set, primary row first then
+  alphabetical, `isPrimary` badged per row), `openTasks` (with
+  `executionType` — `extension_fill` tasks are the fillable ones),
+  `latestNote`, `latestTouch`. Typed **optional** here so a panel that
+  predates a key degrades to hidden rows; `facilities` degrading to
+  `undefined` falls back to `selectedFacility`-only behavior exactly like an
+  older panel. `selectedFacility` is UNCHANGED and still means "the primary"
+  — `facilities` is additive.
 - **Case/provider search:** `GET /api/cases?q=` → `CaseSearchRow`s (ids +
   display fields only); `GET /api/providers?search=` is the provider half.
 - **`portalTasks`** on `GET /api/cases?providerId=` — the case's open,
@@ -162,6 +167,17 @@ close-out loop silently.
   the rule: a sandbox fill is attributable to no case *by construction* — it
   writes no touch, moves no status, and logs through a route carrying neither
   case nor provider.
+- **A case can have several locations; a fill still targets exactly ONE.**
+  (E1.5) When `context.facilities` (the case's full location set) has more
+  than one entry, the Workbench lists every location beside the picker —
+  name + address, primary badged — but `#facility-select` stays the single
+  fill-target control, now scoped to the CASE's own locations
+  (`facilityPickerScope`, `src/shared/caseContext.ts`) rather than the
+  provider's entire assigned set, falling back to that full set when the
+  case carries no locations (most cases today — `case_facilities` is
+  additive, so a case nobody has added a second location to has zero rows
+  despite a perfectly good primary). Exactly one `facilityId` still rides
+  the FILL request, and the extension still never submits a form.
 - **Never fill from expired context.** The active-case record expires on
   bound-tab close or 60 min idle; the panel closes the gate **and** the worker
   refuses the FILL. Expiry/absence/mismatch are explicit UX states, never silent.

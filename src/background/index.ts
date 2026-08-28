@@ -747,12 +747,15 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Cards projection (E4.3 F4.3.5 / TE-12 — cards are a rendering of the
       // existing profile endpoint, never a second route). The raw token
       // payload stays in the worker; the panel receives display values only,
-      // held in memory (TE-14). When facilityId is set, facility.* tokens
-      // resolve for that location (multi-facility providers otherwise leave
-      // them unresolved behind meta.needs_facility).
+      // held in memory (TE-14). When facilityId is set, facility.*/
+      // assignment.* tokens resolve for that location (multi-facility
+      // providers otherwise leave them unresolved behind meta.needs_facility).
+      // When state is set (B1.1), license.* resolves for that state instead
+      // of staying ambiguous over several state licenses.
       const [{ profile, meta }, { layout, catalog }] = await Promise.all([
         getProviderProfile(request.providerId, {
           facilityId: request.facilityId,
+          state: request.state,
         }),
         readCardLayout(),
       ]);

@@ -547,6 +547,40 @@ button.link:hover {
   color: var(--mp-ink-600);
 }
 
+/* E1.5 — every location a multi-location CASE has on file, primary badged.
+   Read-only, beside the Location picker (which stays the one fill-target
+   control); hidden with 0-1 case location. */
+.case-locations-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.case-locations-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  padding: 6px 11px;
+  background: var(--mp-cream-50);
+  border: 1px solid var(--mp-line-100);
+  border-radius: var(--mp-r-ctl);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.case-locations-name {
+  font-weight: 600;
+  color: var(--mp-ink-900);
+}
+
+.case-locations-address {
+  color: var(--mp-ink-400);
+}
+
 /* US-5 — sandbox chrome. Deliberately unlike a normal card: a dashed amber
    frame says "this is a test rig", so nobody mistakes a sandbox fill for
    work that landed on a case. */
