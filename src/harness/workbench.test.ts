@@ -91,13 +91,13 @@ vi.mock("../background/auth", () => {
     },
     getAuthState: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
+      email: "test.coordinator@example.com",
       name: "Test Kansas",
     }),
     currentUserId: async () => "user-kansas",
     signIn: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
+      email: "test.coordinator@example.com",
       name: "Test Kansas",
     }),
     signOut: async () => {},
@@ -266,7 +266,7 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
 
   it("serves the full case-context projection for the handed-off case", async () => {
     const context = await getCaseContext(FIXTURES.CASE_ID);
-    expect(context.provider?.name).toBe("Kay One");
+    expect(context.provider?.name).toBe("Alex Sample");
     expect(context.payer?.name).toBe("BCBS of Kansas");
     expect(context.state).toBe("KS");
     expect(context.payerPipelineState).toBe("submitted");
@@ -418,9 +418,9 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
 
 describe("TS-100 — unified standalone search", () => {
   it("finds cases by provider name, payer name, tracking ID, and case number", async () => {
-    const byProvider = await searchCases("kay");
+    const byProvider = await searchCases("alex");
     expect(byProvider.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
-    expect(byProvider[0]?.providerName).toBe("Kay One");
+    expect(byProvider[0]?.providerName).toBe("Alex Sample");
     // Case search carries the case's facility so the panel can pre-select it.
     expect(byProvider[0]?.facilityId).toBe(FIXTURES.FACILITY_ID);
     const byPayer = await searchCases("humana");
@@ -438,7 +438,7 @@ describe("TS-100 — unified standalone search", () => {
   });
 
   it("finds providers over the PHI-minimized list projection", async () => {
-    const rows = await searchProviders("ostr");
+    const rows = await searchProviders("jord");
     expect(rows.map((r) => r.id)).toEqual([FIXTURES.PROVIDER2_ID]);
     expect(rows[0]).not.toHaveProperty("ssnLast4");
     expect(rows[0]).not.toHaveProperty("dateOfBirth");
@@ -449,15 +449,15 @@ describe("TS-100 — unified standalone search", () => {
   // the field survives the real fetch layer, not just the pure formatter.
   it("carries every group a provider works under, primary first", async () => {
     const rows = await listProviders();
-    const kay = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
-    expect(kay?.groups?.map((g) => g.name)).toEqual([
-      "Kansas Fitness Physio Group",
-      "Wellspring PT",
+    const alex = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
+    expect(alex?.groups?.map((g) => g.name)).toEqual([
+      "Lakeside PT Group",
+      "Summit Health Group",
     ]);
-    expect(kay?.groups?.[0]?.isPrimary).toBe(true);
+    expect(alex?.groups?.[0]?.isPrimary).toBe(true);
     // The formatter the panel actually renders, over that same wire shape.
-    expect(providerGroupsLabel(kay!)).toBe(
-      "Kansas Fitness Physio Group · Wellspring PT",
+    expect(providerGroupsLabel(alex!)).toBe(
+      "Lakeside PT Group · Summit Health Group",
     );
   });
 });
@@ -472,7 +472,7 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
       resolveLayout(null),
       today,
     );
-    expect(cards.name).toBe("Kay One");
+    expect(cards.name).toBe("Alex Sample");
     expect(cards.dateOfBirth).toBe("1980-01-15");
     // CAQH is empty on the fixture — rendered honestly with the reason.
     const caqh = cards.type1Fields.find((f) => f.key === "provider.caqhId");
@@ -480,7 +480,7 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     expect(caqh?.reason).toBe("empty on provider");
     // The fixture license expires 20 days out — inside the amber window.
     expect(cards.license.expiry).toBe("expiring");
-    expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+    expect(cards.groupName).toBe("Lakeside PT Group");
   });
 });
 
@@ -495,7 +495,7 @@ describe("B1.1/B1.4 — location + state resolve on the first profile read", () 
     const info = (await handleRequest({
       type: "GET_PROVIDER_FACILITIES",
       providerId: FIXTURES.PROVIDER2_ID,
-      // Pat's NON-primary location — the one CASE3 points at.
+      // Jordan's NON-primary location — the one CASE3 points at.
       facilityId: FIXTURES.FACILITY_ID,
       state: "MO",
     })) as import("../shared/messages").ProviderFacilitiesInfo;
@@ -533,7 +533,7 @@ describe("B1.1/B1.4 — location + state resolve on the first profile read", () 
     );
     const value = (key: string) =>
       cards.type1Fields.find((f) => f.key === key)?.value;
-    expect(value("facility.name")).toBe("Fitness Physio - Leavenworth");
+    expect(value("facility.name")).toBe("Riverside Clinic");
     expect(value("facility.street")).toBe("100 Main St");
     expect(value("facility.city")).toBe("Leavenworth");
     expect(value("assignment.startDate")).toBe("2023-05-01");
@@ -589,7 +589,7 @@ describe("B1.2 — a quiet case still carries (and resolves) its own location", 
       state: context.state,
     });
     const facilityName = profile.tokens.find((t) => t.token === "facility.name");
-    expect(facilityName?.value).toBe("Fitness Physio - Leavenworth");
+    expect(facilityName?.value).toBe("Riverside Clinic");
   });
 });
 
@@ -630,8 +630,8 @@ describe("E1.5 — a multi-location case's context carries every location, prima
     });
     const nameOf = (p: typeof primaryProfile) =>
       p.tokens.find((t) => t.token === "facility.name")?.value;
-    expect(nameOf(primaryProfile)).toBe("Fitness Physio - Leavenworth");
-    expect(nameOf(secondaryProfile)).toBe("Fitness Physio - Lee's Summit");
+    expect(nameOf(primaryProfile)).toBe("Riverside Clinic");
+    expect(nameOf(secondaryProfile)).toBe("Midtown Clinic");
     expect(nameOf(primaryProfile)).not.toBe(nameOf(secondaryProfile));
   });
 

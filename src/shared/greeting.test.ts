@@ -3,12 +3,12 @@ import { accountGreeting } from "./greeting";
 
 describe("accountGreeting", () => {
   it("greets by first name", () => {
-    expect(accountGreeting("Sowmya Surapureddy", "sowmya@minted.com")).toBe("Hi, Sowmya");
+    expect(accountGreeting("Alex Coordinator", "alex.coordinator@example.com")).toBe("Hi, Alex");
   });
 
   it("falls back to the email when there is no name", () => {
-    expect(accountGreeting(null, "sowmya@minted.com")).toBe("sowmya@minted.com");
-    expect(accountGreeting("   ", "sowmya@minted.com")).toBe("sowmya@minted.com");
+    expect(accountGreeting(null, "alex.coordinator@example.com")).toBe("alex.coordinator@example.com");
+    expect(accountGreeting("   ", "alex.coordinator@example.com")).toBe("alex.coordinator@example.com");
   });
 
   it("falls back to a neutral line when neither is known", () => {

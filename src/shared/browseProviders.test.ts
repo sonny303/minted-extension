@@ -8,10 +8,10 @@ import type { ProviderListItem } from "./apiTypes";
 
 function provider(over: Partial<ProviderListItem> & Pick<ProviderListItem, "id">): ProviderListItem {
   return {
-    firstName: "Addie",
-    lastName: "Jones",
+    firstName: "Taylor",
+    lastName: "Example",
     credentials: "RD",
-    npi: "1891243838",
+    npi: "1234567890",
     homeState: "KS",
     caqhId: null,
     caqhLastAttestedDate: null,
@@ -29,7 +29,7 @@ describe("browseableProviders", () => {
   it("drops terminated rows so the picker matches the webapp roster", () => {
     const rows = [
       provider({ id: "a", status: "active" }),
-      provider({ id: "b", firstName: "Addie", lastName: "Jones", status: "terminated" }),
+      provider({ id: "b", firstName: "Taylor", lastName: "Example", status: "terminated" }),
       provider({ id: "c", firstName: "Wednesday", lastName: "Test", npi: "1234123456" }),
     ];
     expect(browseableProviders(rows).map((p) => p.id)).toEqual(["a", "c"]);
@@ -51,8 +51,8 @@ describe("providerGroupsLabel", () => {
 
   it("joins the groups in the order the server sent (primary first)", () => {
     expect(
-      providerGroupsLabel({ groups: [group("Wellspring PT", true), group("Acme Health")] }),
-    ).toBe("Wellspring PT · Acme Health");
+      providerGroupsLabel({ groups: [group("Summit Health Group", true), group("Acme Health")] }),
+    ).toBe("Summit Health Group · Acme Health");
   });
 
   it("truncates past the cap, keeping the primary and counting the rest", () => {
@@ -77,30 +77,30 @@ describe("providerGroupsLabel", () => {
 describe("providerMatchesQuery", () => {
   const withGroups = provider({
     id: "a",
-    firstName: "Addie",
-    lastName: "Jones",
-    groups: [{ id: "g1", name: "Wellspring PT", isPrimary: true }],
+    firstName: "Taylor",
+    lastName: "Example",
+    groups: [{ id: "g1", name: "Summit Health Group", isPrimary: true }],
   });
   const other = provider({
     id: "b",
-    firstName: "Addie",
-    lastName: "Jones",
+    firstName: "Taylor",
+    lastName: "Example",
     npi: "9999999999",
     groups: [{ id: "g2", name: "Acme Health", isPrimary: true }],
   });
 
   it("narrows two same-named providers by their group — the whole point", () => {
-    expect(providerMatchesQuery(withGroups, "addie wellspring")).toBe(true);
-    expect(providerMatchesQuery(other, "addie wellspring")).toBe(false);
+    expect(providerMatchesQuery(withGroups, "taylor summit")).toBe(true);
+    expect(providerMatchesQuery(other, "taylor summit")).toBe(false);
   });
 
   it("matches name, NPI and email case-insensitively", () => {
-    expect(providerMatchesQuery(withGroups, "JONES")).toBe(true);
-    expect(providerMatchesQuery(withGroups, "1891243838")).toBe(true);
+    expect(providerMatchesQuery(withGroups, "EXAMPLE")).toBe(true);
+    expect(providerMatchesQuery(withGroups, "1234567890")).toBe(true);
   });
 
   it("requires EVERY term to hit, so extra words narrow instead of widening", () => {
-    expect(providerMatchesQuery(withGroups, "addie nonsense")).toBe(false);
+    expect(providerMatchesQuery(withGroups, "taylor nonsense")).toBe(false);
   });
 
   it("an empty query matches everything (the panel hides results itself)", () => {

@@ -627,7 +627,7 @@ function renderGroupedDetails(
 
 function renderQuickCards(cards: QuickCards | null): void {
   // A provider switch/sign-out clears the session copy marks — they are
-  // per-provider (a copied NPI for Kay is not "copied" for Eric).
+  // per-provider (a copied NPI for Alex is not "copied" for Morgan).
   if (cards == null || cards !== currentCards) copiedKeys.clear();
   currentCards = cards;
   // Any cards change (provider switch, refetch) closes the layout form — it

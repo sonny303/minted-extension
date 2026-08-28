@@ -13,10 +13,10 @@ describe("providerDisplayName", () => {
   });
 
   it("de-duplicates case-insensitively and flattens credential lists", () => {
-    expect(providerDisplayName("Kay One", "PT, DPT", "dpt")).toBe("Kay One, PT, DPT");
+    expect(providerDisplayName("Alex Sample", "PT, DPT", "dpt")).toBe("Alex Sample, PT, DPT");
   });
 
   it("drops empty and missing parts", () => {
-    expect(providerDisplayName("Kay One", null, "  ")).toBe("Kay One");
+    expect(providerDisplayName("Alex Sample", null, "  ")).toBe("Alex Sample");
   });
 });

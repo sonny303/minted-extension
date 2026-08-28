@@ -50,7 +50,7 @@ export function providerGroupsLabel(
  * this exists only to narrow a list the panel already holds — notably the
  * group names, which the server's search does NOT cover. Matching is
  * substring, case-insensitive, and every term must hit somewhere, so
- * "addie wellspring" finds the Addie on Wellspring and not the other one.
+ * "taylor summit" finds the Taylor on Summit Health and not the other one.
  */
 export function providerMatchesQuery(provider: ProviderListItem, query: string): boolean {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);

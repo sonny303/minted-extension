@@ -33,9 +33,8 @@ export const FIXTURES = {
   // facilityId:null assertion (TS-100) stays untouched.
   CASE3_ID: "b7a90000-0000-4000-a000-0000000000c3",
   FACILITY_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d64",
-  // B1.4: PROVIDER2's primary facility — Brian Hershberger's real-data shape
-  // (several assigned locations, one primary) that the panel bug report was
-  // filed against.
+  // B1.4: PROVIDER2's primary facility — multi-location shape (several
+  // assigned locations, one primary) for the facility-picker tests.
   FACILITY2_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d65",
   TASK_ID: "b7a90000-0000-4000-a000-0000000000d1",
   TOKEN: "tok-kansas",
@@ -71,8 +70,8 @@ const QUICK_CARD_CATALOG = [
 const PROVIDERS = [
   {
     id: FIXTURES.PROVIDER_ID,
-    firstName: "Kay",
-    lastName: "One",
+    firstName: "Alex",
+    lastName: "Sample",
     credentials: "PT, DPT",
     npi: "1234567890",
     homeState: "KS",
@@ -85,17 +84,17 @@ const PROVIDERS = [
     // can tell two same-named people apart. Two here, deliberately — the
     // truncation and the "+N" both have something to act on.
     groups: [
-      { id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true },
-      { id: "g-2", name: "Wellspring PT", isPrimary: false },
+      { id: "g-1", name: "Lakeside PT Group", isPrimary: true },
+      { id: "g-2", name: "Summit Health Group", isPrimary: false },
     ],
     specialty: "Physical Therapy",
-    email: "kay.one@example.com",
+    email: "alex.sample@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
   },
   {
     id: FIXTURES.PROVIDER2_ID,
-    firstName: "Pat",
-    lastName: "Ostrander",
+    firstName: "Jordan",
+    lastName: "Example",
     credentials: "PT",
     npi: "1987654321",
     homeState: "KS",
@@ -104,9 +103,9 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Lakeside PT Group", isPrimary: true }],
     specialty: "Physical Therapy",
-    email: "pat.o@example.com",
+    email: "jordan.example@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
   },
   {
@@ -121,7 +120,7 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Lakeside PT Group", isPrimary: true }],
     specialty: "Physical Therapy",
     email: "sandy.testworthy@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -141,7 +140,7 @@ function isoDaysFromNow(days) {
 const FACILITIES = [
   {
     id: FIXTURES.FACILITY_ID,
-    name: "Fitness Physio - Leavenworth",
+    name: "Riverside Clinic",
     street: "100 Main St",
     suite: null,
     city: "Leavenworth",
@@ -151,7 +150,7 @@ const FACILITIES = [
   // B1.4
   {
     id: FIXTURES.FACILITY2_ID,
-    name: "Fitness Physio - Lee's Summit",
+    name: "Midtown Clinic",
     street: "220 Commerce Dr",
     suite: "Suite 200",
     city: "Lee's Summit",
@@ -163,9 +162,9 @@ const FACILITIES = [
 // Per-provider facility ASSIGNMENTS — distinct from the FACILITIES catalog
 // above (a facility can be shared context; the assignment is the provider's
 // own relationship to it, carrying isPrimary + the assignment's own start
-// date). Kay One keeps the single-facility shape every existing test assumes.
-// Pat Ostrander (B1.4) carries the real bug-report shape: several assigned
-// locations, one primary, one not.
+// date). Alex Sample keeps the single-facility shape every existing test
+// assumes. Jordan Example (B1.4) carries the multi-location shape: several
+// assigned locations, one primary, one not.
 const PROVIDER_FACILITIES = {
   [FIXTURES.PROVIDER_ID]: [
     { facilityId: FIXTURES.FACILITY_ID, isPrimary: true, assignmentStartDate: "2024-01-01" },
@@ -180,8 +179,8 @@ const PROVIDER_FACILITIES = {
   ],
 };
 
-// Per-provider state licenses. Kay One keeps the existing single-license
-// "rich" shape (used by the <30-day expiry badge test). Pat Ostrander (B1.4)
+// Per-provider state licenses. Alex Sample keeps the existing single-license
+// "rich" shape (used by the <30-day expiry badge test). Jordan Example (B1.4)
 // carries TWO — the exact shape that left STATE LICENSE ambiguous without a
 // state param.
 const PROVIDER_LICENSES = {
@@ -262,7 +261,7 @@ function resolveLicense(providerId, state) {
 }
 
 // The provider profile's resolved tokens (TE-12: quick cards are a rendering
-// of this endpoint). Kay One carries honest gaps: caqhId empty (data gap) and
+// of this endpoint). Alex Sample carries honest gaps: caqhId empty (data gap) and
 // a license expiring inside the 30-day badge window. facility.*/assignment.*
 // resolve only for a selected facility (B1.4); license.* only for a resolved
 // license (B1.1) — both come back null, with an unresolved reason, otherwise.
@@ -283,10 +282,10 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "license.state", value: license?.state ?? null },
     { token: "license.expirationDate", value: license?.expirationDate ?? null },
     { token: "license.issueDate", value: license?.issueDate ?? null },
-    { token: "group.name", value: "Kansas Fitness Physio Group" },
+    { token: "group.name", value: "Lakeside PT Group" },
     { token: "group.tin", value: "48-1234567" },
     { token: "group.npiType2", value: "1098765432" },
-    { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
+    { token: "groupInsurance.insurerName", value: "Example Mutual Insurance" },
     { token: "groupInsurance.policyNumber", value: "MP-889900" },
     { token: "groupInsurance.policyEndDate", value: isoDaysFromNow(200) },
     { token: "facility.name", value: facility?.name ?? null },
@@ -295,7 +294,7 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "assignment.startDate", value: assignment?.assignmentStartDate ?? null },
     { token: "payer.name", value: null },
     { token: "user.name", value: "Test Kansas" },
-    { token: "user.email", value: "testkansas@minted.com" },
+    { token: "user.email", value: "test.coordinator@example.com" },
   ];
 }
 
@@ -577,7 +576,7 @@ export async function createMockPanelApi(options = {}) {
 
     // --- /api/me/orgs (user-scoped) ---
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
-      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Kansas Fitness Physio", role: "admin" }];
+      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Lakeside Physical Therapy", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
@@ -713,9 +712,9 @@ export async function createMockPanelApi(options = {}) {
         {
           caseId: FIXTURES.CASE2_ID,
           providerId: FIXTURES.PROVIDER2_ID,
-          providerName: "Pat Ostrander",
+          providerName: "Jordan Example",
           payerName: "Humana",
-          groupName: "Kansas Fitness Physio Group",
+          groupName: "Lakeside PT Group",
           state: "KS",
           actionKind: "follow_up",
           action: "Follow up with Humana",
@@ -727,9 +726,9 @@ export async function createMockPanelApi(options = {}) {
         {
           caseId: FIXTURES.CASE_ID,
           providerId: FIXTURES.PROVIDER_ID,
-          providerName: "Kay One",
+          providerName: "Alex Sample",
           payerName: "BCBS of Kansas",
-          groupName: "Kansas Fitness Physio Group",
+          groupName: "Lakeside PT Group",
           state: "KS",
           actionKind: "task",
           action: "Enroll on BCBS portal",
