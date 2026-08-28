@@ -2,8 +2,8 @@
 
 ```jsx
 <Input placeholder="Optional" />
-<Input defaultValue="Brian" />
-<Input mono defaultValue="1841293756" />   {/* NPIs / IDs */}
+<Input defaultValue="Alex" />
+<Input mono defaultValue="1000000004" />   {/* NPIs / IDs */}
 <Input error defaultValue="18412" />
 <Input disabled defaultValue="PT-4471" />
 ```

@@ -3,13 +3,13 @@ import { providerDisplayName } from "./providerName";
 
 describe("providerDisplayName", () => {
   it("joins name, credentials, and specialty", () => {
-    expect(providerDisplayName("Jim Apple", "PT", "Physical Therapy")).toBe(
-      "Jim Apple, PT, Physical Therapy",
+    expect(providerDisplayName("Jamie Sample", "PT", "Physical Therapy")).toBe(
+      "Jamie Sample, PT, Physical Therapy",
     );
   });
 
   it("does not repeat a credential that is also the specialty", () => {
-    expect(providerDisplayName("Jim Apple", "PT", "PT")).toBe("Jim Apple, PT");
+    expect(providerDisplayName("Jamie Sample", "PT", "PT")).toBe("Jamie Sample, PT");
   });
 
   it("de-duplicates case-insensitively and flattens credential lists", () => {

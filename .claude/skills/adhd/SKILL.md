@@ -59,7 +59,7 @@ Good: "Coordinators can now submit BCBS Kansas enrollments end to end. Try: open
 ### 7. Matter-of-fact on errors
 
 Bad: "Oh no, the test is failing..."
-Good: "Test fails at `e2e/case-creation.spec.ts:18`: expected `readiness.match > 0.8`, got 0.6. Cause: South Park Physician Group's fixture is missing a state license row. Fix: seed one in `seed-redesign.sql`."
+Good: "Test fails at `e2e/case-creation.spec.ts:18`: expected `readiness.match > 0.8`, got 0.6. Cause: Cedar Creek Physician Group's fixture is missing a state license row. Fix: seed one in `seed-redesign.sql`."
 
 ### 8. No preamble, no recap, no closing pleasantries
 

@@ -60,7 +60,7 @@ Use as a **seed**, not a ceiling. Re-verify in code; mark fixed/obsolete when ev
 - `docs/ops/slice-3-sop-all-states-spike.md` (#280 — owns “Slice 3”)
 - `docs/ops/slice-6-platform-org-spike.md`
 - `docs/ops/3m-slice-5-closeout.md` (closed 3M Slice 5)
-- `docs/ops/3m-slice-4-sowmya-audit.md` (historical)
+- `docs/ops/3m-slice-4-coordinator-audit.md` (historical)
 - `docs/ops/slice-3-sop-all-states-spike.md` (payer-setup Slice 3 — D3.1 A + D3.3-G locked; build #280)
 - `docs/ops/train-dual-registry-spike.md` (TRAIN-DUAL — pointer + registry; awaiting PM ack)
 - `docs/ops/global-portal-payer-inventory.sql`

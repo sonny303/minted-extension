@@ -139,7 +139,7 @@ close-out loop silently.
 - **Provider groups on the list row:** `/api/providers` rows carry
   `groups: [{id,name,isPrimary}]` (current memberships, primary first). The
   grain is M:N, so `groupId` — the frozen primary mirror — could never answer
-  "which Addie Jones is this?". **Optional both ways:** an older panel sends no
+  "which Ada Wells is this?". **Optional both ways:** an older panel sends no
   key and `providerGroupsLabel` renders nothing rather than claiming the
   provider has no group.
 - **View prefs:** `GET /api/me/view-prefs` (user-scoped) → `{ fields, catalog }`

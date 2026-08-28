@@ -9,12 +9,12 @@ import type { CaseContext } from "./apiTypes";
 
 const FACILITY = {
   id: "fac-1",
-  name: "Fitness Physio - Lee's Summit",
+  name: "Northfield Therapy - Hillside",
   street: "1 Main St",
   suite: null,
-  city: "Lee's Summit",
+  city: "Hillside",
   state: "MO",
-  zip: "64063",
+  zip: "64000",
 };
 
 describe("caseContextHasContent", () => {

@@ -3,7 +3,7 @@
 // `credentials` and `specialty` are independent provider columns that often
 // carry the same value (a PT whose credential and specialty both read "PT"),
 // and `credentials` itself is a comma-separated list. Joining them naively
-// renders "Jim Apple, PT, PT", so the parts are flattened and de-duplicated
+// renders "Jamie Sample, PT, PT", so the parts are flattened and de-duplicated
 // case-insensitively, first occurrence winning.
 export function providerDisplayName(
   name: string,

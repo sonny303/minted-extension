@@ -91,13 +91,13 @@ vi.mock("../background/auth", () => {
     },
     getAuthState: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
+      email: "test.kansas@example.com",
       name: "Test Kansas",
     }),
     currentUserId: async () => "user-kansas",
     signIn: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
+      email: "test.kansas@example.com",
       name: "Test Kansas",
     }),
     signOut: async () => {},
@@ -451,13 +451,13 @@ describe("TS-100 — unified standalone search", () => {
     const rows = await listProviders();
     const kay = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
     expect(kay?.groups?.map((g) => g.name)).toEqual([
-      "Kansas Fitness Physio Group",
-      "Wellspring PT",
+      "Northfield Therapy Group",
+      "Riverbend PT",
     ]);
     expect(kay?.groups?.[0]?.isPrimary).toBe(true);
     // The formatter the panel actually renders, over that same wire shape.
     expect(providerGroupsLabel(kay!)).toBe(
-      "Kansas Fitness Physio Group · Wellspring PT",
+      "Northfield Therapy Group · Riverbend PT",
     );
   });
 });
@@ -480,7 +480,7 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     expect(caqh?.reason).toBe("empty on provider");
     // The fixture license expires 20 days out — inside the amber window.
     expect(cards.license.expiry).toBe("expiring");
-    expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+    expect(cards.groupName).toBe("Northfield Therapy Group");
   });
 });
 
@@ -533,9 +533,9 @@ describe("B1.1/B1.4 — location + state resolve on the first profile read", () 
     );
     const value = (key: string) =>
       cards.type1Fields.find((f) => f.key === key)?.value;
-    expect(value("facility.name")).toBe("Fitness Physio - Leavenworth");
+    expect(value("facility.name")).toBe("Northfield Therapy - Riverview");
     expect(value("facility.street")).toBe("100 Main St");
-    expect(value("facility.city")).toBe("Leavenworth");
+    expect(value("facility.city")).toBe("Riverview");
     expect(value("assignment.startDate")).toBe("2023-05-01");
     expect(value("license.licenseNumber")).toBe("MO-88888");
     expect(value("license.state")).toBe("MO");
@@ -589,7 +589,7 @@ describe("B1.2 — a quiet case still carries (and resolves) its own location", 
       state: context.state,
     });
     const facilityName = profile.tokens.find((t) => t.token === "facility.name");
-    expect(facilityName?.value).toBe("Fitness Physio - Leavenworth");
+    expect(facilityName?.value).toBe("Northfield Therapy - Riverview");
   });
 });
 
@@ -630,8 +630,8 @@ describe("E1.5 — a multi-location case's context carries every location, prima
     });
     const nameOf = (p: typeof primaryProfile) =>
       p.tokens.find((t) => t.token === "facility.name")?.value;
-    expect(nameOf(primaryProfile)).toBe("Fitness Physio - Leavenworth");
-    expect(nameOf(secondaryProfile)).toBe("Fitness Physio - Lee's Summit");
+    expect(nameOf(primaryProfile)).toBe("Northfield Therapy - Riverview");
+    expect(nameOf(secondaryProfile)).toBe("Northfield Therapy - Hillside");
     expect(nameOf(primaryProfile)).not.toBe(nameOf(secondaryProfile));
   });
 
