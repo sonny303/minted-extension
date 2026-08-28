@@ -15,7 +15,7 @@
 //   * a RADIO GROUP is one field made of N controls, and the scanner's own
 //     `input[type="radio"][name="…"]` selector therefore matches N. Calling
 //     that "ambiguous, and may fill the wrong one" is a false alarm on the
-//     exact defect class this trainer was built for (the Humana status form),
+//     exact defect class this trainer was built for (one example status form),
 //     and following the advice — narrowing to one option — breaks a working
 //     selector;
 //   * INVALID CSS was caught and reported as 0, i.e. as a valid selector that

@@ -2459,7 +2459,7 @@ async function detectPortal(): Promise<void> {
 
 // The one-click grant for this org's registered portals. Recognition and the
 // content-script injection both need host permission for the portal's origin,
-// but the manifest only ships with BCBS KS — every other DB-registered portal
+// but the manifest may ship static access to specific portals — every other DB-registered portal
 // (S3.2) is unreadable until the user grants its origin here. The prompt shows
 // only when we're NOT already on a recognized portal AND we lack access to at
 // least one registered origin; on a recognized page or once all are granted it

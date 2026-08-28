@@ -243,7 +243,7 @@ describe("scanCapturableFields", () => {
     expect(checkedReads).toBe(0);
   });
 
-  it("orders by visual reading position, not DOM tree order (Aetna-style grid)", () => {
+  it("orders by visual reading position, not DOM tree order (grid-style form)", () => {
     // DOM order: phone → fax → last → first (common when markup lists
     // contact blocks before name inputs). Painted order: last/first on the
     // first row, then phone/fax below — what the trainer sees.
@@ -281,7 +281,7 @@ describe("scanCapturableFields", () => {
   });
 });
 
-// 2026-08-19 — the three scanner defects found by reproducing the Humana
+// 2026-08-19 — the three scanner defects found by reproducing one example
 // "Check status of certification application" page, where a radio group + an
 // NPI box captured as one nameless row.
 describe("scanCapturableFields — labelling and selector durability", () => {
@@ -311,7 +311,7 @@ describe("scanCapturableFields — labelling and selector durability", () => {
   });
 
   it("falls back to nearby caption text when the form wires no label at all", () => {
-    // The Humana NPI box: caption is a plain sibling <p>, no for=, no aria,
+    // One example NPI box: caption is a plain sibling <p>, no for=, no aria,
     // no placeholder — so the row captured nameless and unmappable.
     document.body.innerHTML = `
       <div id="npi-panel">

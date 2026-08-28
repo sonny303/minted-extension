@@ -15,4 +15,4 @@ Both screens are static HTML that link the root `styles.css` and consume the des
 
 ## Sample data
 
-Org **Lakeside Physical Therapy** (KS / MO); providers **Alex Sample, PT**, **Jordan Example, DPT**, **Morgan Demo, PT, DPT**; payers BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military; coordinator **Alex**.
+Org **Lakeside Physical Therapy** (KS / MO); providers **Alex Sample, PT**, **Jordan Example, DPT**, **Morgan Demo, PT, DPT**; payers Regional Health Plan, National Health Plan, Example Insurance Co., Metro Health Plan, National Health Plan; coordinator **Alex**.

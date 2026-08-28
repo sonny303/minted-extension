@@ -1,7 +1,7 @@
 // Ensure the content script is live in a portal tab before the worker messages
-// it. The static content_scripts entry only covers the built-in BCBS KS portal;
-// every OTHER DB-registered portal (S3.2 — "a portal is a registry row, never
-// an extension release") is reached by injecting content.js on demand with
+// it. The static content_scripts entry (if any) only covers portals baked into
+// the manifest at build time; every OTHER DB-registered portal (S3.2 — "a portal
+// is a registry row, never an extension release") is reached by injecting content.js on demand with
 // chrome.scripting. Injection needs the "scripting" permission plus host access
 // for the tab's origin (granted at capture/fill time from the side panel's
 // optional_host_permissions request).
@@ -25,7 +25,7 @@ async function pingTab(tabId: number): Promise<boolean> {
 }
 
 /** Make sure content.js is answering in `tabId`. A no-op when it already is
- * (the static BCBS script, or a prior injection); otherwise inject it once.
+ * (a static manifest script, or a prior injection); otherwise inject it once.
  * Injecting twice would double-bind the message listener, so this only fires
  * when the pre-flight PING goes unanswered. Throws clear reload guidance when
  * the page can't be scripted (missing host permission, blocked by CSP, or a

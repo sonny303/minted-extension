@@ -2,7 +2,7 @@
 // automatic scan did not capture, and add it by hand.
 //
 // Why it exists: a scan can only see what is on the page AT THAT MOMENT and
-// wired well enough to recognise. On the Humana status form the NPI box is
+// wired well enough to recognise. On one example enrollment status form the NPI box is
 // revealed only after a radio choice, so a capture taken first correctly skips
 // it — and there was no way to add it afterwards short of re-capturing at
 // exactly the right instant. The picker removes that timing dependency.

@@ -29,7 +29,7 @@ How Minted Panel writes.
 - **Numbers & IDs:** real, tabular, monospaced. NPIs are 10 digits (1234567890), CAQH is 8 (87654321), licenses carry their prefix (KS-PT-000001). Never lorem, never "John Doe".
 - **Empty & error copy:** say what's absent and the next move — "No cases match these filters" + "Try clearing a filter or widening the date range." Calm, never blaming.
 - **Emoji:** none. Ever. Status is carried by tone + dot, not glyphs.
-- **Sample vocabulary:** Org *Lakeside Physical Therapy* (KS / MO); providers *Alex Sample, PT* · *Jordan Example, DPT* · *Morgan Demo, PT, DPT*; payers *BCBS Kansas, Aetna, Cigna, UnitedHealthcare / Optum, Humana Military*; coordinator *Alex*; statuses *Submitted, Under review, Info requested, Approved, In-network, Not started*.
+- **Sample vocabulary:** Org *Lakeside Physical Therapy* (KS / MO); providers *Alex Sample, PT* · *Jordan Example, DPT* · *Morgan Demo, PT, DPT*; payers *Regional Health Plan, National Health Plan, Example Insurance Co., Metro Health Plan, Alliance Health Plan*; coordinator *Alex*; statuses *Submitted, Under review, Info requested, Approved, In-network, Not started*.
 
 ---
 

@@ -6,9 +6,9 @@
   groups={[
     { id: "alex", title: "Alex Sample, PT", subtitle: "Kansas · 5 payers",
       count: 5, action: "needs", items: [
-        { label: "Aetna", meta: "2h ago", action: "needs" },
-        { label: "Cigna", meta: "12d ago", action: "stalled" },
-        { label: "BCBS Kansas", meta: "Today", action: "ontrack" },
+        { label: "National Health Plan", meta: "2h ago", action: "needs" },
+        { label: "Example Insurance Co.", meta: "12d ago", action: "stalled" },
+        { label: "Regional Health Plan", meta: "Today", action: "ontrack" },
       ] },
     { id: "jordan", title: "Jordan Example, DPT", subtitle: "Kansas · 4 payers",
       count: 4, action: "blocked", items: [/* … */] },

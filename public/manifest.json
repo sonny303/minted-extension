@@ -32,22 +32,10 @@
   },
   "host_permissions": [
     "https://mintedpanel.vercel.app/*",
-    "https://fkvuhfsqcmujywzgczmc.supabase.co/*",
-    "https://provider.bcbsks.com/*"
+    "https://fkvuhfsqcmujywzgczmc.supabase.co/*"
   ],
   "optional_host_permissions": [
     "https://*/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": [
-        "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle"
-    }
   ],
   "icons": {
     "16": "icons/icon16.png",

@@ -378,7 +378,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Read the form's SHAPE from the bound tab (labels/selectors/types —
       // never a value), then ask the server what this org already knows about
       // each label so the review opens with suggestions, not a blank grid.
-      // Inject content.js first when it isn't already there (any non-BCBS
+      // Inject content.js first when it isn't already there (any portal reached
       // portal), so capture works on any DB-registered portal, not just the
       // one with a static content_scripts match.
       await ensureContentScript(request.tabId);
@@ -833,7 +833,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           "This case's context expired - re-launch it from Minted Panel or re-select the case, then fill again.",
         );
       }
-      // Inject content.js when it isn't already there (any non-BCBS portal)
+      // Inject content.js when it isn't already there (any dynamically-registered portal)
       // before fillPortal's pre-flight PING, so fill reaches any DB-registered
       // portal, not just the statically-matched one.
       await ensureContentScript(request.tabId);

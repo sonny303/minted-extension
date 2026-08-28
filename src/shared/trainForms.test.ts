@@ -21,10 +21,10 @@ function portal(over: Partial<PortalRegistryRow> = {}): PortalRegistryRow {
   return {
     id: "p1",
     orgId: null,
-    portalKey: "aetna_join",
-    name: "Aetna join",
+    portalKey: "national_join",
+    name: "National Health Plan join",
     payerId: "payer-1",
-    payerName: "Aetna",
+    payerName: "National Health Plan",
     formUrl: "https://payer.example/enroll/start",
     isVerified: false,
     lastVerifiedAt: null,
@@ -40,7 +40,7 @@ function map(over: Partial<PortalFieldMap> = {}): PortalFieldMap {
   return {
     id: "m1",
     orgId: null,
-    portalKey: "aetna_join",
+    portalKey: "national_join",
     urlPattern: null,
     pageStep: "Practice details",
     mapType: "web",
@@ -142,23 +142,23 @@ describe("recognizeForm", () => {
   const rows = [portal()];
 
   it("recognizes a page under a registered form's URL", () => {
-    const result = recognizeForm("https://payer.example/enroll/start?x=1", rows, "Aetna");
+    const result = recognizeForm("https://payer.example/enroll/start?x=1", rows, "National Health Plan");
     expect(result.kind).toBe("existing");
-    if (result.kind === "existing") expect(result.portal.key).toBe("aetna_join");
+    if (result.kind === "existing") expect(result.portal.key).toBe("national_join");
   });
 
   it("greets an unmatched page as new, with a candidate name", () => {
-    const result = recognizeForm("https://other.example/apply", rows, "Cigna");
-    expect(result).toEqual({ kind: "new", candidateName: "Cigna form" });
+    const result = recognizeForm("https://other.example/apply", rows, "Example Insurance Co.");
+    expect(result).toEqual({ kind: "new", candidateName: "Example Insurance Co. form" });
   });
 
   it("numbers the candidate when the payer already has a form", () => {
     // A payer legitimately has several forms (D15) and URL/heading often
     // cannot tell a new one from an existing row — so number it and let the
     // admin rename, never block and never overwrite.
-    expect(candidatePortalName("Aetna", rows)).toBe("Aetna form 2");
-    expect(candidatePortalName("Aetna", [portal(), portal({ id: "p2", portalKey: "aetna_2" })])).toBe(
-      "Aetna form 3",
+    expect(candidatePortalName("National Health Plan", rows)).toBe("National Health Plan form 2");
+    expect(candidatePortalName("National Health Plan", [portal(), portal({ id: "p2", portalKey: "national_join_2" })])).toBe(
+      "National Health Plan form 3",
     );
   });
 
@@ -168,12 +168,12 @@ describe("recognizeForm", () => {
   });
 
   it("derives a key in the shape the server folds to", () => {
-    expect(candidatePortalKey("Aetna form 2")).toBe("aetna_form_2");
-    expect(candidatePortalKey("BCBS (KS) — Enrollment")).toBe("bcbs_ks_enrollment");
+    expect(candidatePortalKey("National Health Plan form 2")).toBe("national_health_plan_form_2");
+    expect(candidatePortalKey("Regional (KS) — Enrollment")).toBe("regional_ks_enrollment");
   });
 
   it("treats a missing URL as unrecognized rather than guessing", () => {
-    expect(recognizeForm(null, rows, "Aetna").kind).toBe("new");
+    expect(recognizeForm(null, rows, "National Health Plan").kind).toBe("new");
   });
 });
 
@@ -232,27 +232,27 @@ describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", 
     const view = resolveTrainRecognition({
       url: "https://payer.example/enroll/start?x=1",
       rows,
-      payerName: "Aetna",
+      payerName: "National Health Plan",
       selectedPortalKey: "",
     });
     expect(view.status).toBe("matched");
-    if (view.status === "matched") expect(view.portal.key).toBe("aetna_join");
+    if (view.status === "matched") expect(view.portal.key).toBe("national_join");
   });
 
   it("keeps sticky selection messaging on mismatch — never claims a new form", () => {
     const view = resolveTrainRecognition({
       url: "https://login.example/sso",
       rows,
-      payerName: "Aetna",
-      selectedPortalKey: "aetna_join",
+      payerName: "National Health Plan",
+      selectedPortalKey: "national_join",
     });
     expect(view).toMatchObject({
       status: "mismatch",
       portal: null,
-      selectedName: "Aetna join",
+      selectedName: "National Health Plan join",
     });
     if (view.status !== "mismatch") throw new Error("expected mismatch");
-    expect(view.recognitionText).toBe(trainMismatchRecognitionText("Aetna join"));
+    expect(view.recognitionText).toBe(trainMismatchRecognitionText("National Health Plan join"));
     expect(view.recognitionText).not.toMatch(/New form/i);
     expect(view.recognitionText).not.toMatch(/form 2/i);
     expect(view.hintText).toBe(TRAIN_MISMATCH_HINT);
@@ -262,12 +262,12 @@ describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", 
     const view = resolveTrainRecognition({
       url: "https://other.example/apply",
       rows,
-      payerName: "Aetna",
+      payerName: "National Health Plan",
       selectedPortalKey: "",
     });
     expect(view.status).toBe("new");
     if (view.status === "new") {
-      expect(view.candidateName).toBe("Aetna form 2");
+      expect(view.candidateName).toBe("National Health Plan form 2");
       expect(view.recognitionText).toContain("New form");
       expect(view.portal).toBeNull();
     }
@@ -277,8 +277,8 @@ describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", 
     const view = resolveTrainRecognition({
       url: null,
       rows,
-      payerName: "Aetna",
-      selectedPortalKey: "aetna_join",
+      payerName: "National Health Plan",
+      selectedPortalKey: "national_join",
     });
     expect(view.status).toBe("no-tab");
     if (view.status === "no-tab") expect(view.portal).toBeNull();
@@ -290,14 +290,14 @@ describe("captureKeyAgreesWithTabUrl — shared-library invariant", () => {
 
   it("allows capture only under the URL-matched key", () => {
     const url = "https://payer.example/enroll/start";
-    expect(capturePortalKeyForUrl(url, rows)).toBe("aetna_join");
-    expect(captureKeyAgreesWithTabUrl("aetna_join", url, rows)).toBe(true);
+    expect(capturePortalKeyForUrl(url, rows)).toBe("national_join");
+    expect(captureKeyAgreesWithTabUrl("national_join", url, rows)).toBe(true);
   });
 
   it("rejects a dropdown key that disagrees with the active tab", () => {
-    // Login wall / redirect: selection may still say aetna_join, but the tab
+    // Login wall / redirect: selection may still say national_join, but the tab
     // does not match — capture must not send that key.
-    expect(captureKeyAgreesWithTabUrl("aetna_join", "https://login.example/sso", rows)).toBe(
+    expect(captureKeyAgreesWithTabUrl("national_join", "https://login.example/sso", rows)).toBe(
       false,
     );
     expect(capturePortalKeyForUrl("https://login.example/sso", rows)).toBeNull();
@@ -308,13 +308,13 @@ describe("captureKeyAgreesWithTabUrl — shared-library invariant", () => {
       portal(),
       portal({
         id: "p2",
-        portalKey: "aetna_other",
-        name: "Aetna other",
+        portalKey: "national_other",
+        name: "National Health Plan other",
         formUrl: "https://other.example/apply",
       }),
     ];
     expect(
-      captureKeyAgreesWithTabUrl("aetna_other", "https://payer.example/enroll/start", two),
+      captureKeyAgreesWithTabUrl("national_other", "https://payer.example/enroll/start", two),
     ).toBe(false);
   });
 });
@@ -325,12 +325,12 @@ describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
   it("allows START_CAPTURE only when the fresh tab id+url agree with the key", () => {
     expect(
       decideCaptureStart({
-        portalKey: "aetna_join",
+        portalKey: "national_join",
         tabId: 42,
         tabUrl: "https://payer.example/enroll/start",
         rows,
       }),
-    ).toEqual({ ok: true, tabId: 42, portalKey: "aetna_join" });
+    ).toEqual({ ok: true, tabId: 42, portalKey: "national_join" });
   });
 
   it("rejects a mismatched tab without authorizing START_CAPTURE", () => {
@@ -338,7 +338,7 @@ describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
     // START_CAPTURE (shared-library poison / wrong content-script target).
     expect(
       decideCaptureStart({
-        portalKey: "aetna_join",
+        portalKey: "national_join",
         tabId: 99,
         tabUrl: "https://login.example/sso",
         rows,
@@ -349,7 +349,7 @@ describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
   it("rejects a missing active tab id even if the key would match a URL", () => {
     expect(
       decideCaptureStart({
-        portalKey: "aetna_join",
+        portalKey: "national_join",
         tabId: null,
         tabUrl: "https://payer.example/enroll/start",
         rows,

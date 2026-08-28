@@ -15,7 +15,7 @@ import {
 const CASE_ID = "b7a90000-0000-4000-a000-0000000000c1";
 const PROVIDER_ID = "49ad83a8-d8b6-419d-8dcc-88c04a54c4da";
 const ORG_ID = "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d";
-const PORTAL_URL = "https://provider.bcbsks.com/enroll/form";
+const PORTAL_URL = "https://portal.example.com/enroll/form";
 
 const FACILITY_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
@@ -75,9 +75,9 @@ describe("origin rules", () => {
   });
 
   it("matches portal tabs by origin, not prefix", () => {
-    expect(isPortalOriginUrl(PORTAL_URL, "https://provider.bcbsks.com/login")).toBe(true);
+    expect(isPortalOriginUrl(PORTAL_URL, "https://portal.example.com/login")).toBe(true);
     expect(isPortalOriginUrl(PORTAL_URL, "https://other.example.com/enroll")).toBe(false);
-    expect(isPortalOriginUrl(null, "https://provider.bcbsks.com/x")).toBe(false);
+    expect(isPortalOriginUrl(null, "https://portal.example.com/x")).toBe(false);
     expect(isPortalOriginUrl(PORTAL_URL, undefined)).toBe(false);
   });
 });
@@ -114,12 +114,12 @@ describe("S3.5 — the widened C1 payload", () => {
   it("accepts and normalizes portalKey + facilityId", () => {
     const parsed = parseSetActiveCase({
       ...validMessage,
-      portalKey: "  BCBS_KS_Enrollment ",
+      portalKey: "  Regional_Enrollment ",
       facilityId: FACILITY_ID,
     });
     // The key folds to the canonical bare/lowercase form so the portal join
     // stays a literal compare (the standing token/portal-key rule).
-    expect(parsed?.portalKey).toBe("bcbs_ks_enrollment");
+    expect(parsed?.portalKey).toBe("regional_enrollment");
     expect(parsed?.facilityId).toBe(FACILITY_ID);
   });
 
