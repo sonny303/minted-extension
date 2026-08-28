@@ -438,7 +438,7 @@ describe("TS-100 — unified standalone search", () => {
   });
 
   it("finds providers over the PHI-minimized list projection", async () => {
-    const rows = await searchProviders("ostr");
+    const rows = await searchProviders("pat.two");
     expect(rows.map((r) => r.id)).toEqual([FIXTURES.PROVIDER2_ID]);
     expect(rows[0]).not.toHaveProperty("ssnLast4");
     expect(rows[0]).not.toHaveProperty("dateOfBirth");
