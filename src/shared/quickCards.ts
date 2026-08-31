@@ -1,27 +1,12 @@
-// E4.3 F4.3.5 — Provider (Type 1) and Group (Type 2) Quick Cards: the pure
-// projection from the profile endpoint's resolved tokens into the read-only
-// card model, the saved-layout validation, and the <30-day expiry-badge math.
-// No fetches, no Chrome, no clocks — the worker passes `today` in, so every
-// rule here is unit-testable.
+// Quick Cards: project profile tokens into the read-only card model.
+// No fetches — the worker passes `today` for expiry-badge math.
 //
-// THE CATALOG IS SERVED, NOT MIRRORED (2026-07-28, supersedes the verbatim
-// allowlist this file used to carry). GET /api/me/view-prefs now returns
-// `{ fields, catalog }` — the catalog is derived server-side from the SAME
-// get_sop_field_tokens() the profile endpoint resolves values from, so the
-// picker can never offer a field the fill wouldn't resolve, and a new panel
-// field reaches the picker with no extension release. The server enforces
-// membership at PUT (422 on any non-catalog key); `resolveLayout` here only
-// keeps the panel honest between fetches. provider.ssnLast4 is a legitimate
-// catalog field as of 2026-07-28 (product decision); the FULL SSN remains
-// structurally unreachable — it lives in the panel's vault, which the token
-// catalog does not sweep, so no key can name it.
+// Field catalog comes from GET /api/me/view-prefs (server-derived).
+// The picker only offers keys the server will accept on PUT.
 import { labelForToken, tokenPrefix } from "./detailFields";
 import type { ProfileToken, UnresolvedToken } from "./apiTypes";
 
-// The default ID-grid layout (PM decision 2026-07-17, §5 Q1: the Type 1 slot
-// the spec called "Medicare ID" ships as the primary License # now — no
-// medicare_id schema exists until R10's enrollment-identifier model; Medicaid
-// PTAN joins the catalog then too). Type 2 defaults: group NPI + TIN.
+// Default quick-card field keys when the user has no saved layout.
 export const DEFAULT_QUICK_CARD_LAYOUT: readonly string[] = [
   "provider.npi",
   "provider.caqhId",
@@ -34,13 +19,9 @@ export const DEFAULT_QUICK_CARD_LAYOUT: readonly string[] = [
 // by section, so layout length stopped being a usability problem, and the
 // served catalog's closed key set already bounds what a layout can contain.
 
-/** TE-15's degrade rule: a missing or invalid stored layout falls back to the
- * default — never a broken card. Valid = non-empty array of unique string
- * keys, each in the SERVED catalog when one is available. `allowedKeys` null/
- * empty means the catalog fetch failed or the server predates it — then only
- * the shape is validated: the stored keys were server-validated at PUT time,
- * and nuking a saved layout because one read failed would be the worse bug.
- * Order is preserved (it IS the user's layout order). */
+/** Validate a stored layout. Invalid or missing layouts fall back to DEFAULT_QUICK_CARD_LAYOUT.
+ * When the catalog is available, each key must be in it. When the catalog
+ * read failed, only shape is checked (keys were server-validated at PUT time). */
 export function resolveLayout(
   stored: unknown,
   allowedKeys?: ReadonlySet<string> | null,

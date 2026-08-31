@@ -1,11 +1,6 @@
-// S5.2/S5.4 — capture: read the form's SHAPE off the page so an unknown
-// portal can become a known one.
-//
-// Boundary (the PHI gate, and the reason this file is short): it collects
-// LABELS, SELECTORS and CONTROL TYPES only. It never reads a control's VALUE,
-// never touches the page's data, and returns nothing that could carry a
-// provider's information. A captured field is "there is a box called NPI at
-// this selector", never "the box says 1234567890".
+// Form capture scan — reads labels, selectors, and control types only.
+// Never reads control values. A captured field is "there is an NPI box here",
+// not "the box contains 1234567890".
 import type { PortalFieldType } from "../shared/apiTypes";
 
 export interface CapturedField {
@@ -42,7 +37,7 @@ function hasLayoutBox(el: Element): boolean {
 const SAME_ROW_TOLERANCE_PX = 8;
 
 /** Reading order: top→bottom, then left→right within a row. DOM tree order is
- * NOT reading order on CSS grid/flex forms (Aetna RFP put submitter/phone
+ * NOT reading order on CSS grid/flex forms (one example grid form put submitter/phone
  * ahead of last/first name in the tree while painting last/first first). */
 export function compareVisualPosition(a: Element, b: Element): number {
   const ra = a.getBoundingClientRect();
@@ -88,7 +83,7 @@ function controlType(el: Element): PortalFieldType {
  * exactly the kind that drifts when the form changes — but it has to actually
  * resolve, which the old `tag:nth-of-type(queryIndex)` did not: that index came
  * from the document-wide control query while `:nth-of-type` counts among a
- * parent's children, so on the Humana status form it produced
+ * parent's children, so on one example status form it produced
  * `input:nth-of-type(4)`, which matches ZERO elements. A selector that finds
  * nothing can never be filled and can never be re-found on re-capture. */
 function structuralPath(el: Element): string {
@@ -174,7 +169,7 @@ function cleanLabelText(raw: string | null | undefined): string {
  * option's text. `labelFor` on a radio returns its own option ("Practitioner
  * certification application"), so a group captured that way is named after
  * whichever option happened to come first — the exact mis-naming seen on the
- * Humana status form, where the real question is "Please select which type of
+ * example status form, where the real question is "Please select which type of
  * certification application you would like a status on:".
  *
  * Looks only at grouping containers and their accessible names; the options
@@ -204,7 +199,7 @@ function radioGroupLabel(el: HTMLInputElement): string {
 
 /** The visible text a human would read AS this control's name when the form
  * wires no label at all — the case that makes a captured row nameless and
- * unmappable (the Humana NPI box: its caption is a plain sibling, with no
+ * unmappable (one example NPI box: its caption is a plain sibling, with no
  * `for`, no aria, no placeholder).
  *
  * Deliberately narrow. It walks previous siblings of the control and of its

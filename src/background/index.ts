@@ -170,11 +170,8 @@ function fillReportKey(providerId: string, portalKey: string): string {
   return `${FILL_REPORT_PREFIX}${providerId}.${portalKey}`;
 }
 
-// The saved quick-card layout + the served field catalog, degraded on
-// anything invalid, missing, or unreachable (TE-15: never a broken card — the
-// prefs read is cosmetic, never a blocker). The layout is validated against
-// the SERVED key set when the catalog came back; on a failed read the catalog
-// is empty and resolveLayout falls back to shape-only validation.
+// Saved quick-card layout + catalog. Invalid layouts fall back to defaults.
+// If the catalog read fails, validate shape only — don't wipe a saved layout.
 async function readCardLayout(): Promise<{
   layout: { fields: string[]; source: "saved" | "default" };
   catalog: QuickCardCatalogField[];
@@ -378,7 +375,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Read the form's SHAPE from the bound tab (labels/selectors/types —
       // never a value), then ask the server what this org already knows about
       // each label so the review opens with suggestions, not a blank grid.
-      // Inject content.js first when it isn't already there (any non-BCBS
+      // Inject content.js first when it isn't already there (any portal reached
       // portal), so capture works on any DB-registered portal, not just the
       // one with a static content_scripts match.
       await ensureContentScript(request.tabId);
@@ -833,7 +830,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           "This case's context expired - re-launch it from Minted Panel or re-select the case, then fill again.",
         );
       }
-      // Inject content.js when it isn't already there (any non-BCBS portal)
+      // Inject content.js when it isn't already there (any dynamically-registered portal)
       // before fillPortal's pre-flight PING, so fill reaches any DB-registered
       // portal, not just the statically-matched one.
       await ensureContentScript(request.tabId);

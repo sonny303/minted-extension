@@ -1,8 +1,7 @@
 # Minted Panel Workbench — Chrome extension
 
 Fills payer portal enrollment forms with Minted Panel provider data in one
-click. v0 is unlisted (loaded unpacked); the first target portal is the BCBS
-Kansas network enrollment form.
+click. v0 is unlisted (loaded unpacked); portal access is granted per origin at runtime.
 
 ## Architecture (locked, spec v1.2)
 
@@ -66,28 +65,26 @@ gone.
 The panel stays open across tab switches and always reflects the ACTIVE tab:
 portal detection re-runs on `tabs.onActivated`/`onUpdated`, and the fill
 re-checks the active tab's URL at click time. Tab URLs are only readable for
-origins the extension holds host access to — the static `host_permissions`
-(BCBS KS + the backends) plus any portal origin the user has granted (see
-"Portal access" below). Every other page reads as "no portal detected", which
+origins the extension holds host access to — the backend `host_permissions`
+plus any portal origin the user has granted (see "Portal access" below). Every other page reads as "no portal detected", which
 is the correct state.
 
-**Portal access — capture/fill reach ANY DB-registered portal, not just BCBS.**
-The registry is DB-driven (a portal is a registry row, not an extension
-release), but the browser only lets us read a tab URL or run a script on an
-origin we hold host permission for. The manifest ships static access to BCBS KS
-only, so every other registered portal (Aetna, etc.) is invisible until its
-origin is granted. `optional_host_permissions: ["https://*/*"]` lets the panel
-REQUEST arbitrary origins; it only ever requests the specific origins the
-registry names (`portalOriginPatterns(portalRows)` in `src/shared/portals.ts`),
-so the user sees "grant access to aetna.com", never "all websites". The
-`#portal-access` prompt in the side panel shows when we're not on a recognized
-portal and lack access to a registered origin; its button runs
-`chrome.permissions.request({ origins })` in the click gesture, then re-detects
-so a now-readable portal tab is recognized without a reload. Once an origin is
-granted, `ensureContentScript(tabId)` (`src/background/inject.ts`) PINGs the tab
-and, when there's no static content-script match, injects `content.js` via
-`chrome.scripting.executeScript` before capture (`START_CAPTURE`) or fill
-(`FILL`). It's the same `content.js` — shape-only read for capture, resolved-
+**Portal access — capture/fill reach ANY DB-registered portal.** The registry is
+DB-driven (a portal is a registry row, not an extension release), but the
+browser only lets us read a tab URL or run a script on an origin we hold host
+permission for. The manifest ships no static portal origins — every registered
+portal is invisible until its origin is granted. `optional_host_permissions:
+["https://*/*"]` lets the panel REQUEST arbitrary origins; it only ever
+requests the specific origins the registry names (`portalOriginPatterns(portalRows)`
+in `src/shared/portals.ts`), so the user sees "grant access to portal.example.com",
+never "all websites". The `#portal-access` prompt in the side panel shows when
+we're not on a recognized portal and lack access to a registered origin; its
+button runs `chrome.permissions.request({ origins })` in the click gesture, then
+re-detects so a now-readable portal tab is recognized without a reload. Once an
+origin is granted, `ensureContentScript(tabId)` (`src/background/inject.ts`)
+PINGs the tab and injects `content.js` via `chrome.scripting.executeScript`
+before capture (`START_CAPTURE`) or fill (`FILL`). It's the same `content.js` —
+shape-only read for capture, resolved-
 value apply for fill — so no data boundary moves. (Changing extension
 permissions means reloading the unpacked extension after pulling.)
 
@@ -209,9 +206,8 @@ mintedpanel `submissionTouches.ts` / `providerCases.ts`.
 
 ## Fill flow (M1)
 
-One click on **Fill this page** while the BCBS KS enrollment form
-(`provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces*`)
-is the active tab:
+One click on **Fill this page** while a registered payer enrollment form
+(`https://portal.example.com/regional/enroll/form*`) is the active tab:
 
 1. Background fetches the portal's field maps and the provider's `/profile`
    values (`?state=KS` selects the KS license) in parallel, then plans
@@ -306,8 +302,8 @@ env var at both points.
 
 - **M0**: scaffold, sign-in, provider picker showing name + NPI, proven token
   refresh, CI (tsc + lint + build).
-- **M1 (this)**: fetch field maps (`bcbs_ks_enrollment`) + profile values,
-  one-click fill on the BCBS KS enrollment page with `input`/`change` events
+- **M1 (this)**: fetch field maps (`regional_enrollment`) + profile values,
+  one-click fill on the Regional Health Plan enrollment page with `input`/`change` events
   fired, skipped/unfillable fields reported not attempted, fill event POSTed
   with an idempotency id.
 - **Parked until M1 is verified on the live portal**: attachments, PDF fill,

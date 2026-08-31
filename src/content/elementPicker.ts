@@ -1,17 +1,9 @@
-// 2026-08-19 — the manual element picker: let a trainer point at a control the
-// automatic scan did not capture, and add it by hand.
+// Manual element picker — add a field the auto-scan missed.
 //
-// Why it exists: a scan can only see what is on the page AT THAT MOMENT and
-// wired well enough to recognise. On the Humana status form the NPI box is
-// revealed only after a radio choice, so a capture taken first correctly skips
-// it — and there was no way to add it afterwards short of re-capturing at
-// exactly the right instant. The picker removes that timing dependency.
+// A scan only sees controls rendered at scan time. Conditional fields
+// (revealed after a radio choice, etc.) need hand-picking instead of re-capture.
 //
-// Boundary, unchanged and load-bearing: this reads the SHAPE of the element
-// the user clicks — its label text, selector and control type, via the SAME
-// `describeControl` the scanner uses — and never its value. Pointing at a box
-// that already contains an NPI captures "there is a text box here called NPI",
-// never the digits.
+// Reads shape only (label, selector, type) — never the control's value.
 import type { SelectorMatchReport } from "../shared/selectorMatch";
 import { byLabel, LABEL_SELECTOR_PREFIX } from "./fillEngine";
 import {

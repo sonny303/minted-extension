@@ -1,23 +1,12 @@
-// E6.9 F6.9.7/F6.9.8 — the panel does TWO jobs, and they have different
-// tenancy.
+// Panel mode decides which job the user is doing and whether requests carry x-org-id.
 //
-// Working a case is org-scoped: a provider, a case and a fill all belong to one
-// organization, so every call carries `x-org-id` once a multi-org user has
-// picked. Training a payer form is not: the trained form lands in the SHARED
-// (`org_id IS NULL`) library that every org inherits, and it happens BEFORE any
-// case for that payer exists. Making a trainer pick an org first is not just
-// friction — under the org-resolving `authenticate()` guard it would scope the
-// capture to that org, which is precisely the row we do not want written.
+// - Work cases / Search: org-scoped (multi-org users must pick an org first).
+// - Train forms: org-free — trained forms go into the shared library (org_id null).
 //
-// So the mode is not cosmetic: it decides which guard the request lands on. The
-// org header is therefore keyed by MODE, not by a list of path literals (that
-// was the F6.9.8 criterion), with the pre-existing user-scoped routes named as
-// a contract set rather than an inline string compare.
-
+// Mode lives in the worker; the panel mirrors it for UI.
 export type PanelMode = "search" | "train" | "case";
 
-// Listed in the order the panel renders them (2026-08-19): find the work,
-// then do it; training is the separate, admin-only job.
+// Render order in the mode chooser.
 export const PANEL_MODES: readonly PanelMode[] = ["search", "case", "train"];
 
 export const PANEL_MODE_LABELS: Readonly<Record<PanelMode, string>> = {
@@ -26,28 +15,15 @@ export const PANEL_MODE_LABELS: Readonly<Record<PanelMode, string>> = {
   case: "Work cases",
 };
 
-/** The default job. Case work is the overwhelmingly more common one and is
- * what a `SET_ACTIVE_CASE` hand-off needs, so an unset mode must never strand
- * a hand-off in the trainer. */
+/** Default mode. Case work is most common; SET_ACTIVE_CASE handoffs expect it. */
 export const DEFAULT_PANEL_MODE: PanelMode = "case";
 
 export function parsePanelMode(raw: unknown): PanelMode | null {
   return raw === "search" || raw === "train" || raw === "case" ? raw : null;
 }
 
-/**
- * Train forms is ADMIN-only (2026-08-19).
- *
- * Training writes the GLOBAL shared library every organization inherits, so
- * the question "may this person train?" is not answerable per-org — and the
- * mode itself carries no org at all. The honest signal available to the panel
- * is the caller's memberships: admin anywhere ⇒ the trainer is offered.
- *
- * This is an AFFORDANCE, not the security boundary. The shared-tier routes run
- * on the panel's user-scoped guard and accept any authenticated caller today
- * (panel TD-42); if that must become a real restriction, it belongs in the
- * panel's guard, not here.
- */
+/** Train forms is admin-only in the UI. Shared-tier routes are user-scoped
+ * on the panel today — real enforcement belongs server-side if required. */
 export const ADMIN_ROLE = "admin";
 
 export function canTrainForms(memberships: readonly { role: string }[]): boolean {

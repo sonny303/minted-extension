@@ -509,7 +509,7 @@ describe("mergePageCapture — a re-capture must not delete manual work", () => 
   const page = "Page 1";
 
   it("KEEPS a user-mapped row the fresh scan cannot see", () => {
-    // The whole point of the picker: the Humana NPI box only exists after a
+    // The whole point of the picker: one example NPI box only exists after a
     // radio choice, so the next scan legitimately misses it. Dropping it here
     // would silently undo the trainer's fix.
     const previous = [

@@ -5,8 +5,8 @@ import { buildSubmissionTouchBody, matchPortalTasks } from "./submission";
 function task(overrides: Partial<CasePortalTask> = {}): CasePortalTask {
   return {
     taskId: "11111111-1111-1111-1111-111111111111",
-    title: "BCBS KS enrollment",
-    portalKey: "bcbs_ks_enrollment",
+    title: "Regional Health Plan enrollment",
+    portalKey: "regional_enrollment",
     status: "not_started",
     ...overrides,
   };
@@ -15,35 +15,35 @@ function task(overrides: Partial<CasePortalTask> = {}): CasePortalTask {
 describe("matchPortalTasks", () => {
   it("returns the single task whose portalKey matches", () => {
     const t = task();
-    const result = matchPortalTasks([t], "bcbs_ks_enrollment");
+    const result = matchPortalTasks([t], "regional_enrollment");
     expect(result).toEqual([t]);
   });
 
   it("returns every matching task when several share the page's portalKey", () => {
     const a = task({ taskId: "a", title: "Enrollment" });
     const b = task({ taskId: "b", title: "Roster add" });
-    const other = task({ taskId: "c", title: "Aetna", portalKey: "aetna_oh" });
-    const result = matchPortalTasks([a, b, other], "bcbs_ks_enrollment");
+    const other = task({ taskId: "c", title: "National Health Plan", portalKey: "example_enrollment" });
+    const result = matchPortalTasks([a, b, other], "regional_enrollment");
     expect(result).toEqual([a, b]);
   });
 
   it("returns [] when no task matches the page's portalKey", () => {
-    const result = matchPortalTasks([task({ portalKey: "aetna_oh" })], "bcbs_ks_enrollment");
+    const result = matchPortalTasks([task({ portalKey: "example_enrollment" })], "regional_enrollment");
     expect(result).toEqual([]);
   });
 
   it("treats undefined portalTasks (older server) as an empty array", () => {
-    expect(matchPortalTasks(undefined, "bcbs_ks_enrollment")).toEqual([]);
+    expect(matchPortalTasks(undefined, "regional_enrollment")).toEqual([]);
   });
 
   it("treats null portalTasks as an empty array", () => {
-    expect(matchPortalTasks(null, "bcbs_ks_enrollment")).toEqual([]);
+    expect(matchPortalTasks(null, "regional_enrollment")).toEqual([]);
   });
 
   it("ignores entries with a falsy taskId", () => {
     const good = task({ taskId: "good" });
     const bad = task({ taskId: "" });
-    expect(matchPortalTasks([bad, good], "bcbs_ks_enrollment")).toEqual([good]);
+    expect(matchPortalTasks([bad, good], "regional_enrollment")).toEqual([good]);
   });
 
   it("ignores entries with a falsy portalKey (never crashes on null keys)", () => {
@@ -51,20 +51,20 @@ describe("matchPortalTasks", () => {
     // A malformed row with a null portalKey would throw under any re-normalize;
     // it must be filtered out, not blow up.
     const bad = { taskId: "x", title: "malformed", portalKey: null, status: "open" } as unknown as CasePortalTask;
-    expect(matchPortalTasks([bad, good], "bcbs_ks_enrollment")).toEqual([good]);
+    expect(matchPortalTasks([bad, good], "regional_enrollment")).toEqual([good]);
   });
 
   it("matches literally — a differently-cased key does NOT match (no re-normalization)", () => {
     // The server already emits bare/lowercase keys; the extension must not
     // lowercase/slugify, so an upper-cased key on either side simply misses.
-    expect(matchPortalTasks([task({ portalKey: "BCBS_KS_ENROLLMENT" })], "bcbs_ks_enrollment")).toEqual([]);
-    expect(matchPortalTasks([task()], "BCBS_KS_ENROLLMENT")).toEqual([]);
+    expect(matchPortalTasks([task({ portalKey: "REGIONAL_ENROLLMENT" })], "regional_enrollment")).toEqual([]);
+    expect(matchPortalTasks([task()], "REGIONAL_ENROLLMENT")).toEqual([]);
   });
 });
 
 describe("buildSubmissionTouchBody", () => {
   const base = {
-    portalKey: "bcbs_ks_enrollment",
+    portalKey: "regional_enrollment",
     fillSessionId: "fs-1",
     idempotencyId: "idem-1",
   };
@@ -72,7 +72,7 @@ describe("buildSubmissionTouchBody", () => {
   it("always carries the fixed anchor fields", () => {
     const body = buildSubmissionTouchBody(base);
     expect(body.kind).toBe("portal_submission");
-    expect(body.portal_key).toBe("bcbs_ks_enrollment");
+    expect(body.portal_key).toBe("regional_enrollment");
     expect(body.fill_session_id).toBe("fs-1");
     expect(body.idempotency_id).toBe("idem-1");
   });

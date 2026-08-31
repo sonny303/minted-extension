@@ -24,17 +24,16 @@ describe("portalOriginPatterns", () => {
   it("returns a host match pattern per https form origin", () => {
     const patterns = portalOriginPatterns([
       row({
-        portalKey: "aetna",
-        formUrl: "https://www.aetna.com/join/network?step=1",
+        portalKey: "national",
+        formUrl: "https://portal.example.com/national/join/network?step=1",
       }),
       row({
-        portalKey: "bcbsks",
-        formUrl: "https://provider.bcbsks.com/form/x.faces",
+        portalKey: "regional",
+        formUrl: "https://portal.example.com/regional/form/x",
       }),
     ]);
     expect(patterns).toEqual([
-      "https://www.aetna.com/*",
-      "https://provider.bcbsks.com/*",
+      "https://portal.example.com/*",
     ]);
   });
 

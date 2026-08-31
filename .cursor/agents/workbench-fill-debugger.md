@@ -14,7 +14,7 @@ smallest real gap — never paper over a gate.
 1. Side panel is UI-only. Background worker owns every API call.
 2. Recognition = `matchPortalByUrl(tab.url, rows)` over the DB registry
    (`GET /api/portals` in Work / case mode; `GET /api/shared-portals` in Train).
-3. Host permission is required for non–BCBS-KS origins
+3. Host permission is required for each portal origin before capture/fill
    (`optional_host_permissions`, grant via `#portal-access`).
 4. Content script may need on-demand inject (`ensureContentScript`) before
    FILL / START_CAPTURE.

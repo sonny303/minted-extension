@@ -23,10 +23,10 @@ describe("partitionGaps", () => {
 
 describe("platform deep links (TE-4: the EXISTING flows, no extension writes)", () => {
   it("routes a mapping gap to the train flow with the field context carried", () => {
-    expect(trainFlowPath("bcbs_ks_enrollment", "Group Medicare PTAN")).toBe(
-      "/portals/bcbs_ks_enrollment/train?field=Group%20Medicare%20PTAN",
+    expect(trainFlowPath("regional_enrollment", "Group Medicare PTAN")).toBe(
+      "/portals/regional_enrollment/train?field=Group%20Medicare%20PTAN",
     );
-    expect(trainFlowPath("bcbs_ks_enrollment")).toBe("/portals/bcbs_ks_enrollment/train");
+    expect(trainFlowPath("regional_enrollment")).toBe("/portals/regional_enrollment/train");
   });
 
   it("routes a data gap to the provider record", () => {

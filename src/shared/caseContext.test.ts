@@ -9,12 +9,12 @@ import type { CaseContext } from "./apiTypes";
 
 const FACILITY = {
   id: "fac-1",
-  name: "Fitness Physio - Lee's Summit",
-  street: "1 Main St",
+  name: "Midtown Clinic",
+  street: "1 Example St",
   suite: null,
-  city: "Lee's Summit",
+  city: "Midtown",
   state: "MO",
-  zip: "64063",
+  zip: "67890",
 };
 
 describe("caseContextHasContent", () => {
@@ -175,25 +175,25 @@ describe("facilityAddressLines (E1.5)", () => {
   it("joins street+suite and city/state/zip into two lines", () => {
     expect(
       facilityAddressLines({
-        street: "100 Main St",
+        street: "1 Example St",
         suite: "Ste 2",
         city: "Wichita",
         state: "KS",
         zip: "67202",
       }),
-    ).toEqual(["100 Main St, Ste 2", "Wichita, KS 67202"]);
+    ).toEqual(["1 Example St, Ste 2", "Wichita, KS 67202"]);
   });
 
   it("collapses a missing suite/state/zip without a stray comma", () => {
     expect(
       facilityAddressLines({
-        street: "100 Main St",
+        street: "1 Example St",
         suite: null,
         city: "Wichita",
         state: null,
         zip: null,
       }),
-    ).toEqual(["100 Main St", "Wichita"]);
+    ).toEqual(["1 Example St", "Wichita"]);
   });
 
   it("returns [] for a facility with no address fields at all", () => {

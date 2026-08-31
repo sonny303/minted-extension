@@ -22,7 +22,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { URL } from "node:url";
 
 export const FIXTURES = {
-  KANSAS_ORG: "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d",
+  PRIMARY_ORG: "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d",
   PROVIDER_ID: "49ad83a8-d8b6-419d-8dcc-88c04a54c4da",
   PROVIDER2_ID: "6f0e73c2-51f1-4be9-9f2e-0a4c7f2fbb02",
   CASE_ID: "b7a90000-0000-4000-a000-0000000000c1",
@@ -33,14 +33,13 @@ export const FIXTURES = {
   // facilityId:null assertion (TS-100) stays untouched.
   CASE3_ID: "b7a90000-0000-4000-a000-0000000000c3",
   FACILITY_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d64",
-  // B1.4: PROVIDER2's primary facility — Brian Hershberger's real-data shape
-  // (several assigned locations, one primary) that the panel bug report was
-  // filed against.
+  // B1.4: PROVIDER2's primary facility — multi-location shape (several
+  // assigned locations, one primary) for the facility-picker tests.
   FACILITY2_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d65",
   TASK_ID: "b7a90000-0000-4000-a000-0000000000d1",
-  TOKEN: "tok-kansas",
-  USER_ID: "user-kansas",
-  PORTAL_KEY: "bcbs_ks_enrollment",
+  TOKEN: "tok-primary",
+  USER_ID: "user-primary",
+  PORTAL_KEY: "regional_enrollment",
   // The deliberately-untrained map row (token null) — the TS-82 fix-it target.
   UNTRAINED_MAP_ID: "fm-untrained-1",
   // The org's designated sandbox test provider (US-5) — distinct from the two
@@ -71,8 +70,8 @@ const QUICK_CARD_CATALOG = [
 const PROVIDERS = [
   {
     id: FIXTURES.PROVIDER_ID,
-    firstName: "Kay",
-    lastName: "One",
+    firstName: "Alex",
+    lastName: "Sample",
     credentials: "PT, DPT",
     npi: "1234567890",
     homeState: "KS",
@@ -85,28 +84,28 @@ const PROVIDERS = [
     // can tell two same-named people apart. Two here, deliberately — the
     // truncation and the "+N" both have something to act on.
     groups: [
-      { id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true },
-      { id: "g-2", name: "Wellspring PT", isPrimary: false },
+      { id: "g-1", name: "Lakeside PT Group", isPrimary: true },
+      { id: "g-2", name: "Summit Health Group", isPrimary: false },
     ],
     specialty: "Physical Therapy",
-    email: "kay.one@example.com",
+    email: "alex.sample@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
   },
   {
     id: FIXTURES.PROVIDER2_ID,
-    firstName: "Pat",
-    lastName: "Ostrander",
+    firstName: "Jordan",
+    lastName: "Example",
     credentials: "PT",
     npi: "1987654321",
     homeState: "KS",
-    caqhId: "88881111",
+    caqhId: "87654321",
     caqhLastAttestedDate: "2026-06-01",
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Lakeside PT Group", isPrimary: true }],
     specialty: "Physical Therapy",
-    email: "pat.o@example.com",
+    email: "jordan.example@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
   },
   {
@@ -121,7 +120,7 @@ const PROVIDERS = [
     taxonomyCode: "225100000X",
     status: "active",
     groupId: "g-1",
-    groups: [{ id: "g-1", name: "Kansas Fitness Physio Group", isPrimary: true }],
+    groups: [{ id: "g-1", name: "Lakeside PT Group", isPrimary: true }],
     specialty: "Physical Therapy",
     email: "sandy.testworthy@example.com",
     updatedAt: "2026-07-01T00:00:00Z",
@@ -141,31 +140,31 @@ function isoDaysFromNow(days) {
 const FACILITIES = [
   {
     id: FIXTURES.FACILITY_ID,
-    name: "Fitness Physio - Leavenworth",
-    street: "100 Main St",
+    name: "Riverside Clinic",
+    street: "1 Example St",
     suite: null,
-    city: "Leavenworth",
+    city: "Riverside",
     state: "KS",
-    zip: "66048",
+    zip: "12345",
   },
   // B1.4
   {
     id: FIXTURES.FACILITY2_ID,
-    name: "Fitness Physio - Lee's Summit",
-    street: "220 Commerce Dr",
+    name: "Midtown Clinic",
+    street: "2 Sample Ave",
     suite: "Suite 200",
-    city: "Lee's Summit",
+    city: "Midtown",
     state: "MO",
-    zip: "64063",
+    zip: "67890",
   },
 ];
 
 // Per-provider facility ASSIGNMENTS — distinct from the FACILITIES catalog
 // above (a facility can be shared context; the assignment is the provider's
 // own relationship to it, carrying isPrimary + the assignment's own start
-// date). Kay One keeps the single-facility shape every existing test assumes.
-// Pat Ostrander (B1.4) carries the real bug-report shape: several assigned
-// locations, one primary, one not.
+// date). Alex Sample keeps the single-facility shape every existing test
+// assumes. Jordan Example (B1.4) carries the multi-location shape: several
+// assigned locations, one primary, one not.
 const PROVIDER_FACILITIES = {
   [FIXTURES.PROVIDER_ID]: [
     { facilityId: FIXTURES.FACILITY_ID, isPrimary: true, assignmentStartDate: "2024-01-01" },
@@ -180,8 +179,8 @@ const PROVIDER_FACILITIES = {
   ],
 };
 
-// Per-provider state licenses. Kay One keeps the existing single-license
-// "rich" shape (used by the <30-day expiry badge test). Pat Ostrander (B1.4)
+// Per-provider state licenses. Alex Sample keeps the existing single-license
+// "rich" shape (used by the <30-day expiry badge test). Jordan Example (B1.4)
 // carries TWO — the exact shape that left STATE LICENSE ambiguous without a
 // state param.
 const PROVIDER_LICENSES = {
@@ -262,7 +261,7 @@ function resolveLicense(providerId, state) {
 }
 
 // The provider profile's resolved tokens (TE-12: quick cards are a rendering
-// of this endpoint). Kay One carries honest gaps: caqhId empty (data gap) and
+// of this endpoint). Alex Sample carries honest gaps: caqhId empty (data gap) and
 // a license expiring inside the 30-day badge window. facility.*/assignment.*
 // resolve only for a selected facility (B1.4); license.* only for a resolved
 // license (B1.1) — both come back null, with an unresolved reason, otherwise.
@@ -283,10 +282,10 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "license.state", value: license?.state ?? null },
     { token: "license.expirationDate", value: license?.expirationDate ?? null },
     { token: "license.issueDate", value: license?.issueDate ?? null },
-    { token: "group.name", value: "Kansas Fitness Physio Group" },
+    { token: "group.name", value: "Lakeside PT Group" },
     { token: "group.tin", value: "48-1234567" },
     { token: "group.npiType2", value: "1098765432" },
-    { token: "groupInsurance.insurerName", value: "CoverWell Mutual" },
+    { token: "groupInsurance.insurerName", value: "Example Mutual Insurance" },
     { token: "groupInsurance.policyNumber", value: "MP-889900" },
     { token: "groupInsurance.policyEndDate", value: isoDaysFromNow(200) },
     { token: "facility.name", value: facility?.name ?? null },
@@ -294,8 +293,8 @@ function profileTokens(providerId, selectedFacility, license) {
     { token: "facility.city", value: facility?.city ?? null },
     { token: "assignment.startDate", value: assignment?.assignmentStartDate ?? null },
     { token: "payer.name", value: null },
-    { token: "user.name", value: "Test Kansas" },
-    { token: "user.email", value: "testkansas@minted.com" },
+    { token: "user.name", value: "Test Coordinator" },
+    { token: "user.email", value: "test.coordinator@example.com" },
   ];
 }
 
@@ -344,19 +343,19 @@ const CASES = [
     id: FIXTURES.CASE_ID,
     providerId: FIXTURES.PROVIDER_ID,
     facilityId: FIXTURES.FACILITY_ID,
-    payerName: "BCBS of Kansas",
+    payerName: "Regional Health Plan",
     state: "KS",
     status: "Submitted",
     submittedDate: "2026-06-01",
     payerReferenceId: "REF-1001",
     caseNumber: 1001,
-    latestNote: { text: "Called payer, pending review", author: "Test Kansas", at: "2026-07-10T00:00:00Z" },
+    latestNote: { text: "Called payer, pending review", author: "Test Coordinator", at: "2026-07-10T00:00:00Z" },
     lastSubmittedAt: null,
     payerPipelineState: "submitted",
     portalTasks: [
       {
         taskId: FIXTURES.TASK_ID,
-        title: "Enroll on BCBS portal",
+        title: "Enroll on regional portal",
         portalKey: FIXTURES.PORTAL_KEY,
         status: "in_progress",
       },
@@ -364,7 +363,7 @@ const CASES = [
     openTasks: [
       {
         id: FIXTURES.TASK_ID,
-        title: "Enroll on BCBS portal",
+        title: "Enroll on regional portal",
         status: "in_progress",
         executionType: "extension_fill",
         sortOrder: 1,
@@ -384,7 +383,7 @@ const CASES = [
     id: FIXTURES.CASE2_ID,
     providerId: FIXTURES.PROVIDER2_ID,
     facilityId: null,
-    payerName: "Humana",
+    payerName: "National Health Plan",
     state: "KS",
     status: "In Progress",
     submittedDate: null,
@@ -403,7 +402,7 @@ const CASES = [
     id: FIXTURES.CASE3_ID,
     providerId: FIXTURES.PROVIDER2_ID,
     facilityId: FIXTURES.FACILITY_ID,
-    payerName: "Cigna",
+    payerName: "Example Insurance Co.",
     state: "MO",
     status: "In Progress",
     submittedDate: null,
@@ -518,11 +517,11 @@ export async function createMockPanelApi(options = {}) {
       {
         id: "shared-portal-1",
         orgId: null,
-        portalKey: "aetna_join",
-        name: "Aetna — Request to Join",
-        payerId: "payer-aetna",
-        payerName: "Aetna",
-        formUrl: "https://payer.example/aetna/join/start",
+        portalKey: "national_join",
+        name: "National Health Plan — Request to Join",
+        payerId: "payer-national",
+        payerName: "National Health Plan",
+        formUrl: "https://portal.example.com/national/join/start",
         isVerified: false,
         lastVerifiedAt: null,
         provenAt: null,
@@ -577,7 +576,7 @@ export async function createMockPanelApi(options = {}) {
 
     // --- /api/me/orgs (user-scoped) ---
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
-      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Kansas Fitness Physio", role: "admin" }];
+      const rows = [{ orgId: FIXTURES.PRIMARY_ORG, orgName: "Lakeside Physical Therapy", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
@@ -608,11 +607,11 @@ export async function createMockPanelApi(options = {}) {
         {
           id: "portal-1",
           orgId: null,
-          portalKey: "bcbs_ks_enrollment",
-          name: "BCBS KS network enrollment",
+          portalKey: "regional_enrollment",
+          name: "Regional Health Plan network enrollment",
           payerId: null,
           formUrl:
-            "https://provider.bcbsks.com/bcbsks-provider/facelets/allUsers/form/NetworkEnrollmentForm.faces",
+            "https://portal.example.com/regional/enroll/form",
           isVerified: true,
           lastVerifiedAt: "2026-07-01T00:00:00Z",
           provenAt: "2026-07-02T00:00:00Z",
@@ -713,12 +712,12 @@ export async function createMockPanelApi(options = {}) {
         {
           caseId: FIXTURES.CASE2_ID,
           providerId: FIXTURES.PROVIDER2_ID,
-          providerName: "Pat Ostrander",
-          payerName: "Humana",
-          groupName: "Kansas Fitness Physio Group",
+          providerName: "Jordan Example",
+          payerName: "National Health Plan",
+          groupName: "Lakeside PT Group",
           state: "KS",
           actionKind: "follow_up",
-          action: "Follow up with Humana",
+          action: "Follow up with National Health Plan",
           reason: "Follow-up overdue by 3 days.",
           deadline: { date: isoDaysFromNow(-3), source: "follow_up", overdue: true },
           payerPipelineState: "submitted",
@@ -727,12 +726,12 @@ export async function createMockPanelApi(options = {}) {
         {
           caseId: FIXTURES.CASE_ID,
           providerId: FIXTURES.PROVIDER_ID,
-          providerName: "Kay One",
-          payerName: "BCBS of Kansas",
-          groupName: "Kansas Fitness Physio Group",
+          providerName: "Alex Sample",
+          payerName: "Regional Health Plan",
+          groupName: "Lakeside PT Group",
           state: "KS",
           actionKind: "task",
-          action: "Enroll on BCBS portal",
+          action: "Enroll on regional portal",
           reason: "Task due in 5 days.",
           deadline: { date: isoDaysFromNow(5), source: "task_due", overdue: false },
           payerPipelineState: "in_review",
@@ -993,7 +992,7 @@ export async function createMockPanelApi(options = {}) {
         if (!map) {
           map = {
             id: `fm-proposed-${state.proposedMaps.size + 1}`,
-            orgId: FIXTURES.KANSAS_ORG,
+            orgId: FIXTURES.PRIMARY_ORG,
             portalKey: body.portal_key,
             selector: body.selector,
             fieldLabel: label || null,

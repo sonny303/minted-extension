@@ -54,7 +54,7 @@ Good: "About 30 minutes if the fixtures already exist. An hour if we need to see
 ### 6. Make wins visible
 
 Bad: "I've updated the credentialing workflow."
-Good: "Coordinators can now submit BCBS Kansas enrollments end to end. Try: open a case, hit Fill, then Submit."
+Good: "Coordinators can now submit Regional Health Plan enrollments end to end. Try: open a case, hit Fill, then Submit."
 
 ### 7. Matter-of-fact on errors
 

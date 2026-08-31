@@ -85,20 +85,20 @@ vi.mock("../background/auth", () => {
   }
   return {
     AuthRequiredError,
-    getAccessToken: async () => "tok-kansas",
+    getAccessToken: async () => "tok-primary",
     forceRefresh: async () => {
       throw new AuthRequiredError();
     },
     getAuthState: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
-      name: "Test Kansas",
+      email: "test.coordinator@example.com",
+      name: "Test Coordinator",
     }),
-    currentUserId: async () => "user-kansas",
+    currentUserId: async () => "user-primary",
     signIn: async () => ({
       signedIn: true,
-      email: "testkansas@minted.com",
-      name: "Test Kansas",
+      email: "test.coordinator@example.com",
+      name: "Test Coordinator",
     }),
     signOut: async () => {},
   };
@@ -164,8 +164,8 @@ const HANDOFF = {
   type: "SET_ACTIVE_CASE",
   caseId: FIXTURES.CASE_ID as string,
   providerId: FIXTURES.PROVIDER_ID as string,
-  orgId: FIXTURES.KANSAS_ORG as string,
-  portalUrl: "https://provider.bcbsks.com/enroll/form",
+  orgId: FIXTURES.PRIMARY_ORG as string,
+  portalUrl: "https://portal.example.com/enroll/form",
 };
 const APP_ORIGIN = "https://mintedpanel.vercel.app";
 
@@ -186,7 +186,7 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
     if (state.status !== "active") return;
     expect(state.record.caseId).toBe(FIXTURES.CASE_ID);
     expect(state.record.providerId).toBe(FIXTURES.PROVIDER_ID);
-    expect(state.record.orgId).toBe(FIXTURES.KANSAS_ORG);
+    expect(state.record.orgId).toBe(FIXTURES.PRIMARY_ORG);
     expect(state.record.source).toBe("handoff");
     // An open panel is told the context changed.
     expect(stub.broadcasts).toContainEqual({ type: "ACTIVE_CASE_UPDATED" });
@@ -220,16 +220,16 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
     await handleExternalMessage(HANDOFF, APP_ORIGIN);
     await maybeBindPortalTab(7, "https://unrelated.example.com/page");
     expect((await readActiveCaseRecord())?.boundTabId).toBeNull();
-    await maybeBindPortalTab(7, "https://provider.bcbsks.com/login");
+    await maybeBindPortalTab(7, "https://portal.example.com/login");
     expect((await readActiveCaseRecord())?.boundTabId).toBe(7);
     // Already bound: a later tab never steals the binding.
-    await maybeBindPortalTab(9, "https://provider.bcbsks.com/other");
+    await maybeBindPortalTab(9, "https://portal.example.com/other");
     expect((await readActiveCaseRecord())?.boundTabId).toBe(7);
   });
 
   it("expires the context when the bound tab closes", async () => {
     await handleExternalMessage(HANDOFF, APP_ORIGIN);
-    await maybeBindPortalTab(7, "https://provider.bcbsks.com/login");
+    await maybeBindPortalTab(7, "https://portal.example.com/login");
     await onTabRemoved(3); // not the bound tab — no effect
     expect((await getActiveCaseState()).status).toBe("active");
     await onTabRemoved(7);
@@ -266,8 +266,8 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
 
   it("serves the full case-context projection for the handed-off case", async () => {
     const context = await getCaseContext(FIXTURES.CASE_ID);
-    expect(context.provider?.name).toBe("Kay One");
-    expect(context.payer?.name).toBe("BCBS of Kansas");
+    expect(context.provider?.name).toBe("Alex Sample");
+    expect(context.payer?.name).toBe("Regional Health Plan");
     expect(context.state).toBe("KS");
     expect(context.payerPipelineState).toBe("submitted");
     expect(context.referenceNumbers).toEqual(["REF-1001"]);
@@ -400,7 +400,7 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     const result = await getNextBestAction();
     expect(result.item).not.toBeNull();
     expect(result.item?.caseId).toBe(FIXTURES.CASE2_ID);
-    expect(result.item?.action).toBe("Follow up with Humana");
+    expect(result.item?.action).toBe("Follow up with National Health Plan");
     expect(result.item?.deadline?.overdue).toBe(true);
     expect(result.item?.deepLink).toBe(`/cases/${FIXTURES.CASE2_ID}`);
     // The handback enters the same active-case state as a handoff (TE-17).
@@ -418,12 +418,12 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
 
 describe("TS-100 — unified standalone search", () => {
   it("finds cases by provider name, payer name, tracking ID, and case number", async () => {
-    const byProvider = await searchCases("kay");
+    const byProvider = await searchCases("alex");
     expect(byProvider.map((r) => r.id)).toEqual([FIXTURES.CASE_ID]);
-    expect(byProvider[0]?.providerName).toBe("Kay One");
+    expect(byProvider[0]?.providerName).toBe("Alex Sample");
     // Case search carries the case's facility so the panel can pre-select it.
     expect(byProvider[0]?.facilityId).toBe(FIXTURES.FACILITY_ID);
-    const byPayer = await searchCases("humana");
+    const byPayer = await searchCases("national");
     expect(byPayer.map((r) => r.id)).toEqual([FIXTURES.CASE2_ID]);
     expect(byPayer[0]?.facilityId).toBeNull();
     const byRef = await searchCases("REF-1001");
@@ -438,7 +438,7 @@ describe("TS-100 — unified standalone search", () => {
   });
 
   it("finds providers over the PHI-minimized list projection", async () => {
-    const rows = await searchProviders("ostr");
+    const rows = await searchProviders("jord");
     expect(rows.map((r) => r.id)).toEqual([FIXTURES.PROVIDER2_ID]);
     expect(rows[0]).not.toHaveProperty("ssnLast4");
     expect(rows[0]).not.toHaveProperty("dateOfBirth");
@@ -449,15 +449,15 @@ describe("TS-100 — unified standalone search", () => {
   // the field survives the real fetch layer, not just the pure formatter.
   it("carries every group a provider works under, primary first", async () => {
     const rows = await listProviders();
-    const kay = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
-    expect(kay?.groups?.map((g) => g.name)).toEqual([
-      "Kansas Fitness Physio Group",
-      "Wellspring PT",
+    const alex = rows.find((r) => r.id === FIXTURES.PROVIDER_ID);
+    expect(alex?.groups?.map((g) => g.name)).toEqual([
+      "Lakeside PT Group",
+      "Summit Health Group",
     ]);
-    expect(kay?.groups?.[0]?.isPrimary).toBe(true);
+    expect(alex?.groups?.[0]?.isPrimary).toBe(true);
     // The formatter the panel actually renders, over that same wire shape.
-    expect(providerGroupsLabel(kay!)).toBe(
-      "Kansas Fitness Physio Group · Wellspring PT",
+    expect(providerGroupsLabel(alex!)).toBe(
+      "Lakeside PT Group · Summit Health Group",
     );
   });
 });
@@ -472,7 +472,7 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
       resolveLayout(null),
       today,
     );
-    expect(cards.name).toBe("Kay One");
+    expect(cards.name).toBe("Alex Sample");
     expect(cards.dateOfBirth).toBe("1980-01-15");
     // CAQH is empty on the fixture — rendered honestly with the reason.
     const caqh = cards.type1Fields.find((f) => f.key === "provider.caqhId");
@@ -480,7 +480,7 @@ describe("TS-101 — quick cards from the live profile endpoint", () => {
     expect(caqh?.reason).toBe("empty on provider");
     // The fixture license expires 20 days out — inside the amber window.
     expect(cards.license.expiry).toBe("expiring");
-    expect(cards.groupName).toBe("Kansas Fitness Physio Group");
+    expect(cards.groupName).toBe("Lakeside PT Group");
   });
 });
 
@@ -495,7 +495,7 @@ describe("B1.1/B1.4 — location + state resolve on the first profile read", () 
     const info = (await handleRequest({
       type: "GET_PROVIDER_FACILITIES",
       providerId: FIXTURES.PROVIDER2_ID,
-      // Pat's NON-primary location — the one CASE3 points at.
+      // Jordan's NON-primary location — the one CASE3 points at.
       facilityId: FIXTURES.FACILITY_ID,
       state: "MO",
     })) as import("../shared/messages").ProviderFacilitiesInfo;
@@ -533,9 +533,9 @@ describe("B1.1/B1.4 — location + state resolve on the first profile read", () 
     );
     const value = (key: string) =>
       cards.type1Fields.find((f) => f.key === key)?.value;
-    expect(value("facility.name")).toBe("Fitness Physio - Leavenworth");
-    expect(value("facility.street")).toBe("100 Main St");
-    expect(value("facility.city")).toBe("Leavenworth");
+    expect(value("facility.name")).toBe("Riverside Clinic");
+    expect(value("facility.street")).toBe("1 Example St");
+    expect(value("facility.city")).toBe("Riverside");
     expect(value("assignment.startDate")).toBe("2023-05-01");
     expect(value("license.licenseNumber")).toBe("MO-88888");
     expect(value("license.state")).toBe("MO");
@@ -589,7 +589,7 @@ describe("B1.2 — a quiet case still carries (and resolves) its own location", 
       state: context.state,
     });
     const facilityName = profile.tokens.find((t) => t.token === "facility.name");
-    expect(facilityName?.value).toBe("Fitness Physio - Leavenworth");
+    expect(facilityName?.value).toBe("Riverside Clinic");
   });
 });
 
@@ -630,8 +630,8 @@ describe("E1.5 — a multi-location case's context carries every location, prima
     });
     const nameOf = (p: typeof primaryProfile) =>
       p.tokens.find((t) => t.token === "facility.name")?.value;
-    expect(nameOf(primaryProfile)).toBe("Fitness Physio - Leavenworth");
-    expect(nameOf(secondaryProfile)).toBe("Fitness Physio - Lee's Summit");
+    expect(nameOf(primaryProfile)).toBe("Riverside Clinic");
+    expect(nameOf(secondaryProfile)).toBe("Midtown Clinic");
     expect(nameOf(primaryProfile)).not.toBe(nameOf(secondaryProfile));
   });
 
@@ -682,21 +682,21 @@ describe("B1.3 — concurrent facility reads never cross-contaminate", () => {
 describe("S5.1/S5.3 — capture proposes, and learns", () => {
   it("writes a PROPOSED row with no token, whatever we ask for", async () => {
     const result = await proposeFieldMap({
-      portal_key: "humana_enroll",
+      portal_key: "national_enroll",
       selector: "#npi",
       field_label: "NPI",
     });
     // Approving is a human act in the webapp; the panel can only propose.
     expect(result.map.status).toBe("proposed");
     expect(result.map.token).toBeNull();
-    expect(mock.state.proposedMaps.get("humana_enroll:#npi")?.status).toBe(
+    expect(mock.state.proposedMaps.get("national_enroll:#npi")?.status).toBe(
       "proposed",
     );
   });
 
   it("returns the learned suggestion with its payer-count evidence", async () => {
     const result = await proposeFieldMap({
-      portal_key: "humana_enroll",
+      portal_key: "national_enroll",
       selector: "#npi2",
       field_label: "NPI",
     });
@@ -706,7 +706,7 @@ describe("S5.1/S5.3 — capture proposes, and learns", () => {
 
   it("returns no suggestion for a label nothing backs — an honest blank", async () => {
     const result = await proposeFieldMap({
-      portal_key: "humana_enroll",
+      portal_key: "national_enroll",
       selector: "#mystery",
       field_label: "Mystery box",
     });
@@ -731,7 +731,7 @@ describe("S5.1/S5.3 — capture proposes, and learns", () => {
 describe("S4.4 — the opt-in status bump", () => {
   const submissionBody = (idempotencyId: string, bump: boolean) =>
     buildSubmissionTouchBody({
-      portalKey: "bcbs_ks_enrollment",
+      portalKey: "regional_enrollment",
       fillSessionId: null,
       idempotencyId,
       bumpStatus: bump,
@@ -842,7 +842,7 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
     // A worker restart holds NO state — the next read IS the restart path.
     const prefs = await getViewPrefs();
     expect(prefs.fields).toEqual(layout);
-    expect(mock.state.viewPrefs.get("user-kansas")).toEqual(layout);
+    expect(mock.state.viewPrefs.get("user-primary")).toEqual(layout);
   });
 
   it("GET serves the schema-derived catalog beside the layout (one round trip)", async () => {
@@ -858,7 +858,7 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
 
   it("a PUT naming ssnLast4 now validates; a non-catalog key still 422s", async () => {
     await putViewPrefs(["provider.ssnLast4", "provider.npi"]);
-    expect(mock.state.viewPrefs.get("user-kansas")).toEqual([
+    expect(mock.state.viewPrefs.get("user-primary")).toEqual([
       "provider.ssnLast4",
       "provider.npi",
     ]);
@@ -902,12 +902,12 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     // multi-org case) and case-mode calls still carry it, but every training
     // call goes out without one. Sending it would land the capture in that
     // org's private overrides instead of the shared library.
-    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
     await writePanelMode("train");
 
     await listSharedPortals();
     await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#npi",
       field_label: "NPI",
       page_step: "Provider identity",
@@ -935,8 +935,8 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
         type: "SET_ACTIVE_CASE",
         caseId: FIXTURES.CASE_ID,
         providerId: FIXTURES.PROVIDER_ID,
-        orgId: FIXTURES.KANSAS_ORG,
-        portalUrl: "https://provider.bcbsks.com/x",
+        orgId: FIXTURES.PRIMARY_ORG,
+        portalUrl: "https://portal.example.com/x",
       },
       "https://mintedpanel.vercel.app",
     );
@@ -952,7 +952,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     ]);
     for (const row of rows) {
       await proposeSharedFieldMap({
-        portal_key: "aetna_join",
+        portal_key: "national_join",
         selector: row.selector,
         field_label: row.label,
         page_step: "Provider identity",
@@ -974,7 +974,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
   it("TS-152b — re-capturing a page returns the SAME row, decision intact", async () => {
     await writePanelMode("train");
     const first = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#npi",
       field_label: "NPI",
       page_step: "Page 1",
@@ -982,7 +982,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       sort_order: 1,
     });
     const again = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#npi",
       field_label: "NPI number",
       page_step: "Page 1",
@@ -998,7 +998,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
   it("TS-158 — captured option vocabulary rides the shared propose, shape-only", async () => {
     await writePanelMode("train");
     const map = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#practice-state",
       field_label: "Practice State",
       field_type: "select",
@@ -1023,7 +1023,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
   it("TS-159 — re-capture refreshes a non-empty list and ignores an empty one", async () => {
     await writePanelMode("train");
     const first = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#practice-state",
       field_label: "Practice State",
       field_type: "select",
@@ -1033,7 +1033,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       ],
     });
     const withNew = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#practice-state",
       field_label: "Practice State",
       field_type: "select",
@@ -1052,7 +1052,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       { value: "NE", label: "Nebraska" },
     ]);
     const empty = await proposeSharedFieldMap({
-      portal_key: "aetna_join",
+      portal_key: "national_join",
       selector: "#practice-state",
       field_label: "Practice State",
       field_type: "select",
@@ -1068,23 +1068,23 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     const registry = await listSharedPortals();
 
     const known = recognizeForm(
-      "https://payer.example/aetna/join/start?session=abc",
+      "https://portal.example.com/national/join/start?session=abc",
       registry,
-      "Aetna",
+      "National Health Plan",
     );
     expect(known.kind).toBe("existing");
-    if (known.kind === "existing") expect(known.portal.key).toBe("aetna_join");
+    if (known.kind === "existing") expect(known.portal.key).toBe("national_join");
 
     const unknown = recognizeForm(
       "https://other.example/apply",
       registry,
-      "Cigna",
+      "Example Insurance Co.",
     );
-    expect(unknown).toEqual({ kind: "new", candidateName: "Cigna form" });
+    expect(unknown).toEqual({ kind: "new", candidateName: "Example Insurance Co. form" });
 
     // A second form for a payer that already has one is numbered, never a
     // block and never an overwrite.
-    expect(candidatePortalName("Aetna", registry)).toBe("Aetna form 2");
+    expect(candidatePortalName("National Health Plan", registry)).toBe("National Health Plan form 2");
 
     // Nothing was written by recognizing anything.
     expect(mock.state.sharedProposed.size).toBe(0);
@@ -1096,7 +1096,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       {
         id: "s1",
         orgId: null,
-        portalKey: "aetna_join",
+        portalKey: "national_join",
         selector: "#npi",
         pageStep: "Page 1",
         source: "token",
@@ -1107,7 +1107,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
       {
         id: "s2",
         orgId: null,
-        portalKey: "aetna_join",
+        portalKey: "national_join",
         selector: "#tin",
         pageStep: "Page 2",
         source: "manual",
@@ -1116,7 +1116,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
         status: "proposed",
       },
     ];
-    const maps = await listSharedFieldMaps("aetna_join");
+    const maps = await listSharedFieldMaps("national_join");
     expect(formCaptureState(maps)).toEqual({
       pagesSeen: 2,
       fieldsCaptured: 2,
@@ -1132,7 +1132,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     // Behavioral half (real): decideCaptureStart must refuse a login wall /
     // stale key so START_CAPTURE is not authorized.
     const rejected = decideCaptureStart({
-      portalKey: "aetna_join",
+      portalKey: "national_join",
       tabId: 7,
       tabUrl: "https://login.example/sso",
       rows: registry,
@@ -1163,8 +1163,8 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     const view = resolveTrainRecognition({
       url: "https://login.example/sso",
       rows: registry,
-      payerName: "Aetna",
-      selectedPortalKey: "aetna_join",
+      payerName: "National Health Plan",
+      selectedPortalKey: "national_join",
     });
     expect(view.status).toBe("mismatch");
     expect(view.portal).toBeNull();
@@ -1235,7 +1235,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const page1 = (await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "bcbs_ks_enrollment",
+      portalKey: "regional_enrollment",
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1258,7 +1258,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const page2 = (await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "bcbs_ks_enrollment",
+      portalKey: "regional_enrollment",
       pageStep: "step2",
       pageUrlTail: "step2",
       captureMode: "auto",
@@ -1287,7 +1287,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "bcbs_ks_enrollment",
+      portalKey: "regional_enrollment",
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1331,7 +1331,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "bcbs_ks_enrollment",
+      portalKey: "regional_enrollment",
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1365,7 +1365,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
       handleRequest({
         type: "START_CAPTURE",
         tabId: 1,
-        portalKey: "bcbs_ks_enrollment",
+        portalKey: "regional_enrollment",
         pageStep: "step1",
         pageUrlTail: "step1",
         captureMode: "auto",
@@ -1391,7 +1391,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
 
   beforeEach(async () => {
     stub.reset();
-    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
     await writePanelMode("case");
     previousSendMessage = chrome.tabs.sendMessage;
   });

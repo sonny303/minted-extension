@@ -1,9 +1,6 @@
-// Side panel UI: sign in, resolve an organization, pick a provider, location,
-// and case, fill the open portal page. All auth and API work happens in the
-// background worker; this file only renders state and sends typed messages.
-// Unlike the old popup, the panel stays open across tab switches, so portal
-// detection follows the active tab and the fill re-checks the tab's URL at
-// click time.
+// Side panel UI: sign-in, org/provider/case selection, and fill controls.
+// All API calls run in the background worker; this file renders state and
+// sends typed messages. Portal detection follows the active tab.
 import "./sidepanel.css";
 import type {
   CaseContext,
@@ -130,8 +127,8 @@ import {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Story 10: warn before logging a second submission on a case that was marked
-// submitted within this window. The human can still log anyway (one click).
+// Warn before logging a second submission on a case recently marked submitted.
+// The human can still log anyway (one click).
 const DUPLICATE_WINDOW_DAYS = 14;
 
 function el<T extends HTMLElement>(id: string): T {
@@ -145,7 +142,7 @@ const views = {
   signin: el<HTMLElement>("view-signin"),
   main: el<HTMLElement>("view-main"),
 };
-// E6.9 F6.9.7 — the job chooser and the Train-forms module.
+// Mode chooser and Train-forms UI.
 const modeSearchBtn = el<HTMLButtonElement>("mode-search");
 const modeCaseBtn = el<HTMLButtonElement>("mode-case");
 const modeTrainBtn = el<HTMLButtonElement>("mode-train");
@@ -189,8 +186,8 @@ const providerBarSwitch = el<HTMLButtonElement>("provider-bar-switch");
 const facilitySelect = el<HTMLSelectElement>("facility-select");
 const facilityHint = el<HTMLElement>("facility-hint");
 const facilityAddress = el<HTMLElement>("facility-address");
-// E1.5 — every location the SELECTED CASE has on file (facility-select stays
-// the one fill-target picker; this is read-only context beside it).
+// Case location list (read-only; #facility-select is the fill target).
+// Shown beside the facility picker for context.
 const caseLocationsList = el<HTMLElement>("case-locations-list");
 const mainError = el<HTMLElement>("main-error");
 const providerCard = el<HTMLElement>("provider-card");
@@ -314,11 +311,11 @@ let facilitiesLoaded = false;
 let needsFacility = false;
 let portal: MatchedPortal | null = null;
 let portalTabId: number | null = null;
-// The DB-driven portal registry (S3.2): fetched per org, held in memory only.
+// Portal registry from the API, held in memory per org.
 // Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
 // which is the correct signed-out/org-less posture.
 let portalRows: PortalRegistryRow[] = [];
-// E6.9: the current job, and the SHARED (global) registry Train forms works
+// Panel mode and the shared portal registry used in Train forms.
 // against. The worker owns the mode — it decides whether a call carries
 // x-org-id — so the panel mirrors it rather than being its source of truth.
 let panelMode: PanelMode = DEFAULT_PANEL_MODE;
@@ -337,26 +334,18 @@ let sharedPortalRows: PortalRegistryRow[] = [];
 let trainFormMaps: PortalFieldMap[] = [];
 let lastMockDryRunPortalKey: string | null = null;
 let lastFill: LastFill | null = null;
-// Phase 4: the SOP task the "Mark submitted" touch will close, derived from the
-// selected case's portalTasks matched against the current page's portal. null =
-// no matching task (or the user chose "Don't close a task"). Re-derived by
-// renderTaskLink() each time the submit block renders; cleared on selection
-// change / fresh fill.
+// SOP task to close via "Mark submitted", matched from portalTasks on the case
+// against the current page's portal. null = no match (or user chose none).
+// Re-derived by renderTaskLink(); cleared on selection change / fresh fill.
 let selectedTaskId: string | null = null;
-// Story 10: set true after the first "Mark submitted" click on a recently
-// submitted case surfaces the warning; the next click logs anyway. Reset on any
-// selection change or a fresh fill.
+// First "Mark submitted" click on a recently submitted case shows a warning;
+// the next click logs anyway. Reset on selection change or a fresh fill.
 let dupConfirmPending = false;
-// Epic 3a: the fill-ready selection the coverage panel currently reflects (or
-// has a request in flight for). De-dupes the many updateFillReady() calls into
-// one fetch per distinct selection; null when the selection isn't fill-ready
-// (panel hidden). Depends only on what coverage depends on — provider, facility,
-// portal, state — not the case, so switching cases doesn't refetch.
+// Coverage fetch key — de-dupes refreshCoverage calls. Null when not fill-ready.
+// Depends on provider, facility, portal, and state — not the case.
 let coverageKey: string | null = null;
-// Epic 3d: the case id whose context the block currently shows (or has a fetch
-// in flight for). De-dupes redundant refreshCaseContext() calls and, together
-// with the generation guard, lets a stale response for a previously-selected
-// case be discarded on landing. null when no case is selected (block hidden).
+// Case context fetch key — de-dupes refreshCaseContext calls. Null when no case
+// is selected. With the generation guard, stale responses are discarded.
 let caseContextCaseId: string | null = null;
 // The last rendered case context — feeds the identity guard header and the
 // case-selected facility auto-pick. In-memory only, cleared with the case.
@@ -365,16 +354,15 @@ let caseContextData: CaseContext | null = null;
 // case's facility_id wins over a remembered provider location. Cleared after
 // maybeApplyCaseFacility runs (or when the case has no facility).
 let preferCaseFacility = false;
-// E4.3 F4.3.1: the worker-owned active-case record as last read, and its
-// expiry status. The panel re-reads on open, on the worker's
-// ACTIVE_CASE_UPDATED broadcast, and on a slow poll (expiry has a clock).
+// Active-case record from the worker and its expiry status. Re-read on open,
+// on ACTIVE_CASE_UPDATED, and on a slow poll (expiry has a clock).
 let activeCase: ActiveCaseRecord | null = null;
 let activeCaseStatus: "none" | "active" | "expired" = "none";
 // The handoff launch the panel already applied (caseId + createdAt), so a
 // re-read doesn't re-apply the same launch — but a SECOND launch (new
 // createdAt, last-launch-wins) does apply.
 let appliedHandoffKey: string | null = null;
-// F4.3.4: the structured-touch draft's idempotency id — generated when a
+// Structured-touch idempotency id — created when a
 // draft first saves, REUSED on every retry (a retry can never double-log),
 // regenerated only after a success.
 let touchDraftId: string | null = null;
@@ -383,15 +371,9 @@ let touchDraftId: string | null = null;
 let searchTimer: number | undefined;
 let searchSeq = 0;
 
-// Request-generation guard against stale async responses (fill-safety: a slow
-// response for provider A must never render A's cases or facilities under
-// provider B after a fast switch — that is a wrong-record-fill risk). Any
-// context switch that changes what the pickers should show — the initial /
-// restore load, org switch, provider switch, refresh, sign-out — bumps this
-// counter via bumpGeneration(). Every async loader captures the value at entry
-// and, after each await, discards its result (no module-state write, no DOM
-// rebuild) when a newer context has superseded it. The restore flow runs as a
-// single uninterrupted generation, so the guard never starves it.
+// Drop stale async results after a provider/org/case switch.
+// Each loader captures loadGeneration at start; after every await, discard
+// the result if a newer switch bumped the counter. Prevents wrong-record fills.
 let loadGeneration = 0;
 function bumpGeneration(): number {
   return ++loadGeneration;
@@ -413,10 +395,7 @@ function setError(box: HTMLElement, message: string | null): void {
   box.textContent = message ?? "";
 }
 
-// The selected provider (2026-08-19). It used to BE the retired dropdown's
-// value; now it is plain panel state, set by a search pick, a case pick, a
-// hand-off, or the worker's remembered selection on load. Every generation
-// guard around it is unchanged — only the storage moved.
+// Currently selected provider id (set by search, case pick, handoff, or restore).
 let selectedProvider: string | null = null;
 
 function selectedProviderId(): string | null {
@@ -492,7 +471,7 @@ function renderProviderCard(provider: ProviderListItem | null): void {
   fillSection.hidden = provider == null;
   // Card values arrive with the profile (loadFacilities), a beat after the
   // card; clear them here so a switch never shows the previous provider's
-  // values (TE-14 — values live only in this render).
+  // values — they live only in this render.
   renderQuickCards(null);
   renderActiveCases();
   if (!provider) return;
@@ -505,7 +484,7 @@ function renderProviderCard(provider: ProviderListItem | null): void {
   openInPanelLink.href = `${API_BASE_URL}${providerWebappPath(provider.id)}`;
 }
 
-// E4.3 F4.3.5 — the read-only Quick Cards, projected worker-side from ONE
+// Quick Cards projected from one
 // audited profile read. Held so the Edit Layout form can pre-check the fields
 // the cards currently show. Values are in-memory only.
 let currentCards: QuickCards | null = null;
@@ -513,7 +492,7 @@ let currentCards: QuickCards | null = null;
 // catalog read failed — the picker renders an honest failure note instead of
 // a stale local list.
 let currentCatalog: QuickCardCatalogField[] = [];
-// S4.1: dead-selector count from the last REAL fill on the current portal —
+// Dead-selector count from the last fill on this portal —
 // drives the drift strip. 0 = no known drift (also the pre-fill default).
 let lastReportBrokenCount = 0;
 
@@ -525,7 +504,7 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
   const dd = document.createElement("dd");
   dd.classList.add("detail-row");
   if (field.value == null || field.value === "") {
-    // S2.3: absent values read "Not on file" with an amber icon and are not
+    // Absent values read "Not on file" with an amber icon and are not
     // clickable; the profile's unresolved reason rides the tooltip.
     const empty = document.createElement("span");
     empty.className = "id-empty not-on-file";
@@ -534,7 +513,7 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
     dd.append(empty);
   } else {
     const text = document.createElement("span");
-    // Wrap, never truncate (S2.3) — long values break to the next line.
+    // Wrap, never truncate — long values break to the next line.
     text.className = "id-value mono wrap";
     text.textContent = looksLikeIsoDate(field.value)
       ? formatDisplayDate(field.value)
@@ -554,7 +533,7 @@ function idGridEntry(field: QuickCardField): [HTMLElement, HTMLElement] {
   return [dt, dd];
 }
 
-// S2.3: one section per catalog group inside the details area — heading, the
+// One section per catalog group in the details area — heading, the
 // picked fields of that group, and (when any field is absent) ONE fix
 // footnote deep-linking the provider's webapp page. Groups render in served-
 // catalog order; a group with no picked fields renders nothing.
@@ -627,7 +606,7 @@ function renderGroupedDetails(
 
 function renderQuickCards(cards: QuickCards | null): void {
   // A provider switch/sign-out clears the session copy marks — they are
-  // per-provider (a copied NPI for Kay is not "copied" for Eric).
+  // per-provider (a copied NPI for Alex is not "copied" for Morgan).
   if (cards == null || cards !== currentCards) copiedKeys.clear();
   currentCards = cards;
   // Any cards change (provider switch, refetch) closes the layout form — it
@@ -664,21 +643,14 @@ function renderQuickCards(cards: QuickCards | null): void {
   renderGroupedDetails(groupIds, cards.type2Fields, selectedProviderId());
   // No fixed Malpractice row: those groupInsurance.* fields are ordinary
   // catalog fields now, so they render through the layout above like any
-  // other (removed 2026-08-19 — see the note on the QuickCards type).
+  // other catalog fields.
 
-  // B1.3: still unresolved after this render, with a location selected? One
-  // bounded re-read, never a loop — see maybeRetryFacilityCards.
+  // Location tokens still empty after render? Retry once (see maybeRetryFacilityCards).
   maybeRetryFacilityCards();
 }
 
-// B1.3: a location is selected but facility.*/assignment.* tokens are still
-// unresolved after a card render — usually a dropped refresh (a concurrent
-// loadFacilities reset the <select>'s value mid-flight and tripped
-// refreshFacilityCards's own generation/provider/facility guard, discarding a
-// resolved response for good; see the guard comments there). Keyed by
-// provider+facility so this fires AT MOST ONCE per selection: a genuinely
-// unassigned location still ends on "Not on file" with the server's own
-// reason after that one retry, which is correct, not a bug to keep chasing.
+// Retry facility cards once per provider+facility when location tokens stay unresolved.
+// Usually fixes a race where a concurrent facilities load discarded a good response.
 const retriedFacilityCards = new Set<string>();
 
 function maybeRetryFacilityCards(): void {
@@ -686,8 +658,7 @@ function maybeRetryFacilityCards(): void {
   const facilityId = selectedFacilityId();
   if (providerId == null || facilityId == null) return;
   const key = `${providerId}|${facilityId}`;
-  // The gate itself is pure (src/shared/quickCards.ts, B1.3) — this function
-  // only supplies the live session state and fires the bounded retry.
+  // Gate logic is in shouldRetryFacilityCards (shared/quickCards.ts).
   if (
     !shouldRetryFacilityCards({
       facilitiesLoaded,
@@ -709,12 +680,9 @@ function closeViewSettings(): void {
   viewSettingsSave.textContent = "Save layout";
 }
 
-// The Edit Layout form (S2.2): search over collapsible groups rendered from
-// the SERVED catalog (GET /api/me/view-prefs `catalog` — schema-derived
-// server-side, so the picker offers exactly what a PUT will accept; no local
-// allowlist survives). Checkbox DOM order within the render is the saved
-// order source; there is no layout-length cap (S2.1) — the closed served key
-// set bounds what a layout can contain.
+// Edit Layout form: search over collapsible groups from the served catalog
+// (GET /api/me/view-prefs `catalog`). Checkbox DOM order is the saved order;
+// the served key set bounds what a layout can contain.
 const viewSettingsSearch = el<HTMLInputElement>("view-settings-search");
 
 interface PickerGroup {
@@ -758,7 +726,7 @@ function renderPickerRows(query: string): void {
             group.groupLabel.toLowerCase().includes(q),
         )
       : group.fields;
-    // Empty groups hide (S2.2) — under a query AND when a group is empty.
+    // Empty groups hide under a query and when a group has no matches.
     if (matching.length === 0) continue;
     anyShown = true;
 
@@ -776,7 +744,7 @@ function renderPickerRows(query: string): void {
     const name = document.createElement("span");
     name.textContent = group.groupLabel;
     const count = document.createElement("span");
-    // "3 of 45" in primary when any picked, else "of 45" subtle (S2.2).
+    // "3 of 45" in primary when any picked, else "of 45" subtle.
     count.className =
       pickedCount > 0 ? "view-settings-count picked" : "view-settings-count";
     count.textContent =
@@ -818,7 +786,7 @@ function renderPickerRows(query: string): void {
   if (!anyShown) {
     const empty = document.createElement("p");
     empty.className = "view-settings-empty";
-    // The no-results state renders the query back (S2.2).
+    // No-results state echoes the query back.
     empty.textContent = q
       ? `No fields match "${query.trim()}".`
       : "The field list couldn't be loaded — close and reopen the panel to retry.";
@@ -856,7 +824,7 @@ viewSettingsBtn.addEventListener("click", () => {
 viewSettingsCancel.addEventListener("click", () => closeViewSettings());
 
 // Save the picked fields as the layout (PUT /api/me/view-prefs — server-side,
-// so it persists across machines and worker restarts, TS-102), then refetch
+// persists across sessions), then refetch
 // the profile so the cards re-project under the new layout. Order = the served
 // catalog's listing order, i.e. exactly the order this picker shows.
 viewSettingsSave.addEventListener("click", () => {
@@ -885,7 +853,7 @@ viewSettingsSave.addEventListener("click", () => {
     closeViewSettings();
     // The layout changed, not the selection — carry the current pick + case
     // state along so this reload resolves in one request instead of losing
-    // and re-discovering what was already known (B1.1).
+    // without losing the current facility/state pick.
     if (providerId) {
       const state = selectedCaseState();
       await loadFacilities(providerId, generation, {
@@ -897,7 +865,7 @@ viewSettingsSave.addEventListener("click", () => {
 });
 
 // Copy a single identifier to the clipboard. Copied rows stay marked for the
-// session (S2.3) — the mark set clears on provider switch/sign-out via
+// session — the mark set clears on provider switch/sign-out via
 // renderQuickCards(null). When the clipboard API is blocked, the fallback
 // SELECTS the value text and says so, instead of failing silently.
 const copiedKeys = new Set<string>();
@@ -937,9 +905,9 @@ async function copyValue(
   }
 }
 
-// Story 11: the selected case's latest touchlog note, shown under the case
+// Latest touchlog note for selected case, shown under the case
 // picker. Hidden when no case is selected or the case has no note.
-// S4.2 — the duplicate-work guard, fired ON PICKUP (not at submit, where it
+// Duplicate-work warning on case pickup (not at submit, where it
 // arrives too late to save the work). Never blocks: "Continue anyway"
 // dismisses it for this pickup, and "See the touchlog" opens the case in the
 // webapp. Re-evaluated on every case change, so it survives a case switch.
@@ -1020,13 +988,13 @@ function contextRow(label: string): {
 }
 
 // "not_started" → "Not started" for the pipeline pill; the raw value is the
-// server's E4.0 pipeline state key.
+// server pipeline state key.
 function humanizeStateKey(value: string): string {
   const text = value.replace(/_/g, " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// E4.2 execution-type labels for the open-task chips (read-only in R6:
+// Execution-type labels for open-task chips (read-only here:
 // extension_fill tasks are the ones the Fill button serves; the rest are
 // checklist context).
 const EXECUTION_TYPE_LABELS: Record<string, string> = {
@@ -1036,7 +1004,7 @@ const EXECUTION_TYPE_LABELS: Record<string, string> = {
   document_attach: "Document attach",
 };
 
-// F4.3.1 identity guard: the strip under the header always names the org the
+// Identity strip under the header always names the org the
 // panel operates as, plus — once a case is active — the provider, payer/state,
 // and selected facility. A multi-org user can never be silently filling from
 // the wrong org or case.
@@ -1077,7 +1045,7 @@ function renderIdentityGuard(): void {
   });
 }
 
-// E4.3: the case explicitly selects a facility (credential_cases.facility_id,
+// Adopt the case's facility into the location picker when present. (credential_cases.facility_id,
 // resolved server-side — an explicit relationship, not a guess). When the
 // context carries one, it becomes the location pick unless the user already
 // picked; a fresh case selection (preferCaseFacility) overrides a remembered
@@ -1086,8 +1054,8 @@ function maybeApplyCaseFacility(): void {
   // Wait for both the facility list and case context — clearing preferCaseFacility
   // here would race loadFacilities finishing before GET_CASE_CONTEXT returns.
   if (!facilitiesLoaded || caseContextData == null) return;
-  // The decision itself is pure (src/shared/caseContext.ts, B1.2) — this
-  // function is only the DOM/network side effects of whatever it decides.
+  // Decision logic is in resolveCaseFacilitySelection (caseContext.ts); this
+  // function applies the result to the DOM.
   const decision = resolveCaseFacilitySelection({
     selectedFacility: caseContextData.selectedFacility,
     facilityIds: facilities.map((f) => f.id),
@@ -1117,13 +1085,7 @@ function maybeApplyCaseFacility(): void {
   updateFillReady();
 }
 
-/** Re-fetch the profile with a chosen facilityId so facility.* / assignment.*
- * quick-card tokens resolve. The initial multi-facility load intentionally
- * omits facilityId (server sets needs_facility); without this refresh the
- * PRACTICE LOCATION card stays "Not on file" even after a dropdown pick.
- * B1.1: the case's state (selectedCaseState() — the same source the fill path
- * uses) rides along too, so a provider with several state licenses resolves
- * the right one instead of staying ambiguous. */
+/** Re-fetch profile for a facility pick so facility.* and assignment.* tokens resolve. */
 async function refreshFacilityCards(
   providerId: string,
   facilityId: string,
@@ -1136,13 +1098,7 @@ async function refreshFacilityCards(
     facilityId,
     ...(state ? { state } : {}),
   });
-  // Stale-response guards (generation/provider/facility all changed under us)
-  // still discard this response's DATA exactly as before — a superseded
-  // fetch must never paint the wrong provider's cards. B1.3 adds only a
-  // retry PATH, never removes this staleness protection: even when one of
-  // these trips, maybeRetryFacilityCards() below still runs and re-checks the
-  // CURRENT (post-race) selection on its own terms, live, rather than acting
-  // on anything this now-discarded response resolved.
+  // Discard stale responses — never paint another provider's cards.
   if (
     isCurrent(generation) &&
     selectedProviderId() === providerId &&
@@ -1156,25 +1112,12 @@ async function refreshFacilityCards(
     renderIdentityGuard();
     updateFillReady();
   }
-  // B1.3: whether the response above was accepted or discarded, settle the
-  // CURRENT selection once more — a discarded response (the race this ticket
-  // targets: a concurrent loadFacilities reset the <select>'s value between
-  // this request and its response) must not leave facility.*/assignment.*
-  // stuck unresolved with nothing left to retry it. Bounded to one retry per
-  // provider+facility regardless of how many times this runs.
+  // Retry once even if this response was discarded (concurrent load race).
   maybeRetryFacilityCards();
 }
 
-// Epic 3d + E4.3 TE-2: render the selected case's workbench context — identity
-// (provider/payer/state), pipeline state, tracking ID, open SOP tasks with
-// execution types, latest note and touch — as a read-only card. A null
-// argument (no case, an error, or nothing to show) hides the block. Purely
-// informational — it never gates the fill/submit flow, and nothing here is
-// persisted beyond this render.
-// S4.3 — one task's SOP steps. The step for the page in hand carries a THIS
-// PAGE chip and a row tint. Ticking writes through the server, which owns the
-// ordering rule; a rejection renders verbatim beneath the step and the
-// checkbox reverts — never a false success (the cross-cutting gate).
+// Render read-only case context (pipeline, tracking IDs, tasks, notes).
+// stepList() renders SOP steps for the current portal; step toggles PATCH the server.
 function stepList(
   taskId: string,
   steps: readonly CaseContextTaskStep[],
@@ -1245,14 +1188,14 @@ function stepList(
 function renderCaseContext(context: CaseContext | null): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
-  // E1.5 — rescope #facility-select to this case's own locations (or widen
+  // Rescope #facility-select to this case's locations (or widen
   // back to the provider's full set) BEFORE maybeApplyCaseFacility runs, so
   // the case's primary has an <option> to land on. Independent of the
   // hasContent gate below (a "quiet" case's location still matters) and of
   // the render list, which is purely cosmetic beside it.
   rescopeFacilitySelectOptions();
   renderCaseLocations(context);
-  // B1.2: location adoption must never be gated on whether the card has
+  // Adopt facility even when the context card is empty (new case with no notes).
   // anything to SHOW — a freshly generated case with no note/touch/tasks/
   // pipeline/refs yet ("quiet") still has its own selectedFacility, and that
   // must still get adopted. Run this before the hasContent early return,
@@ -1268,7 +1211,7 @@ function renderCaseContext(context: CaseContext | null): void {
   renderIdentityGuard();
   if (context == null || !hasContent) return;
 
-  // Pipeline state (E4.0): where the payer is, read-only.
+  // Payer pipeline state (read-only).
   if (pipeline != null) {
     const { row } = contextRow("Pipeline");
     const pill = document.createElement("span");
@@ -1290,7 +1233,7 @@ function renderCaseContext(context: CaseContext | null): void {
     caseContextBox.append(row);
   }
 
-  // S4.3 — Progress: the case's open tasks and their SOP steps, scoped to the
+  // Open tasks and SOP steps, scoped to the
   // portal in hand when one is recognized. Ticking a step WRITES
   // (PATCH /api/tasks/:id/steps); the server owns the ordering rule and a
   // rejection is shown verbatim — never a false success.
@@ -1392,8 +1335,7 @@ function refreshCaseContext(): void {
   })();
 }
 
-// Story 5: prefill the payer-reference box from the selected case's stored
-// reference; a fresh WIP note per case. Called on every case (re)selection.
+// Prefill payer reference from the case and clear the WIP note on reselection.
 function resetSubmitInputs(): void {
   const id = selectedCaseId();
   const caseItem = cases.find((c) => c.id === id) ?? null;
@@ -1401,12 +1343,8 @@ function resetSubmitInputs(): void {
   wipNoteInput.value = "";
 }
 
-// Phase 4: the just-filled case's open SOP tasks whose portal_key matches the
-// portal on the current page — the tasks "Mark submitted" could close. Matched
-// against the case backing the fill (lastFill), not whatever is selected now, so
-// the offered task always belongs to what was actually filled. The compare is a
-// literal string match on already-normalized keys (matchPortalTasks) — the
-// extension never re-normalizes, exactly like the field-map → profile-token join.
+// Portal tasks on the filled case matching the current page — tasks "Mark submitted"
+// could close. Matched against lastFill, not the current picker selection.
 function matchingPortalTasks(): CasePortalTask[] {
   const context = lastFill;
   if (!context || portal == null) return [];
@@ -1447,8 +1385,8 @@ function renderTaskLink(): void {
   selectedTaskId = null;
 }
 
-// Story 10: how long ago the selected case was last marked submitted, when
-// that is inside the duplicate window — else null (no warning).
+// How long ago the selected case was last marked submitted, when inside the
+// duplicate window — else null (no warning).
 function recentSubmissionPhrase(
   caseItem: CaseListItem | undefined,
 ): string | null {
@@ -1505,7 +1443,7 @@ function clearFillResults(): void {
 function isFillReady(): boolean {
   const portalOpen = portal != null && portalTabId != null;
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
-  // F4.3.1: never fill from expired context — when the active-case record
+  // Block fill when active-case context expired — when the active-case record
   // covers the selected case and expired, the gate closes (the worker also
   // refuses; this keeps the button honest).
   const expiredBlocked =
@@ -1534,7 +1472,7 @@ function updateFillReady(): void {
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
   fillBtn.disabled = !isFillReady();
-  // F4.3.4: the structured-touch form is available whenever a case is
+  // Show structured-touch form whenever a case is
   // selected — logging is manual and independent of a fill having run.
   touchSection.hidden = selectedCaseId() == null;
   // Every gate-state change routes through here, so this is the one place the
@@ -1546,9 +1484,8 @@ function updateFillReady(): void {
 // portal's field maps — NOT the case — but only shows for a fill-ready
 // selection, so a case must be picked for the key to be non-null. null = not
 // fill-ready = panel hidden.
-// The enrollment state comes from the selected CASE (S3.2): the registry row
-// carries no state — a national portal serves many — while every fill
-// requires a case and every case names its state.
+// Fill state comes from the selected case, not the registry row — a
+// national portal serves many states, while every case names its own.
 function selectedCaseState(): string {
   const caseItem = cases.find((c) => c.id === selectedCaseId());
   return caseItem?.state ?? "";
@@ -1619,11 +1556,11 @@ function renderCoverageLoading(): void {
   coverageGaps.replaceChildren();
 }
 
-// F4.3.3: the in-place fix-it action for one gap. A MAPPING gap routes to the
+// Fix-it link for one coverage gap. A MAPPING gap routes to the
 // existing platform train flow with the portal/field context in the URL; a
 // DATA gap routes to the provider record (the right fix, not the mapping
-// flow). Opens in a new tab so the portal session is preserved; the extension
-// itself never writes a mapping (TE-4).
+// flow). Opens in a new tab so the portal session is preserved; the
+// extension itself never writes a mapping.
 function gapActionLink(
   gap: ReportedField,
   portalKey: string | null,
@@ -1648,10 +1585,8 @@ function gapActionLink(
   return link;
 }
 
-// "Can fill M of N mapped fields." plus one row per gap (label + reason + the
-// F4.3.3 fix action). A null argument hides the panel. The gap list is empty
-// (and CSS-collapsed) at full coverage. Read-only — no field values are shown,
-// only labels and reasons.
+// Coverage panel: "Can fill M of N mapped fields" plus one row per gap.
+// Read-only — labels and reasons only, never field values.
 function renderCoverage(coverage: FillCoverage | null): void {
   coveragePanel.hidden = coverage == null;
   if (coverage == null) {
@@ -1662,7 +1597,7 @@ function renderCoverage(coverage: FillCoverage | null): void {
   const noun = coverage.total === 1 ? "field" : "fields";
   coverageCount.textContent = `Can fill ${coverage.available} of ${coverage.total} mapped ${noun}.`;
 
-  // S4.1 — PROVEN only when a dry run actually proved this form. An unproven
+  // Show proven chip only after a successful dry run. An unproven
   // form still fills; it just says so and the button drops to secondary.
   const proven = portal?.proven === true;
   provenChip.hidden = !proven;
@@ -1673,7 +1608,7 @@ function renderCoverage(coverage: FillCoverage | null): void {
   fillBtn.classList.toggle("secondary", !proven);
   fillBtn.classList.toggle("primary", proven);
 
-  // S4.1 — drift: dead selectors from the LAST REAL fill on this portal mean
+  // Drift warning: selectors missing since the last fill on this portal mean
   // the form changed. Stated before the run, with the count, so a partial
   // fill is never a surprise.
   const broken = lastReportBrokenCount;
@@ -1699,7 +1634,7 @@ function renderCoverage(coverage: FillCoverage | null): void {
     if (action) li.append(action);
     coverageGaps.append(li);
   }
-  // TE-4's return path: after a fix-it completes in the platform, one click
+  // After fix-it in the panel: after a fix-it completes in the platform, one click
   // refetches the maps + profile and re-checks coverage — the newly trained
   // field moves from the gap list into the fillable count.
   refreshMapsBtn.hidden = partitionGaps(coverage.gaps).mappingGaps.length === 0;
@@ -1748,7 +1683,7 @@ function bucketDetails(
 }
 
 // A report bucket's rows. When `actions` carries the fill's portal/provider
-// context, each gap row also offers its F4.3.3 fix action in place — the
+// context, each gap row also offers a fix-it link in place — the
 // specialist never has to re-find the field she just hit.
 function fieldList(
   box: HTMLElement,
@@ -1818,7 +1753,7 @@ function renderFillSummary(
     ),
   );
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
-  // The manual/gap bucket carries the fix-it actions (F4.3.3), scoped to the
+  // Manual/gap bucket shows fix-it links, scoped to the
   // fill that actually ran (lastFill), not whatever is selected now.
   fieldList(fillManualBox, "Needs manual entry or review:", summary.manual, {
     portalKey: lastFill?.portalKey ?? portal?.key ?? null,
@@ -1833,7 +1768,7 @@ function renderFillSummary(
       "Fill applied, but it couldn't be logged to Minted Panel. Retry from the case record.";
   }
 
-  // Story 9: the field-gap flag — mapped fields that came back without a value
+  // Field-gap flag — mapped fields that came back without a value
   // (skipped + needs-manual). Shown BEFORE the submit affordances so the human
   // sees the gaps first; submitting is never blocked.
   const gapCount = summary.skipped.length + summary.manual.length;
@@ -1845,7 +1780,7 @@ function renderFillSummary(
   }
 
   const submitted = restored?.submitted === true;
-  // Stories 5/6: the payer-reference + WIP-note boxes show while the human can
+  // Payer-reference and WIP-note boxes show while the human can
   // still act; an already-logged (restored) report hides them.
   submitDetails.hidden = submitted;
   if (!submitted) {
@@ -1957,7 +1892,7 @@ async function restoreFillReport(
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
   if (record.caseId !== selectedCase) return;
-  // S4.1 drift signal: dead selectors from this portal's last REAL fill.
+  // Drift signal: dead selectors from this portal's last REAL fill.
   if (record.portalKey === portal?.key) {
     lastReportBrokenCount = countBrokenSelectors(record.summary.skipped ?? []);
   }
@@ -1989,7 +1924,7 @@ function renderFacilityAddress(): void {
   }
 }
 
-// E1.5 — every location the selected CASE has on file (context.facilities),
+// List every case location (context.facilities),
 // primary badged. Read-only context beside the Location picker, which stays
 // the ONE fill-target control. No new chrome for the common case: hidden
 // entirely with 0 or 1 case location (a lone location is already what the
@@ -2027,7 +1962,7 @@ function renderCaseLocations(context: CaseContext | null): void {
   caseLocationsList.hidden = false;
 }
 
-// E1.5 — rescopes #facility-select's populated OPTIONS to the case's own
+// Limit #facility-select options to the case's locations
 // location set (facilityPickerScope, src/shared/caseContext.ts) whenever one
 // is known, falling back to the provider's full assigned set otherwise —
 // which is also what this is a no-op over when facilities aren't loaded yet,
@@ -2089,7 +2024,7 @@ function rescopeFacilitySelectOptions(): void {
 // auto-selected read-only (the server resolves it the same way). Several:
 // the user picks, remembered per provider and re-validated silently.
 //
-// B1.1: `known` carries a location/state the CALLER already has in hand —
+// When caller already knows facilityId + state,
 // a case-search row, an NBA item, a handoff payload, or a case already
 // selected in the dropdown — sourced the same way the fill path already
 // does (selectedCaseState()). When present, the FIRST GET_PROVIDER_FACILITIES
@@ -2225,13 +2160,13 @@ async function loadFacilities(
     );
   }
   facilitySelect.disabled = false;
-  // E1.5 — covers the ordering where case context already arrived (a case was
+  // Case context may arrive before facilities load (a case was
   // picked) before this facilities load completed: rescope down to it before
   // the freshly-built full-provider-set options above get a pick applied
   // over them. A no-op when no case (or a case with no locations) is in play.
   rescopeFacilitySelectOptions();
   renderFacilityAddress();
-  // E4.3: the case's explicit facility (from the context read) resolves the
+  // Case facility from context resolves the
   // pick when the user hasn't chosen one — the case selected it, not a guess.
   maybeApplyCaseFacility();
   renderIdentityGuard();
@@ -2296,7 +2231,7 @@ async function loadProviders(generation: number): Promise<void> {
     ]);
 }
 
-// S1.5: the account row shows the active org's name beside the avatar —
+// Account row shows the active org's name beside the avatar —
 // ellipsized by CSS at narrow widths, never dropped entirely (the 320px
 // criterion). Empty until an org resolves.
 function renderOrgContext(): void {
@@ -2320,7 +2255,7 @@ async function loadOrgs(generation: number): Promise<void> {
   renderOrgContext();
   orgSelect.disabled = true;
   orgSelect.replaceChildren(new Option("Loading organizations…", ""));
-  // F4.3.5: search operates under an EXPLICIT org — hidden until one resolves
+  // Search requires a resolved org — hidden until one resolves
   // (the identity-guard rule applies to standalone mode too). Nothing
   // org-scoped shows until this load lands.
   orgReady = false;
@@ -2426,7 +2361,7 @@ async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   }
 }
 
-// S3.2: fetch the portal registry for the resolved org, then re-run portal
+// Fetch portal registry for the current org, then re-run portal
 // detection — a page that wasn't recognized before the rows arrived becomes
 // recognized the moment they do. A successful empty list is a loud empty-
 // state (not "wrong page"); a fetch failure keeps the banner hidden and
@@ -2459,8 +2394,8 @@ async function detectPortal(): Promise<void> {
 
 // The one-click grant for this org's registered portals. Recognition and the
 // content-script injection both need host permission for the portal's origin,
-// but the manifest only ships with BCBS KS — every other DB-registered portal
-// (S3.2) is unreadable until the user grants its origin here. The prompt shows
+// but the manifest may ship static access to specific portals — every other DB-registered portal
+// stays unreadable until the user grants its origin. The prompt shows
 // only when we're NOT already on a recognized portal AND we lack access to at
 // least one registered origin; on a recognized page or once all are granted it
 // stays hidden. Reads the registry we already fetched, so it needs no host
@@ -2566,7 +2501,7 @@ function showMain(auth: AuthState): void {
   })();
 }
 
-// S1.5 — the account row: a 26px forest avatar circle with the user's white
+// Account row: forest avatar circle with the user's white initial; the menu
 // initial; the menu holds the email and Sign out. The initial comes from the
 // same name source as the greeting (auth user_metadata, else the email's
 // first letter).
@@ -2605,7 +2540,7 @@ function showSignin(): void {
   setError(signinError, null);
   showView("signin");
   identityGuard.hidden = true;
-  // F4.3.1: a pending handoff while signed out is a first-class path — the
+  // Apply pending handoff after sign-in is a first-class path — the
   // sign-in view says a case is waiting instead of silently dropping it.
   signinHandoffHint.hidden = true;
   void (async () => {
@@ -2661,7 +2596,7 @@ signoutBtn.addEventListener("click", () => {
     facilitiesLoaded = false;
     needsFacility = false;
     caseContextCaseId = null;
-    // TE-3/TE-14: sign-out clears every in-memory value the panel holds —
+    // Sign-out clears in-memory values the panel holds —
     // cards, context, search results, banners, the touch draft.
     activeCase = null;
     activeCaseStatus = "none";
@@ -2740,7 +2675,7 @@ facilitySelect.addEventListener("change", () => {
 // The one case-selection routine every entry path funnels into: the manual
 // dropdown, the active-cases rows, search case results, the NBA handback, and
 // the handoff apply. A USER-initiated choice also enters the worker's
-// active-case state (TE-17 — same record and expiry semantics as a handoff);
+// active-case state (same semantics as a handoff);
 // the handoff apply passes recordEntry=false so it never overwrites the
 // handoff record it is applying.
 function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
@@ -2856,7 +2791,7 @@ taskSelect.addEventListener("change", () => {
   selectedTaskId = taskSelect.value || null;
 });
 
-// Phase 4, point 6: after a submit that closed a task, refetch the provider's
+// After submit, refresh cases so closed tasks drop off, refetch the provider's
 // cases so the now-completed task drops out of portalTasks and can't be
 // re-offered on a later fill of the same case. Reuses the case-picker's existing
 // GET /api/cases call — no new endpoint. Best-effort and generation-guarded: a
@@ -2874,18 +2809,17 @@ async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
 // Pressed by the human only after they submit the portal form themselves.
 // The background reuses one idempotency id per (case, fill session), so a
 // retry after a failure can never double-log the touch. On submit it also
-// carries the payer reference (Story 5), the WIP note (Story 6), and the
-// task_id of the SOP task to close (Phase 4), when one was matched.
+// carries the payer reference, WIP note, and matched task_id when one was chosen.
 markSubmittedBtn.addEventListener("click", () => {
   const context = lastFill;
   if (!context) return;
 
-  // Story 10: on a case submitted inside the duplicate window, the first click
+  // On a case submitted inside the duplicate window, the first click
   // surfaces a warning and re-labels the button; the next click logs anyway.
   if (!dupConfirmPending) {
     const caseItem = cases.find((c) => c.id === context.caseId);
     const phrase = recentSubmissionPhrase(caseItem);
-    // S4.2 moved the duplicate WARNING to pickup, where it can still save the
+    // Duplicate warning shows on pickup, where it can still save the
     // work. Submitting stays a one-click confirm rather than a second warning:
     // by here the human has already seen the pickup notice and done the fill.
     if (phrase != null && !dismissedDupCaseIds.has(caseItem?.id ?? "")) {
@@ -2916,9 +2850,8 @@ markSubmittedBtn.addEventListener("click", () => {
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
       taskId: closedTaskId,
-      // S4.4: request the In Progress -> Submitted bump alongside the touch.
-      // Explicit and per-request — the R2 rule that the extension never
-      // changes status IMPLICITLY still holds.
+      // Optionally bump case status to Submitted alongside the touch.
+      // Explicit and per-request — the extension never changes status implicitly.
       bumpStatus: true,
     });
     if (!response.ok) {
@@ -2926,7 +2859,7 @@ markSubmittedBtn.addEventListener("click", () => {
       // server's message as-is and let the human retry. Never auto-retry with
       // the task stripped.
       //
-      // S4.4 offline/failure contract: the typed values stay on screen, the
+      // On failure, keep form values for retry: the typed values stay on screen, the
       // state says UNSENT in as many words, and the button becomes an explicit
       // retry. The worker reuses the same idempotency id across retries, so a
       // retry after a network drop replays the anchor rather than double-
@@ -2950,7 +2883,7 @@ markSubmittedBtn.addEventListener("click", () => {
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    // S4.4 — report the touch AND the bump, separately and honestly. A
+    // Report the touch and the status bump separately and honestly. A
     // skipped bump is not a failed touch: the submission IS recorded, and the
     // reason (illegal edge, role, concurrency) comes from the server.
     const bump = response.data.statusBump;
@@ -2970,18 +2903,18 @@ markSubmittedBtn.addEventListener("click", () => {
     // Point 6: drop the now-closed task from the case's portalTasks so a later
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
-    // F4.3.4: the loop continues from here — surface the queue top.
+    // After success, surface the next-best-action queue top.
     void refreshNextBestAction(context.caseId);
   })();
 });
 
 // ---------------------------------------------------------------------------
-// E4.3 F4.3.5 — active cases beneath the quick cards: the provider's open
+// Active cases list under quick cards: the provider's open
 // cases as clickable rows; clicking one enters the same active-case state as
 // a handoff and lands in the fill loop.
 // ---------------------------------------------------------------------------
 
-// S3.4: does this case USE the recognized page? True when any of its open
+// True when an open task references the current portal. True when any of its open
 // portal-linked tasks names the detected portal's key (already-normalized
 // literal match, the portalTasks contract).
 function caseUsesDetectedPortal(c: CaseListItem): boolean {
@@ -2997,7 +2930,7 @@ function renderActiveCases(): void {
   if (!show) return;
   const selected = selectedCaseId();
 
-  // S3.4: on a recognized payer form the heading flips to "Cases that use
+  // On a recognized portal, heading changes to "Cases that use
   // this page" and matching cases sort FIRST, each carrying a THIS PAGE chip.
   // Off a recognized page the list renders in server order under the default
   // heading. Stable within each half (no invented priority).
@@ -3045,7 +2978,7 @@ function renderActiveCases(): void {
 }
 
 // ---------------------------------------------------------------------------
-// E4.3 F4.3.5 — unified standalone search (the no-context empty state): one
+// Unified search (no case selected) (the no-context empty state): one
 // input querying cases AND providers in the resolved org. A case result opens
 // the fill view; a provider result opens the quick cards.
 // ---------------------------------------------------------------------------
@@ -3104,13 +3037,13 @@ async function selectCaseInPanel(
   providerId: string,
   caseId: string,
   recordEntry: boolean,
-  // S3.5: the case's location from the C1 payload. Recorded BEFORE facilities
+  // Optional facilityId from the caller, recorded BEFORE facilities
   // load so the picker opens already resolved — "zero dropdowns". Ignored when
   // the provider isn't actually assigned to it (loadFacilities validates the
   // stored pick against the real set). Also set from case-search rows that
   // carry facilityId so search → case defaults to the case's practice site.
   preferredFacilityId?: string | null,
-  // B1.1: the case's state, when the caller already has it (a case-search row
+  // Optional state from the caller (a case-search row
   // or NBA item carries `state`) — threaded straight into the FIRST
   // GET_PROVIDER_FACILITIES read so STATE LICENSE resolves without a second
   // round trip. A handoff carries no state (not part of that locked payload),
@@ -3160,13 +3093,9 @@ async function selectCaseInPanel(
 }
 
 /**
- * Picking a search result IS the hand-off into Work cases (2026-08-19).
- *
- * The mode flips FIRST so the destination is already on screen while the
- * provider/case load runs — landing on an empty Search pane and being moved
- * afterwards reads as a glitch. `setPanelMode` between two org-scoped modes
- * reloads nothing and does not bump the generation, so the selection in
- * flight here survives it.
+ * Open Work cases mode before loading a search selection so the destination
+ * is on screen during the async load. setPanelMode between two org-scoped
+ * modes reloads nothing and does not bump generation.
  */
 async function openInCaseWork(selection: Promise<void>): Promise<void> {
   await setPanelMode("case");
@@ -3280,17 +3209,13 @@ async function runSearch(query: string): Promise<void> {
 }
 
 /**
- * Fold in providers the SERVER's search cannot find (2026-08-19).
+ * Merge roster providers the server search missed (group-name matches).
  *
- * `/api/providers?search=` matches name / NPI / email — not group names. But
- * the group is exactly what a user reaches for when two people share a name
- * ("addie wellspring"), so we also narrow the roster the panel already holds
- * and merge anything the server missed. Local-only, no extra request, and
- * server rows keep their order and their position at the top: this ADDS
- * reach, it never reorders or hides what the server decided.
+ * `/api/providers?search=` matches name / NPI / email — not group names.
+ * We also filter the loaded roster and merge anything the server missed.
+ * Server rows keep their order; this only adds reach.
  *
- * Skipped entirely when the provider half errored — presenting a locally
- * filtered subset as if it were the answer would hide the failure.
+ * Skipped when the provider half errored — a local subset would hide the failure.
  */
 function withGroupMatches(data: SearchResults, query: string): SearchResults {
   if (data.providersError != null) return data;
@@ -3312,12 +3237,8 @@ searchInput.addEventListener("input", () => {
   searchTimer = window.setTimeout(() => void runSearch(query), 250);
 });
 
-// ---------------------------------------------------------------------------
-// E4.3 F4.3.1 — handoff receipt in the panel: read the worker's active-case
-// record, validate the org against the caller's memberships, apply the case,
-// and render every degraded path explicitly (expired / wrong org / signed
-// out) — never silently, never another org's case.
-// ---------------------------------------------------------------------------
+// Handoff receipt: read active-case state from the worker, validate org membership,
+// apply the case, and show explicit degraded states (expired, wrong org, signed out).
 
 // A one-shot notice that outlives the record it describes (e.g. after a
 // non-member context is discarded, the record is gone but the user must see
@@ -3412,7 +3333,7 @@ function renderHandoffBanner(): void {
 }
 
 // The org-switch path for a cross-org handoff. The switch itself wipes the
-// worker's org-scoped state (including the handoff record — TE-3), so the
+// worker's org-scoped state (including the handoff record), so the
 // context is captured FIRST and re-entered as a fresh active-case record
 // after the switch.
 async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
@@ -3439,7 +3360,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   renderHandoffBanner();
 }
 
-// Apply an active handoff to the panel: org checks first (F4.3.1 — a
+// Apply handoff: validate org first — a
 // mismatched context is discarded or prompts a switch, never rendered), then
 // the selection lands via the normal case path. Applied once per launch;
 // a SECOND launch (new createdAt) applies again — last launch wins.
@@ -3472,7 +3393,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   }
 
   appliedHandoffKey = key;
-  // B1.1: the same-org handoff path was dropping record.facilityId entirely
+  // Pass handoff facilityId through to facility load
   // (switchOrgForHandoff, just above, already threads it) — a launch from the
   // webapp that named a location still had to wait for the case-context
   // refresh to discover it. No state: not part of the locked handoff payload.
@@ -3529,7 +3450,7 @@ window.setInterval(() => {
 }, 30_000);
 
 // ---------------------------------------------------------------------------
-// E4.3 F4.3.4 — log-and-advance: the structured touch form + the next-best-
+// Structured touch form and next-best-action after logging + the next-best-
 // action read that follows a successful log.
 // ---------------------------------------------------------------------------
 
@@ -3549,7 +3470,7 @@ populateTouchSelects();
 
 // Reset the form for a FRESH draft (case switch or a successful log). Never
 // called on a failed save — the entered values and the draft's idempotency id
-// survive for the retry (F4.3.4: the one line of context is never lost).
+// Preserved across retries so context is not lost.
 function resetTouchForm(): void {
   touchType.selectedIndex = 0;
   touchNote.value = "";
@@ -3603,8 +3524,7 @@ touchSaveBtn.addEventListener("click", () => {
     });
     if (!isCurrent(generation)) return;
     if (!response.ok) {
-      // Failed write: values stay in the form, the draft id stays, the button
-      // becomes the retry (F4.3.4 AC).
+      // Failed write: values stay in the form, button becomes retry.
       touchSaveBtn.disabled = false;
       touchSaveBtn.textContent = "Retry — log touch";
       setError(touchError, response.error);
@@ -3617,9 +3537,8 @@ touchSaveBtn.addEventListener("click", () => {
   })();
 });
 
-// After ANY successful log (structured touch or Mark submitted), fetch the
-// server-derived queue top and render exactly one item — or the honest
-// "queue clear" — with the handback + webapp deep link (TE-6).
+// After any successful log, fetch the next-best-action queue top and render
+// one item — or an honest "queue clear" with handback and webapp deep link.
 async function refreshNextBestAction(loggedCaseId: string): Promise<void> {
   const generation = loadGeneration;
   nbaSection.hidden = false;
@@ -3647,12 +3566,7 @@ function nbaLink(label: string, href: string): HTMLAnchorElement {
   return link;
 }
 
-// ---------------------------------------------------------------------------
-// S3.3 — the case pickup queue. The panel opens to it when nothing is in hand
-// (no active case selected): ORDER AND THE REASON LINE COME FROM THE SERVER —
-// the extension never ranks (the cross-cutting "no invented priority" gate).
-// Release returns here without a confirmation.
-// ---------------------------------------------------------------------------
+// Case pickup queue when nothing is selected. Order and reasons come from the server.
 
 // How many queue rows to render before the "and N more" line. Server-bounded
 // too (?limit=), this is the display cap.
@@ -3685,7 +3599,7 @@ function queueRow(item: NextBestActionItem): HTMLElement {
 
   row.addEventListener("click", () => {
     queueSection.hidden = true;
-    // B1.1: the queue item already names the case's state — no facilityId on
+    // Queue row carries state; facility resolves from context — no facilityId on
     // this row (NBA doesn't carry one), so the location still resolves via
     // the case-context refresh once it lands.
     void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
@@ -3735,7 +3649,7 @@ async function loadQueue(generation: number): Promise<void> {
     );
     return;
   }
-  // A server predating S3.3 sends only `item`; degrade to that single entry
+  // Older API may return only `item`; degrade to that single entry
   // rather than showing an empty queue.
   const items =
     response.data.items ?? (response.data.item ? [response.data.item] : []);
@@ -3795,8 +3709,8 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
     work.textContent = "Work this case";
     work.addEventListener("click", () => {
       nbaSection.hidden = true;
-      // B1.1: same as the queue row — state rides along, no facilityId on
-      // this row.
+      // State rides along from the queue row; facility resolves from context —
+      // no facilityId on this row.
       void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
     });
     actions.append(work);
@@ -3808,16 +3722,10 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   nbaSection.append(card);
 }
 
-// ---------------------------------------------------------------------------
-// S6.2/S6.3 — CAQH. PUSH ONLY: we fill CAQH from Minted Panel and record the
-// attestation. The exception strip (S6.3) is the single narrow pull — a field
-// CAQH holds where we are blank — and appears ONLY when such a gap exists.
-// There is no reconciliation of disagreements anywhere: Minted Panel is the
-// source of truth.
-// ---------------------------------------------------------------------------
+// CAQH: push attestation from panel data. Exception-strip pull UI is not shipped yet.
 
 // Whether the tab in hand is a CAQH portal. Registry-driven like every other
-// portal check (S3.2) — no hardcoded host.
+// Uses portal registry, not a hardcoded host.
 function isCaqhPortal(): boolean {
   return portal != null && /caqh/i.test(`${portal.key} ${portal.label}`);
 }
@@ -3842,7 +3750,7 @@ function renderCaqh(): void {
   );
   caqhHeadline.textContent = caqhOffer.headline;
   caqhAttested.textContent = attestationLine(caqhOffer);
-  // S6.2: a recently-attested profile de-emphasizes rather than nags.
+  // Recently attested profiles use de-emphasized styling rather than nags.
   caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
 }
 
@@ -3880,7 +3788,7 @@ caqhAttest.addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
-// S5.4 — capture: "we recognise N of M" with per-row evidence, gaps that are
+// Capture UI: "we recognise N of M" with per-row evidence, gaps that are
 // actionable but never blocking, and a send that works even when we
 // recognised nothing (a form we understand none of is the one worth
 // capturing). Approving stays in the webapp: this only proposes.
@@ -3888,50 +3796,32 @@ caqhAttest.addEventListener("click", () => {
 
 let captureSession: CaptureSession | null = null;
 /** Set when the last capture added a page to an existing session — drives the
- * "· Page N of N" summary suffix (BITE-CAP-05). */
+ * Page count suffix for capture summary. */
 let captureAddedPage = false;
-// 2026-08-19 manual mapping: which row's inline editor is open (one at a time
+// Which capture row's inline editor is open (one at a time
 // — two open editors on one list is a way to save the wrong row), the last
 // re-test answer, and whether a pick is waiting on the page.
 let editingSelector: string | null = null;
 let selectorTestResult: SelectorTestResult | null = null;
-// BITE-TRAIN-01 — the open editor's UNSAVED values. Panel state, not DOM
+// Unsaved inline-editor values (panel state, not DOM). Panel state, not DOM
 // state: renderCapture() rebuilds the editor for reasons the trainer did not
 // ask for (a selector test, a tab switch, a pick), and anything left in the
 // inputs would go with it.
 let rowDraft: CaptureRowDraft | null = null;
 let pickInFlight = false;
-// US-3.3 — rows ticked for a batch action, keyed by selector. Kept OUTSIDE the
+// Rows selected for batch delete, keyed by selector. Kept OUTSIDE the
 // DOM so a re-render (after an edit, a pick, a re-test) never silently drops a
 // selection the trainer made.
 const batchSelection = new Set<string>();
 
-// US-5 — is the sandbox profile in hand? Panel-only state: it is a way of
+// Sandbox mode active (test provider, no case). Panel-only state: it is a way of
 // WORKING, not a stored selection, and it must never survive into a real case
 // (switching provider or case leaves it, below).
 let sandboxActive = false;
 
-// S6.3 — the CAQH EXCEPTION strip (fields CAQH holds where Minted Panel is
-// blank) is QUARANTINED as of 3M Slice 2, not deleted.
-//
-// The panel-side half of it — a `caqhGapRows: CaqhGap[]` that was only ever
-// `[]`, the row rendering that looped over it, the `#caqh-gaps` container and
-// its CSS — is REMOVED here. Nothing ever populated that array, so every one
-// of those branches was unreachable: the strip could not appear, and the code
-// read as shippable UI when it was a stub.
-//
-// What REMAINS, deliberately, is the finished and tested machinery the feature
-// would be rebuilt on: the pure `findCaqhGaps` reducer (shared/caqh.ts, with
-// its unit tests) and the PULL_CAQH_FIELD message + worker handler. Those are
-// correct; they just have no producer.
-//
-// The missing half is a PHI boundary decision, not an oversight: populating
-// gaps means reading VALUES off the CAQH page, whereas the S5.2 capture scan
-// reads form SHAPE only (labels and selectors, never values). Restoring the
-// strip means a value-reading content script and a real CAQH account to verify
-// against — a deliberate capability change, not a wiring task.
-//
-// The PUSH half of S6.2 (offer + attestation) is live and untouched.
+// CAQH exception strip UI is not shipped yet.
+// findCaqhGaps + PULL_CAQH_FIELD remain for a future value-reading path.
+// Capture is shape-only today; reading CAQH values would cross that boundary.
 
 // Date-only today for the pure CAQH module (it never reads a clock itself).
 function localToday(): string {
@@ -3941,18 +3831,16 @@ function localToday(): string {
 }
 
 function renderCapture(): void {
-  // Capture lives ONLY on Train forms (E6.9 two-job split). Work cases is the
-  // case workflow — never the field trainer. A leftover session from a prior
-  // Train visit stays in the worker but stays hidden here until Train is on.
+  // Capture UI is Train-forms only.
   const training = isCaptureMode(panelMode);
   captureSection.hidden = !training || portal == null || portalTabId == null;
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
   const pageCount = usedPageNames(captureSession).length;
-  // BITE-TRAIN-03 — the list is the scan JOINED to the shared library that is
-  // already in hand, so it survives the session storage dying with the browser
-  // and can say which library fields this page no longer has.
+  // List joins scan rows against the shared library already in hand, so it
+  // survives the session storage dying with the browser and can say which
+  // library fields this page no longer has.
   const listRows = joinCaptureLibrary(
     captureSession?.rows ?? [],
     trainFormMaps,
@@ -4064,8 +3952,8 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
   label.title = entry.selector;
   item.append(label);
 
-  // BITE-TRAIN-03 — the second column is what the LIBRARY says about the
-  // field, which is the only thing here that decides whether it will fill.
+  // Second column shows what the library says about the field, which is
+  // the only thing here that decides whether it will fill.
   const value = document.createElement("span");
   value.className = "capture-row-token mono";
   value.textContent = entry.library
@@ -4209,8 +4097,8 @@ function renderLibraryRowActions(entry: CaptureListRow): HTMLElement {
  * check the selector still resolves, or drop it. Everything here edits the
  * LOCAL capture session; nothing is proposed until Send for approval. */
 function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
-  // BITE-TRAIN-01 — render FROM the draft, write back to it on every
-  // keystroke. The editor is thrown away and rebuilt whenever anything
+  // Render from draft; inputs write back to it on every keystroke. The
+  // editor is thrown away and rebuilt whenever anything
   // re-renders the list, so the inputs cannot be the source of truth.
   const draft = draftForRow(row, rowDraft);
   rowDraft = draft;
@@ -4260,7 +4148,7 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   typeField.append(typeSelect);
   box.append(typeField);
 
-  // US-3.2 — the Selector Workshop. The auto-captured selector is a starting
+  // Selector workshop: edit and test CSS selectors. The auto-captured selector is a starting
   // point, not a verdict: a fragile one can be replaced with anything CSS can
   // express, and tested against the live page before it is saved.
   const selectorField = document.createElement("label");
@@ -4350,7 +4238,7 @@ function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
   return box;
 }
 
-/** US-3.3 — the batch bar appears on the first tick and states exactly what a
+/** Batch action bar appears on the first tick and states exactly what a
  * bulk action would hit, because "Delete selected" is irreversible. */
 function renderBatchBar(): void {
   // A selection can outlive the rows it named (a re-capture, a single delete),
@@ -4591,8 +4479,8 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     setError(mainError, CAPTURE_TAB_MISMATCH_ERROR);
     return;
   }
-  // BITE-CAP-05 — the side panel always sends a fresh collision-free candidate
-  // via derivePageStep; the background decides whether to reuse via
+  // Always send a fresh, collision-free pageStep candidate via derivePageStep;
+  // the background decides whether to reuse it via
   // identifyCapturePage after the scan. CAP-HEAD: tab.title is not a wizard
   // heading — pass null until the content script can report form headings.
   const candidate = derivePageStep({
@@ -4674,7 +4562,7 @@ captureClear.addEventListener("click", () => {
   })();
 });
 
-// S5.2 — restore an in-flight capture after a worker restart / panel reopen,
+// Restore in-flight capture session after a worker restart / panel reopen,
 // and SAY what came back (labels and counts; there are no values to restore).
 async function restoreCapture(): Promise<void> {
   const response = await sendToBackground({ type: "GET_CAPTURE" });
@@ -4688,7 +4576,7 @@ async function restoreCapture(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// US-5 — the sandbox test profile.
+// Sandbox test profile (org-designated provider, no case).
 //
 // Fills a real portal from the org's DESIGNATED test provider, with no case in
 // play: no touch, no status change, no case lifecycle consumed. That is what
@@ -4858,24 +4746,9 @@ sandboxClearBtn.addEventListener(
   () => void clearPortalFormFromPanel(),
 );
 
-// ---------------------------------------------------------------------------
-// E6.9 F6.9.7 + 2026-08-19 — the job chooser (Search / Work cases / Train
-// forms), and F6.9.9 — Train forms.
-// ---------------------------------------------------------------------------
+// Mode chooser + Train-forms surfaces (Search / Work cases / Train forms).
 
-/**
- * THE one place that decides what is on screen.
- *
- * Two inputs: the current job, and whether an org has resolved (everything
- * org-scoped stays hidden until it has — the F4.3.5 rule, which now covers
- * Search too since it reads org-scoped routes).
- *
- * It sets only the four top-level containers and never the individual cards
- * inside #case-work. That is deliberate: those manage their own `hidden` as
- * data arrives, and a mode switch that reached in would either reveal a card
- * with nothing in it or clobber a state it did not set. Hiding the parent
- * hides them regardless; showing it restores exactly what each had decided.
- */
+/** Toggle the four top-level mode containers. Child cards manage their own visibility. */
 function renderModeSurfaces(): void {
   const training = panelMode === "train";
   const searching = panelMode === "search";
@@ -4902,8 +4775,8 @@ function renderModeSurfaces(): void {
   void refreshPortalAccessPrompt();
 }
 
-/** Kept as the pre-2026-08-19 name for the call sites that mean "the job
- * changed, re-render". */
+/** Re-render after a mode change — kept as a named function for the call
+ * sites that mean "the job changed, re-render". */
 function applyPanelMode(): void {
   renderModeSurfaces();
 }
@@ -4963,11 +4836,7 @@ async function loadSharedRegistry(): Promise<void> {
     trainRecognition.textContent = response.error;
     return;
   }
-  // A non-array here is fatal, not cosmetic: renderTrainPayers iterates this
-  // DURING render, so `for (… of null)` takes the whole panel down rather than
-  // just the payer select. An `ok` envelope carrying a null `data` is a shape
-  // the wire permits, so treat anything unexpected as an empty library — the
-  // trainer then sees "no payers" instead of a blank panel.
+  // Coerce to [] — null data crashes `for…of` during render and blanks the panel.
   sharedPortalRows = Array.isArray(response.data) ? response.data : [];
   renderTrainPayers();
   await refreshTrainRecognition();
@@ -4995,8 +4864,7 @@ function renderTrainPayers(): void {
   trainPayer.disabled = names.length === 0;
 }
 
-/** Portals belonging to the selected payer — the "find/select" half of the
- * F6.9.7 flow, for when the open tab is not the form (or is not yet granted). */
+/** Portals for the selected payer — manual pick when the open tab is not the form. */
 function renderTrainPortals(): void {
   const payerName = trainPayer.value;
   const rows = sharedPortalRows.filter(
@@ -5025,7 +4893,7 @@ function renderTrainDryRun(): void {
   }
 }
 
-/** BITE-TRAIN-02 — the dry run's per-field diagnosis, in the same buckets the
+/** Mock dry-run results, bucketed the same way the
  * fill report uses. The engine already returns each failure with its reason;
  * rendering only the counts made the trainer re-derive them on the page. */
 function renderMockDryRunDetail(summary: MockDryRunSummary): void {
@@ -5043,7 +4911,7 @@ function clearMockDryRunDetail(): void {
 /**
  * What is the open page, and what does the system already know about it?
  *
- * Capture bind is URL-only (TRAIN-DUAL D-TD.1 C amended). The dropdown is
+ * Capture binds to URL match, not dropdown selection. The dropdown is
  * sticky navigation/messaging — it never sets `portal`. A RECOGNIZED form
  * shows pages/fields already mapped; re-capture is the user's choice. When a
  * form is selected but the tab does not match (login / SSO / wizard redirect),

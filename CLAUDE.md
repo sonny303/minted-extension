@@ -15,8 +15,7 @@ provider data in one click, then logs the fill and the human's submission back
 to the case. Credentialing coordinators otherwise retype the same provider
 details into dozens of portals per provider; this removes that.
 
-v0 is unlisted (loaded unpacked). The manifest ships static access to BCBS
-Kansas, but capture and fill reach **any DB-registered portal** — the panel
+v0 is unlisted (loaded unpacked). Capture and fill reach **any DB-registered portal** — the panel
 requests the registry's origins on demand and the worker injects `content.js`
 where there's no static match.
 
@@ -139,7 +138,7 @@ close-out loop silently.
 - **Provider groups on the list row:** `/api/providers` rows carry
   `groups: [{id,name,isPrimary}]` (current memberships, primary first). The
   grain is M:N, so `groupId` — the frozen primary mirror — could never answer
-  "which Addie Jones is this?". **Optional both ways:** an older panel sends no
+  "which Taylor Example is this?". **Optional both ways:** an older panel sends no
   key and `providerGroupsLabel` renders nothing rather than claiming the
   provider has no group.
 - **View prefs:** `GET /api/me/view-prefs` (user-scoped) → `{ fields, catalog }`
@@ -186,7 +185,7 @@ close-out loop silently.
   active-case record stores identifiers + URL only). Quick-card values (incl.
   DOB) are in-memory only — cleared on org/case change, sign-out, tab close,
   expiry.
-- **Portal access is dynamic, not BCBS-only.** `optional_host_permissions:
+- **Portal access is dynamic.** `optional_host_permissions:
   ["https://*/*"]` lets the panel *request* origins, but it only ever requests
   the specific origins the registry names (`portalOriginPatterns`) — never
   `https://*/*` itself. `ensureContentScript` (`src/background/inject.ts`)
