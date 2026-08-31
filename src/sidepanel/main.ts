@@ -471,7 +471,7 @@ function renderProviderCard(provider: ProviderListItem | null): void {
   fillSection.hidden = provider == null;
   // Card values arrive with the profile (loadFacilities), a beat after the
   // card; clear them here so a switch never shows the previous provider's
-  // Clear card values on switch — they live only in this render.
+  // values — they live only in this render.
   renderQuickCards(null);
   renderActiveCases();
   if (!provider) return;
@@ -1484,9 +1484,8 @@ function updateFillReady(): void {
 // portal's field maps — NOT the case — but only shows for a fill-ready
 // selection, so a case must be picked for the key to be non-null. null = not
 // fill-ready = panel hidden.
-// Fill state comes from the selected case (registry rows have no state).
-// carries no state — a national portal serves many — while every fill
-// requires a case and every case names its state.
+// Fill state comes from the selected case, not the registry row — a
+// national portal serves many states, while every case names its own.
 function selectedCaseState(): string {
   const caseItem = cases.find((c) => c.id === selectedCaseId());
   return caseItem?.state ?? "";
@@ -1560,8 +1559,8 @@ function renderCoverageLoading(): void {
 // Fix-it link for one coverage gap. A MAPPING gap routes to the
 // existing platform train flow with the portal/field context in the URL; a
 // DATA gap routes to the provider record (the right fix, not the mapping
-// flow). Opens in a new tab so the portal session is preserved; the extension
-// Extension never writes mappings — opens the panel train flow.
+// flow). Opens in a new tab so the portal session is preserved; the
+// extension itself never writes a mapping.
 function gapActionLink(
   gap: ReportedField,
   portalKey: string | null,
@@ -1684,7 +1683,7 @@ function bucketDetails(
 }
 
 // A report bucket's rows. When `actions` carries the fill's portal/provider
-// Each gap row links to the panel fix-it flow in place — the
+// context, each gap row also offers a fix-it link in place — the
 // specialist never has to re-find the field she just hit.
 function fieldList(
   box: HTMLElement,
@@ -2884,7 +2883,7 @@ markSubmittedBtn.addEventListener("click", () => {
     submitHint.hidden = true;
     markSubmittedBtn.hidden = true;
     submitStatus.hidden = false;
-    // Report touch and status bump separately, separately and honestly. A
+    // Report the touch and the status bump separately and honestly. A
     // skipped bump is not a failed touch: the submission IS recorded, and the
     // reason (illegal edge, role, concurrency) comes from the server.
     const bump = response.data.statusBump;
@@ -2904,7 +2903,7 @@ markSubmittedBtn.addEventListener("click", () => {
     // Point 6: drop the now-closed task from the case's portalTasks so a later
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
-    // After success, show next-best-action — surface the queue top.
+    // After success, surface the next-best-action queue top.
     void refreshNextBestAction(context.caseId);
   })();
 });
@@ -2931,7 +2930,7 @@ function renderActiveCases(): void {
   if (!show) return;
   const selected = selectedCaseId();
 
-  // On a recognized portal, heading becomes to "Cases that use
+  // On a recognized portal, heading changes to "Cases that use
   // this page" and matching cases sort FIRST, each carrying a THIS PAGE chip.
   // Off a recognized page the list renders in server order under the default
   // heading. Stable within each half (no invented priority).
@@ -3038,7 +3037,7 @@ async function selectCaseInPanel(
   providerId: string,
   caseId: string,
   recordEntry: boolean,
-  // Optional facilityId from the caller Recorded BEFORE facilities
+  // Optional facilityId from the caller, recorded BEFORE facilities
   // load so the picker opens already resolved — "zero dropdowns". Ignored when
   // the provider isn't actually assigned to it (loadFacilities validates the
   // stored pick against the real set). Also set from case-search rows that
@@ -3334,7 +3333,7 @@ function renderHandoffBanner(): void {
 }
 
 // The org-switch path for a cross-org handoff. The switch itself wipes the
-// Worker's org-scoped state (including handoff record), so the
+// worker's org-scoped state (including the handoff record), so the
 // context is captured FIRST and re-entered as a fresh active-case record
 // after the switch.
 async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
@@ -3710,8 +3709,8 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
     work.textContent = "Work this case";
     work.addEventListener("click", () => {
       nbaSection.hidden = true;
-      // State from queue row; facility from context — state rides along, no facilityId on
-      // this row.
+      // State rides along from the queue row; facility resolves from context —
+      // no facilityId on this row.
       void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
     });
     actions.append(work);
@@ -3839,9 +3838,9 @@ function renderCapture(): void {
 
   const counts = captureCounts(captureSession);
   const pageCount = usedPageNames(captureSession).length;
-  // List joins scan rows with shared library status to the shared library that is
-  // already in hand, so it survives the session storage dying with the browser
-  // and can say which library fields this page no longer has.
+  // List joins scan rows against the shared library already in hand, so it
+  // survives the session storage dying with the browser and can say which
+  // library fields this page no longer has.
   const listRows = joinCaptureLibrary(
     captureSession?.rows ?? [],
     trainFormMaps,
@@ -3953,8 +3952,8 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
   label.title = entry.selector;
   item.append(label);
 
-  // Second column shows library status says about the
-  // field, which is the only thing here that decides whether it will fill.
+  // Second column shows what the library says about the field, which is
+  // the only thing here that decides whether it will fill.
   const value = document.createElement("span");
   value.className = "capture-row-token mono";
   value.textContent = entry.library
@@ -4098,8 +4097,8 @@ function renderLibraryRowActions(entry: CaptureListRow): HTMLElement {
  * check the selector still resolves, or drop it. Everything here edits the
  * LOCAL capture session; nothing is proposed until Send for approval. */
 function renderCaptureRowEditor(row: CaptureRow): HTMLElement {
-  // Render from draft; inputs write back on each change, write back to it on every
-  // keystroke. The editor is thrown away and rebuilt whenever anything
+  // Render from draft; inputs write back to it on every keystroke. The
+  // editor is thrown away and rebuilt whenever anything
   // re-renders the list, so the inputs cannot be the source of truth.
   const draft = draftForRow(row, rowDraft);
   rowDraft = draft;
@@ -4480,8 +4479,8 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     setError(mainError, CAPTURE_TAB_MISMATCH_ERROR);
     return;
   }
-  // Always send a fresh pageStep candidate a fresh collision-free candidate
-  // via derivePageStep; the background decides whether to reuse via
+  // Always send a fresh, collision-free pageStep candidate via derivePageStep;
+  // the background decides whether to reuse it via
   // identifyCapturePage after the scan. CAP-HEAD: tab.title is not a wizard
   // heading — pass null until the content script can report form headings.
   const candidate = derivePageStep({
@@ -4776,8 +4775,8 @@ function renderModeSurfaces(): void {
   void refreshPortalAccessPrompt();
 }
 
-/** Re-render after mode change. for the call sites that mean "the job
- * changed, re-render". */
+/** Re-render after a mode change — kept as a named function for the call
+ * sites that mean "the job changed, re-render". */
 function applyPanelMode(): void {
   renderModeSurfaces();
 }
@@ -4894,7 +4893,7 @@ function renderTrainDryRun(): void {
   }
 }
 
-/** Mock dry-run results by bucket, in the same buckets the
+/** Mock dry-run results, bucketed the same way the
  * fill report uses. The engine already returns each failure with its reason;
  * rendering only the counts made the trainer re-derive them on the page. */
 function renderMockDryRunDetail(summary: MockDryRunSummary): void {

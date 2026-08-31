@@ -22,7 +22,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { URL } from "node:url";
 
 export const FIXTURES = {
-  KANSAS_ORG: "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d",
+  PRIMARY_ORG: "20563fd6-8e95-46a0-8e1c-cb3b968b3c3d",
   PROVIDER_ID: "49ad83a8-d8b6-419d-8dcc-88c04a54c4da",
   PROVIDER2_ID: "6f0e73c2-51f1-4be9-9f2e-0a4c7f2fbb02",
   CASE_ID: "b7a90000-0000-4000-a000-0000000000c1",
@@ -37,8 +37,8 @@ export const FIXTURES = {
   // assigned locations, one primary) for the facility-picker tests.
   FACILITY2_ID: "5f190f0d-2c5c-49f7-8953-aa05cd0a9d65",
   TASK_ID: "b7a90000-0000-4000-a000-0000000000d1",
-  TOKEN: "tok-kansas",
-  USER_ID: "user-kansas",
+  TOKEN: "tok-primary",
+  USER_ID: "user-primary",
   PORTAL_KEY: "regional_enrollment",
   // The deliberately-untrained map row (token null) — the TS-82 fix-it target.
   UNTRAINED_MAP_ID: "fm-untrained-1",
@@ -576,7 +576,7 @@ export async function createMockPanelApi(options = {}) {
 
     // --- /api/me/orgs (user-scoped) ---
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
-      const rows = [{ orgId: FIXTURES.KANSAS_ORG, orgName: "Lakeside Physical Therapy", role: "admin" }];
+      const rows = [{ orgId: FIXTURES.PRIMARY_ORG, orgName: "Lakeside Physical Therapy", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
     }
 
@@ -992,7 +992,7 @@ export async function createMockPanelApi(options = {}) {
         if (!map) {
           map = {
             id: `fm-proposed-${state.proposedMaps.size + 1}`,
-            orgId: FIXTURES.KANSAS_ORG,
+            orgId: FIXTURES.PRIMARY_ORG,
             portalKey: body.portal_key,
             selector: body.selector,
             fieldLabel: label || null,

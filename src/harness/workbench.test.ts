@@ -85,7 +85,7 @@ vi.mock("../background/auth", () => {
   }
   return {
     AuthRequiredError,
-    getAccessToken: async () => "tok-kansas",
+    getAccessToken: async () => "tok-primary",
     forceRefresh: async () => {
       throw new AuthRequiredError();
     },
@@ -94,7 +94,7 @@ vi.mock("../background/auth", () => {
       email: "test.coordinator@example.com",
       name: "Test Coordinator",
     }),
-    currentUserId: async () => "user-kansas",
+    currentUserId: async () => "user-primary",
     signIn: async () => ({
       signedIn: true,
       email: "test.coordinator@example.com",
@@ -164,7 +164,7 @@ const HANDOFF = {
   type: "SET_ACTIVE_CASE",
   caseId: FIXTURES.CASE_ID as string,
   providerId: FIXTURES.PROVIDER_ID as string,
-  orgId: FIXTURES.KANSAS_ORG as string,
+  orgId: FIXTURES.PRIMARY_ORG as string,
   portalUrl: "https://portal.example.com/enroll/form",
 };
 const APP_ORIGIN = "https://mintedpanel.vercel.app";
@@ -186,7 +186,7 @@ describe("TS-80 — handoff receipt, tab isolation, expiry", () => {
     if (state.status !== "active") return;
     expect(state.record.caseId).toBe(FIXTURES.CASE_ID);
     expect(state.record.providerId).toBe(FIXTURES.PROVIDER_ID);
-    expect(state.record.orgId).toBe(FIXTURES.KANSAS_ORG);
+    expect(state.record.orgId).toBe(FIXTURES.PRIMARY_ORG);
     expect(state.record.source).toBe("handoff");
     // An open panel is told the context changed.
     expect(stub.broadcasts).toContainEqual({ type: "ACTIVE_CASE_UPDATED" });
@@ -842,7 +842,7 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
     // A worker restart holds NO state — the next read IS the restart path.
     const prefs = await getViewPrefs();
     expect(prefs.fields).toEqual(layout);
-    expect(mock.state.viewPrefs.get("user-kansas")).toEqual(layout);
+    expect(mock.state.viewPrefs.get("user-primary")).toEqual(layout);
   });
 
   it("GET serves the schema-derived catalog beside the layout (one round trip)", async () => {
@@ -858,7 +858,7 @@ describe("TS-102 — layout persists server-side across a worker restart", () =>
 
   it("a PUT naming ssnLast4 now validates; a non-catalog key still 422s", async () => {
     await putViewPrefs(["provider.ssnLast4", "provider.npi"]);
-    expect(mock.state.viewPrefs.get("user-kansas")).toEqual([
+    expect(mock.state.viewPrefs.get("user-primary")).toEqual([
       "provider.ssnLast4",
       "provider.npi",
     ]);
@@ -902,7 +902,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     // multi-org case) and case-mode calls still carry it, but every training
     // call goes out without one. Sending it would land the capture in that
     // org's private overrides instead of the shared library.
-    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
     await writePanelMode("train");
 
     await listSharedPortals();
@@ -935,7 +935,7 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
         type: "SET_ACTIVE_CASE",
         caseId: FIXTURES.CASE_ID,
         providerId: FIXTURES.PROVIDER_ID,
-        orgId: FIXTURES.KANSAS_ORG,
+        orgId: FIXTURES.PRIMARY_ORG,
         portalUrl: "https://portal.example.com/x",
       },
       "https://mintedpanel.vercel.app",
@@ -1391,7 +1391,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
 
   beforeEach(async () => {
     stub.reset();
-    await writeActiveOrgId(FIXTURES.KANSAS_ORG);
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
     await writePanelMode("case");
     previousSendMessage = chrome.tabs.sendMessage;
   });
