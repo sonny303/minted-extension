@@ -26,7 +26,9 @@ export interface FillInstruction {
 // before this field restore cleanly.
 //
 // Telemetry kinds on fill_sessions.fields_skipped also use `skipped` (on-page
-// miss) and `other_page` (exact off-page — DYN-PAGE-01 / panel formDrift).
+// miss), `other_page` (exact off-page — DYN-PAGE-01) and `hidden` (resolved
+// into an inactive panel — DYN-PAGE-02). The last two are panel formDrift's
+// "no evidence" pair: neither is drift, and neither dates a last success.
 export type ReportedFieldKind =
   | "no_mapping"
   | "no_value"
@@ -34,7 +36,8 @@ export type ReportedFieldKind =
   | "manual"
   | "review"
   | "skipped"
-  | "other_page";
+  | "other_page"
+  | "hidden";
 
 export interface ReportedField {
   label: string;

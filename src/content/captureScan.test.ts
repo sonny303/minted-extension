@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   compareVisualPosition,
   isCapturableControl,
+  isHiddenControl,
   scanCapturableFields,
 } from "./captureScan";
 
@@ -68,6 +69,25 @@ function stubZeroBox(el: Element): void {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+});
+
+describe("isHiddenControl (shared with the fill — DYN-PAGE-02)", () => {
+  it("reports only POSITIVE hiding, never mere absence of geometry", () => {
+    document.body.innerHTML = `
+      <div style="display:none"><input id="d" type="text" /></div>
+      <div hidden><input id="h" type="text" /></div>
+      <div aria-hidden="true"><input id="a" type="text" /></div>
+      <div style="visibility:hidden"><input id="v" type="text" /></div>
+      <input id="ok" type="text" />
+    `;
+    for (const id of ["d", "h", "a", "v"]) {
+      expect(isHiddenControl(document.getElementById(id)!)).toBe(true);
+    }
+    // No layout box in jsdom, yet NOT hidden: the fill must still write it.
+    // Geometry is a scanner-quality filter, not evidence of an inactive panel.
+    expect(isHiddenControl(document.getElementById("ok")!)).toBe(false);
+    expect(isCapturableControl(document.getElementById("ok")!)).toBe(false);
+  });
 });
 
 describe("isCapturableControl", () => {
