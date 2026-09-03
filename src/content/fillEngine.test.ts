@@ -6,7 +6,22 @@ import { applyFill, applyFillOnPage, clearPortalForm } from "./fillEngine";
 import { describeSelectorMatches } from "./elementPicker";
 import type { FillInstruction } from "../shared/fill";
 import { OTHER_PAGE_KIND, OTHER_PAGE_REASON } from "../shared/fillPage";
+import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
+
+// jsdom does not provide CSS.escape; applyRadio uses it to scope a NAMED radio
+// group. Same shim the captureScan and elementPicker suites already carry —
+// without it, every named-group radio path throws instead of applying.
+if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
+  Object.defineProperty(globalThis, "CSS", {
+    configurable: true,
+    value: {
+      escape(value: string): string {
+        return String(value).replace(/([^\w-])/g, "\\$1");
+      },
+    },
+  });
+}
 
 function instr(
   over: Partial<FillInstruction> & Pick<FillInstruction, "label" | "selector">,
@@ -184,6 +199,172 @@ describe("applyFill", () => {
         kind: "skipped",
       },
     ]);
+  });
+
+  // DYN-PAGE-02 — a wizard that keeps every step in the DOM and hides the
+  // inactive ones. Writing into one is silent and survives into a submission.
+  describe("hidden controls (DYN-PAGE-02)", () => {
+    it("never writes a control inside a display:none panel", () => {
+      document.body.innerHTML = `
+        <div id="step1"><input id="npi" type="text" /></div>
+        <div id="step2" style="display:none"><input id="tin" type="text" /></div>
+      `;
+      const result = applyFill([
+        instr({ label: "NPI", selector: "#npi", value: "123" }),
+        instr({ label: "TIN", selector: "#tin", value: "99", mapId: "m-tin" }),
+      ]);
+      expect(result.filled).toEqual(["NPI"]);
+      expect((document.getElementById("tin") as HTMLInputElement).value).toBe(
+        "",
+      );
+      expect(result.skipped).toEqual([
+        {
+          label: "TIN",
+          reason: HIDDEN_REASON,
+          mapId: "m-tin",
+          kind: HIDDEN_KIND,
+        },
+      ]);
+    });
+
+    it("treats [hidden], [aria-hidden] and visibility:hidden the same way", () => {
+      document.body.innerHTML = `
+        <div hidden><input id="a" type="text" /></div>
+        <div aria-hidden="true"><input id="b" type="text" /></div>
+        <div style="visibility:hidden"><input id="c" type="text" /></div>
+      `;
+      const result = applyFill([
+        instr({ label: "A", selector: "#a", value: "1" }),
+        instr({ label: "B", selector: "#b", value: "2" }),
+        instr({ label: "C", selector: "#c", value: "3" }),
+      ]);
+      expect(result.filled).toEqual([]);
+      expect(result.skipped.map((s) => s.kind)).toEqual([
+        HIDDEN_KIND,
+        HIDDEN_KIND,
+        HIDDEN_KIND,
+      ]);
+      for (const id of ["a", "b", "c"]) {
+        expect((document.getElementById(id) as HTMLInputElement).value).toBe(
+          "",
+        );
+      }
+    });
+
+    it("does not write a hidden select or checkbox either", () => {
+      document.body.innerHTML = `
+        <div style="display:none">
+          <select id="st"><option value="">--</option><option value="KS">KS</option></select>
+          <input id="agree" type="checkbox" />
+        </div>
+      `;
+      const result = applyFill([
+        instr({
+          label: "State",
+          selector: "#st",
+          fieldType: "select",
+          value: "KS",
+        }),
+        instr({
+          label: "Agree",
+          selector: "#agree",
+          fieldType: "checkbox",
+          value: "yes",
+        }),
+      ]);
+      expect(result.filled).toEqual([]);
+      expect((document.getElementById("st") as HTMLSelectElement).value).toBe(
+        "",
+      );
+      expect(
+        (document.getElementById("agree") as HTMLInputElement).checked,
+      ).toBe(false);
+      expect(result.skipped.map((s) => s.reason)).toEqual([
+        HIDDEN_REASON,
+        HIDDEN_REASON,
+      ]);
+    });
+
+    // A radio group is ONE field made of N controls, and the member that gets
+    // clicked need not be the one the selector resolved to. Guarding the
+    // resolved element instead would skip a perfectly visible answer.
+    it("guards the radio option it is about to click, not the resolved one", () => {
+      document.body.innerHTML = `
+        <div style="display:none">
+          <input id="r-no" type="radio" name="ptn" value="No" />
+        </div>
+        <div>
+          <input id="r-yes" type="radio" name="ptn" value="Yes" />
+        </div>
+      `;
+      const result = applyFill([
+        instr({
+          label: "Accepting patients",
+          selector: "#r-no",
+          fieldType: "radio",
+          value: "Yes",
+        }),
+      ]);
+      expect(result.filled).toEqual(["Accepting patients"]);
+      expect(
+        (document.getElementById("r-yes") as HTMLInputElement).checked,
+      ).toBe(true);
+    });
+
+    it("skips when the matching radio option is the hidden one", () => {
+      document.body.innerHTML = `
+        <div style="display:none">
+          <input id="r-no" type="radio" name="ptn" value="No" />
+        </div>
+        <div><input id="r-yes" type="radio" name="ptn" value="Yes" /></div>
+      `;
+      const result = applyFill([
+        instr({
+          label: "Accepting patients",
+          selector: "#r-yes",
+          fieldType: "radio",
+          value: "No",
+          mapId: "m-ptn",
+        }),
+      ]);
+      expect(result.filled).toEqual([]);
+      expect(
+        (document.getElementById("r-no") as HTMLInputElement).checked,
+      ).toBe(false);
+      expect(result.skipped).toEqual([
+        {
+          label: "Accepting patients",
+          reason: HIDDEN_REASON,
+          mapId: "m-ptn",
+          kind: HIDDEN_KIND,
+        },
+      ]);
+    });
+
+    // The whole point of a separate reason: the selector RESOLVED. Reporting
+    // not-found would send a trainer to re-map a working selector.
+    it("is reported distinctly from not-found and from other_page", () => {
+      expect(HIDDEN_REASON).toBe("field is hidden on this page");
+      expect(HIDDEN_KIND).toBe("hidden");
+      expect(
+        new Set([HIDDEN_REASON, FIELD_NOT_FOUND_REASON, OTHER_PAGE_REASON])
+          .size,
+      ).toBe(3);
+      expect(new Set([HIDDEN_KIND, "skipped", OTHER_PAGE_KIND]).size).toBe(3);
+    });
+
+    it("still fills a zero-size but displayed control — layout is not the rule", () => {
+      // The scanner drops zero-box controls as list noise; the FILL must not,
+      // or a coordinator waits on a field the extension silently declined.
+      document.body.innerHTML = `<input id="tiny" type="text" style="width:0;height:0" />`;
+      const result = applyFill([
+        instr({ label: "Tiny", selector: "#tiny", value: "ok" }),
+      ]);
+      expect(result.filled).toEqual(["Tiny"]);
+      expect((document.getElementById("tiny") as HTMLInputElement).value).toBe(
+        "ok",
+      );
+    });
   });
 
   it("skips disabled/readonly and file inputs", () => {

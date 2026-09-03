@@ -257,6 +257,25 @@ panel, and nothing else would catch it.
   unknown URL) keeps ordinary `"field not found on this page"`. Logging
   preserves producer kinds — it no longer overwrites every content skip to
   `"skipped"`.
+- **The fill never writes a hidden control (DYN-PAGE-02).** A wizard keeps its
+  inactive steps in the DOM, so a selector can resolve perfectly and still
+  point somewhere the coordinator cannot see. `applyValue` guards on
+  `isHiddenControl` (`src/content/captureScan.ts`) and reports
+  `kind: "hidden"` / reason `"field is hidden on this page"` (panel
+  DYN-PAGE-02a pin). **A radio group guards the option about to be CLICKED,
+  not the one the selector resolved to** — they are often different elements,
+  and guarding the resolved one would skip a visible answer.
+  `isHiddenControl` is the shared **positive-hiding** half of the capture rule
+  (`hidden` / `aria-hidden` / `display:none` / `visibility:hidden` on self or
+  an ancestor). The scanner's extra zero-box check is deliberately NOT applied
+  to the fill: a zero-size control is list noise for a trainer but a real field
+  a coordinator is waiting on. Clipped/off-screen panels are out of scope.
+- **The three fill-skip reasons are disjoint, and the panel owns the wording.**
+  `field not found on this page` (drift), `field belongs to another page`, and
+  `field is hidden on this page`. **Only the first is drift** — the other two
+  resolved a selector. Add a fourth panel-first, in `src/lib/formDrift.ts`, and
+  join it to `isNoEvidenceSkip` there or it silently dates a mapping's last
+  success to a fill that never touched the field.
 - **Capture is shape-only, never values** — labels, selectors, control types,
   and option vocabularies. Structured controls record `{value,label}[]` for
   `<select>`, radio groups, and valued checkboxes; `selected`/`checked`/typed

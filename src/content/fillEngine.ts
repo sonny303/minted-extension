@@ -7,6 +7,7 @@ import type {
   FillInstruction,
   FillPageResult,
   ReportedField,
+  ReportedFieldKind,
 } from "../shared/fill";
 import {
   isOtherPageInstruction,
@@ -14,6 +15,12 @@ import {
   resolveFillPage,
 } from "../shared/fillPage";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
+import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
+// DYN-PAGE-02 — the SAME "positively hidden" rule the scanner uses, shared
+// rather than copied so the two surfaces can never disagree about what an
+// inactive wizard panel looks like. The scanner's extra zero-box filter is
+// deliberately NOT applied here; see isHiddenControl's own comment.
+import { isHiddenControl } from "./captureScan";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -155,7 +162,17 @@ function labelTextOf(input: HTMLInputElement): string {
   return label?.textContent ?? "";
 }
 
-type ApplyOutcome = { ok: true } | { ok: false; reason: string };
+type ApplyOutcome =
+  | { ok: true }
+  | { ok: false; reason: string; kind?: ReportedFieldKind };
+
+/** DYN-PAGE-02 — the control resolved but sits in an inactive panel, so the
+ * fill declines to write it. Never drift: the selector was found. */
+const HIDDEN_OUTCOME: ApplyOutcome = {
+  ok: false,
+  reason: HIDDEN_REASON,
+  kind: HIDDEN_KIND,
+};
 
 const TRUTHY = new Set(["true", "yes", "y", "1", "x", "on", "checked"]);
 
@@ -205,6 +222,10 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
       ),
     };
   }
+  // The visibility guard belongs HERE, not on the resolved element: a radio
+  // group is one field made of N controls, and `match` — the one that gets
+  // clicked — need not be the one the selector resolved to.
+  if (isHiddenControl(match)) return HIDDEN_OUTCOME;
   if (!match.checked) match.click();
   return { ok: true };
 }
@@ -239,10 +260,17 @@ function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
 }
 
 function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
+  const isRadio = el instanceof HTMLInputElement && el.type === "radio";
+  // DYN-PAGE-02 — never mutate a control the coordinator cannot see. A wizard
+  // that keeps every step in the DOM and hides the inactive ones would
+  // otherwise take a silent write into a panel nobody reviews before
+  // submitting. Radio defers its own check to applyRadio, which knows which
+  // group member is actually about to be clicked.
+  if (!isRadio && isHiddenControl(el)) return HIDDEN_OUTCOME;
   if (el instanceof HTMLSelectElement)
     return applySelect(el, instruction.value);
-  if (el instanceof HTMLInputElement && el.type === "radio") {
-    return applyRadio(el, instruction.value);
+  if (isRadio) {
+    return applyRadio(el as HTMLInputElement, instruction.value);
   }
   if (el instanceof HTMLInputElement && el.type === "checkbox") {
     return applyCheckbox(el, instruction.value);
@@ -311,6 +339,9 @@ export function applyFillOnPage(
           label: instruction.label,
           reason: outcome.reason,
           mapId: instruction.mapId,
+          // Explicit, so a producer kind (hidden) survives; the rest state the
+          // "skipped" the panel would have defaulted them to anyway.
+          kind: outcome.kind ?? "skipped",
         });
       }
     } catch (error) {

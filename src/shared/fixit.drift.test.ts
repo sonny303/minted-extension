@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FIELD_NOT_FOUND_REASON,
+  HIDDEN_REASON,
   OTHER_PAGE_REASON,
   countBrokenSelectors,
 } from "./fixit";
@@ -25,6 +26,12 @@ describe("countBrokenSelectors (S4.1 drift strip)", () => {
     mapId: "m3",
     kind: "other_page",
   };
+  const hiddenField: ReportedField = {
+    label: "Specialty",
+    reason: HIDDEN_REASON,
+    mapId: "m4",
+    kind: "hidden",
+  };
 
   it("counts only dead selectors, not data gaps", () => {
     expect(countBrokenSelectors([broken, dataGap, broken])).toBe(2);
@@ -35,6 +42,14 @@ describe("countBrokenSelectors (S4.1 drift strip)", () => {
   it("does not count exact other-page skips as drift (DYN-PAGE-01)", () => {
     expect(countBrokenSelectors([broken, otherPage])).toBe(1);
     expect(countBrokenSelectors([otherPage])).toBe(0);
+  });
+
+  it("does not count hidden-control skips as drift (DYN-PAGE-02)", () => {
+    // The selector RESOLVED — it pointed into an inactive panel. Counting it
+    // would send the trainer to re-map a working field.
+    expect(countBrokenSelectors([broken, hiddenField])).toBe(1);
+    expect(countBrokenSelectors([hiddenField])).toBe(0);
+    expect(countBrokenSelectors([otherPage, hiddenField])).toBe(0);
   });
 
   it("classifies from the REASON, so reports predating `kind` still count", () => {

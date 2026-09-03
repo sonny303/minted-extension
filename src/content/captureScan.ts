@@ -52,18 +52,34 @@ export function compareVisualPosition(a: Element, b: Element): number {
   return 0;
 }
 
-/** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
- * or an ancestor (or self) marked hidden / aria-hidden / display:none /
- * visibility:hidden. Never reads a control's value. */
-export function isCapturableControl(el: Element): boolean {
-  if (!hasLayoutBox(el)) return false;
+/**
+ * Positively hidden: the control, or an ancestor, is marked hidden /
+ * aria-hidden / display:none / visibility:hidden. This is how a wizard keeps
+ * its inactive steps in the DOM, which is why the FILL shares this half
+ * (DYN-PAGE-02) — see `applyValue` in fillEngine.ts.
+ *
+ * Deliberately NOT the whole capture rule. The zero-box check is a
+ * scanner-quality filter: a control with no measurable geometry is noise in a
+ * trainer's field list, but refusing to FILL one would be a false skip on a
+ * field the coordinator can see and is waiting on. Hiding by clipping or
+ * off-screen positioning is out of scope for both.
+ *
+ * Never reads a control's value.
+ */
+export function isHiddenControl(el: Element): boolean {
   for (let node: Element | null = el; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden")) return false;
-    if (node.getAttribute("aria-hidden") === "true") return false;
+    if (node.hasAttribute("hidden")) return true;
+    if (node.getAttribute("aria-hidden") === "true") return true;
     const { display, visibility } = getComputedStyle(node);
-    if (display === "none" || visibility === "hidden") return false;
+    if (display === "none" || visibility === "hidden") return true;
   }
-  return true;
+  return false;
+}
+
+/** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
+ * or positively hidden per `isHiddenControl`. */
+export function isCapturableControl(el: Element): boolean {
+  return hasLayoutBox(el) && !isHiddenControl(el);
 }
 
 function controlType(el: Element): PortalFieldType {
