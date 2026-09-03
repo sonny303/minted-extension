@@ -1,6 +1,10 @@
 // S4.1 — the drift signal on the offer card, and the report-snapshot rule.
 import { describe, expect, it } from "vitest";
-import { FIELD_NOT_FOUND_REASON, countBrokenSelectors } from "./fixit";
+import {
+  FIELD_NOT_FOUND_REASON,
+  OTHER_PAGE_REASON,
+  countBrokenSelectors,
+} from "./fixit";
 import type { ReportedField } from "./fill";
 
 describe("countBrokenSelectors (S4.1 drift strip)", () => {
@@ -15,11 +19,22 @@ describe("countBrokenSelectors (S4.1 drift strip)", () => {
     mapId: "m2",
     kind: "no_value",
   };
+  const otherPage: ReportedField = {
+    label: "TIN",
+    reason: OTHER_PAGE_REASON,
+    mapId: "m3",
+    kind: "other_page",
+  };
 
   it("counts only dead selectors, not data gaps", () => {
     expect(countBrokenSelectors([broken, dataGap, broken])).toBe(2);
     expect(countBrokenSelectors([dataGap])).toBe(0);
     expect(countBrokenSelectors([])).toBe(0);
+  });
+
+  it("does not count exact other-page skips as drift (DYN-PAGE-01)", () => {
+    expect(countBrokenSelectors([broken, otherPage])).toBe(1);
+    expect(countBrokenSelectors([otherPage])).toBe(0);
   });
 
   it("classifies from the REASON, so reports predating `kind` still count", () => {

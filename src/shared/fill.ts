@@ -13,6 +13,10 @@ export interface FillInstruction {
   selectorFallbacks: string[];
   fieldType: PortalFieldType;
   value: string;
+  /** Trained wizard page for this map (`portal_field_maps.page_step`). Null
+   * means legacy / unnamed — fill still attempts it. Used at apply time to
+   * classify exact off-page misses (DYN-PAGE-01). */
+  pageStep: string | null;
 }
 
 // Why a mapped field wasn't (fully) filled — machine-readable so the fix-it
@@ -20,7 +24,17 @@ export interface FillInstruction {
 // reasons: `no_mapping` → the mapping flow (train), `no_value` → the data fix
 // (provider record); the rest are informational. Optional so records persisted
 // before this field restore cleanly.
-export type ReportedFieldKind = "no_mapping" | "no_value" | "file" | "manual" | "review";
+//
+// Telemetry kinds on fill_sessions.fields_skipped also use `skipped` (on-page
+// miss) and `other_page` (exact off-page — DYN-PAGE-01 / panel formDrift).
+export type ReportedFieldKind =
+  | "no_mapping"
+  | "no_value"
+  | "file"
+  | "manual"
+  | "review"
+  | "skipped"
+  | "other_page";
 
 export interface ReportedField {
   label: string;

@@ -148,6 +148,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       selectorFallbacks: map.selectorFallbacks ?? [],
       fieldType: map.fieldType,
       value: applyTransform(String(raw), map.transform),
+      pageStep: map.pageStep ?? null,
     });
     if (map.source === "manual_partial") {
       manual.push({
@@ -290,9 +291,12 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
       startedAt,
       completedAt,
       fieldsFilled: pageResult.filled.length,
+      // Preserve producer kinds (other_page). Content not-found historically
+      // omitted kind — default those to "skipped" so the panel drift predicate
+      // still matches. Never blanket-overwrite every skip to "skipped".
       fieldsSkipped: [
-        ...pageResult.skipped.map((f) => ({ ...f, kind: "skipped" })),
-        ...manual.map((f) => ({ ...f, kind: "manual" })),
+        ...pageResult.skipped.map((f) => ({ ...f, kind: f.kind ?? "skipped" })),
+        ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ],
     });
   } catch (error) {

@@ -69,6 +69,7 @@ export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
       selectorFallbacks: map.selectorFallbacks ?? [],
       fieldType: map.fieldType,
       value: applyTransform(value, map.transform),
+      pageStep: map.pageStep ?? null,
     });
   }
 
