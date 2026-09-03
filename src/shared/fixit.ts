@@ -54,9 +54,14 @@ export function providerFixPath(providerId: string): string {
 // literal lives in one place on this side of the wire.
 export const FIELD_NOT_FOUND_REASON = "field not found on this page";
 
+// Re-export the off-page pin so the Fix-it strip and fill engine share one
+// import surface. Definitions live in fillPage.ts beside the matcher.
+export { OTHER_PAGE_KIND, OTHER_PAGE_REASON } from "./fillPage";
+
 /** How many of a fill's skipped fields are dead selectors (drift), not data
- * gaps. Defensive: a report persisted before `kind` existed still classifies,
- * because the reason string is the signal. */
+ * gaps or exact off-page misses. Defensive: a report persisted before `kind`
+ * existed still classifies, because the reason string is the signal. Off-page
+ * uses a distinct reason so this count cannot inflate from multi-page fills. */
 export function countBrokenSelectors(skipped: readonly ReportedField[]): number {
   return skipped.filter((f) => f.reason === FIELD_NOT_FOUND_REASON).length;
 }

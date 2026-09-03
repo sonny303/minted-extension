@@ -249,6 +249,14 @@ panel, and nothing else would catch it.
   overlap ≥ 0.5 of the smaller set → else new page). `mergePageCapture` folds a
   scan in **per page** — a plain diff would drop every other page's rows, so a
   trainer walking five pages would keep only the fifth.
+- **Fill matches exact URL-pages (DYN-PAGE-01).** Every instruction carries
+  `pageStep`. When the open URL's last path segment equals a trained
+  non-`Page N` page, maps for other exact pages skip with
+  `kind: "other_page"` / reason `"field belongs to another page"` (panel
+  DYN-PAGE-00 pin) and are not written. Ambiguous identity (`Page N`, null,
+  unknown URL) keeps ordinary `"field not found on this page"`. Logging
+  preserves producer kinds — it no longer overwrites every content skip to
+  `"skipped"`.
 - **Capture is shape-only, never values** — labels, selectors, control types,
   and option vocabularies. Structured controls record `{value,label}[]` for
   `<select>`, radio groups, and valued checkboxes; `selected`/`checked`/typed

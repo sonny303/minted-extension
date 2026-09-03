@@ -8,6 +8,12 @@ import type {
   FillPageResult,
   ReportedField,
 } from "../shared/fill";
+import {
+  isOtherPageInstruction,
+  otherPageReport,
+  resolveFillPage,
+} from "../shared/fillPage";
+import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -261,16 +267,39 @@ function countPageFields(): number {
 }
 
 export function applyFill(instructions: FillInstruction[]): FillPageResult {
+  return applyFillOnPage(
+    instructions,
+    typeof location !== "undefined" ? location.href : null,
+  );
+}
+
+/** Apply instructions against an explicit page URL. Exported for unit tests;
+ * production always goes through `applyFill` → `location.href`. */
+export function applyFillOnPage(
+  instructions: FillInstruction[],
+  pageUrl: string | null,
+): FillPageResult {
   const filled: string[] = [];
   const skipped: ReportedField[] = [];
+  // Exact URL-tail identity only. Ambiguous / missing → null → every
+  // instruction is attempted and unresolved selectors stay ordinary drift.
+  const currentPage = resolveFillPage(
+    pageUrl,
+    instructions.map((i) => i.pageStep),
+  );
   for (const instruction of instructions) {
     try {
+      if (isOtherPageInstruction(instruction, currentPage)) {
+        skipped.push(otherPageReport(instruction));
+        continue;
+      }
       const target = resolveTarget(instruction);
       if (!target) {
         skipped.push({
           label: instruction.label,
-          reason: "field not found on this page",
+          reason: FIELD_NOT_FOUND_REASON,
           mapId: instruction.mapId,
+          kind: "skipped",
         });
         continue;
       }

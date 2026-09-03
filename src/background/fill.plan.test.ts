@@ -19,7 +19,7 @@ function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "select
     orgId: over.orgId ?? null,
     portalKey: over.portalKey ?? "demo",
     urlPattern: null,
-    pageStep: null,
+    pageStep: over.pageStep ?? null,
     mapType: over.mapType ?? "web",
     selector: over.selector,
     selectorFallbacks: over.selectorFallbacks ?? null,
@@ -76,6 +76,15 @@ describe("planFill", () => {
     expect(plan.instructions).toHaveLength(1);
     expect(plan.instructions[0]?.label).toBe("First Name");
     expect(plan.instructions[0]?.value).toBe("Ada");
+    expect(plan.instructions[0]?.pageStep).toBeNull();
+  });
+
+  it("carries trained pageStep onto each instruction (DYN-PAGE-01)", () => {
+    const plan = planFill(
+      [map({ id: "a", selector: "label:First Name", pageStep: "credentials" })],
+      profile,
+    );
+    expect(plan.instructions[0]?.pageStep).toBe("credentials");
   });
 
   it("routes file/manual/no_mapping/no_value into manual with kinds", () => {

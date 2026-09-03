@@ -2,9 +2,11 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyFill, clearPortalForm } from "./fillEngine";
+import { applyFill, applyFillOnPage, clearPortalForm } from "./fillEngine";
 import { describeSelectorMatches } from "./elementPicker";
 import type { FillInstruction } from "../shared/fill";
+import { OTHER_PAGE_KIND, OTHER_PAGE_REASON } from "../shared/fillPage";
+import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 
 function instr(
   over: Partial<FillInstruction> & Pick<FillInstruction, "label" | "selector">,
@@ -16,6 +18,7 @@ function instr(
     selectorFallbacks: over.selectorFallbacks ?? [],
     fieldType: over.fieldType ?? "text",
     value: over.value ?? "Ada",
+    pageStep: over.pageStep ?? null,
   };
 }
 
@@ -58,7 +61,12 @@ describe("applyFill", () => {
     ]);
     expect(miss.filled).toEqual([]);
     expect(miss.skipped).toEqual([
-      { label: "Missing", reason: "field not found on this page", mapId: "m1" },
+      {
+        label: "Missing",
+        reason: "field not found on this page",
+        mapId: "m1",
+        kind: "skipped",
+      },
     ]);
   });
 
@@ -76,6 +84,106 @@ describe("applyFill", () => {
     expect((document.getElementById("alt") as HTMLInputElement).value).toBe(
       "ok",
     );
+  });
+
+  it("reports exact other-page maps without writing them (DYN-PAGE-01)", () => {
+    document.body.innerHTML = `
+      <input id="npi" type="text" />
+      <input id="tin" type="text" />
+    `;
+    const result = applyFillOnPage(
+      [
+        instr({
+          label: "NPI",
+          selector: "#npi",
+          value: "123",
+          pageStep: "credentials",
+          mapId: "m-npi",
+        }),
+        instr({
+          label: "TIN",
+          selector: "#tin",
+          value: "99",
+          pageStep: "tax-id",
+          mapId: "m-tin",
+        }),
+      ],
+      "https://payer.example/enroll/credentials",
+    );
+    expect(result.filled).toEqual(["NPI"]);
+    expect((document.getElementById("npi") as HTMLInputElement).value).toBe("123");
+    expect((document.getElementById("tin") as HTMLInputElement).value).toBe("");
+    expect(result.skipped).toEqual([
+      {
+        label: "TIN",
+        reason: OTHER_PAGE_REASON,
+        mapId: "m-tin",
+        kind: OTHER_PAGE_KIND,
+      },
+    ]);
+  });
+
+  it("keeps ordinary not-found when page identity is ambiguous", () => {
+    document.body.innerHTML = `<input id="npi" type="text" />`;
+    const result = applyFillOnPage(
+      [
+        instr({
+          label: "NPI",
+          selector: "#npi",
+          value: "1",
+          pageStep: "credentials",
+        }),
+        instr({
+          label: "TIN",
+          selector: "#gone",
+          value: "2",
+          pageStep: "Page 2",
+          mapId: "m-tin",
+        }),
+      ],
+      "https://payer.example/enroll/unknown-step",
+    );
+    expect(result.filled).toEqual(["NPI"]);
+    expect(result.skipped).toEqual([
+      {
+        label: "TIN",
+        reason: FIELD_NOT_FOUND_REASON,
+        mapId: "m-tin",
+        kind: "skipped",
+      },
+    ]);
+  });
+
+  it("does not classify Page N maps as other_page even on a known URL page", () => {
+    document.body.innerHTML = `<input id="legacy" type="text" />`;
+    const result = applyFillOnPage(
+      [
+        instr({
+          label: "Legacy",
+          selector: "#legacy",
+          value: "ok",
+          pageStep: "Page 1",
+        }),
+        instr({
+          label: "On page",
+          selector: "#missing-on-page",
+          value: "x",
+          pageStep: "credentials",
+          mapId: "m-on",
+        }),
+      ],
+      "https://payer.example/enroll/credentials",
+    );
+    // Page 1 is ambiguous → attempted; credentials on credentials → attempted.
+    expect(result.filled).toEqual(["Legacy"]);
+    expect(result.skipped).toEqual([
+      {
+        label: "On page",
+        reason: FIELD_NOT_FOUND_REASON,
+        mapId: "m-on",
+        kind: "skipped",
+      },
+    ]);
   });
 
   it("skips disabled/readonly and file inputs", () => {
@@ -172,7 +280,12 @@ describe("applyFill", () => {
       }),
     ]);
     expect(gone.skipped).toEqual([
-      { label: "State", reason: "field not found on this page", mapId: "m1" },
+      {
+        label: "State",
+        reason: "field not found on this page",
+        mapId: "m1",
+        kind: "skipped",
+      },
     ]);
   });
 
