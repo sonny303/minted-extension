@@ -1,7 +1,11 @@
 # Minted Panel Workbench — Chrome extension
 
 Fills payer portal enrollment forms with Minted Panel provider data in one
-click. v0 is unlisted (loaded unpacked); portal access is granted per origin at runtime.
+click. Staging is tested locally as an unpacked extension; production follows a
+separate restricted Store release process. Portal access is granted per origin at runtime.
+
+For staging setup, use the [guarded clone/build/load instructions](docs/release/README.md).
+They produce separate targets and preserve current hosting-access and manual-test blockers.
 
 ## Architecture (locked, spec v1.2)
 
@@ -270,14 +274,12 @@ Load it: `chrome://extensions` → Developer mode → **Load unpacked** → pick
 sets `openPanelOnActionClick`; there is no action popup). After code changes,
 rebuild and hit the extension's reload button.
 
-Optional build-time retarget (defaults stay production when unset):
-
-```sh
-VITE_API_BASE_URL=https://your-preview.vercel.app \
-VITE_SUPABASE_URL=https://….supabase.co \
-VITE_SUPABASE_ANON_KEY=eyJ… \
-npm run build
-```
+`build` and `watch` remain legacy development commands producing `dist/`. For a
+staging or production release candidate, use `build:staging` or `build:production`
+with the explicit public JSON configuration described in the
+[release runbook](docs/release/README.md). Those commands require all three public
+values, generate coherent permissions/origins, inspect complete outputs and record
+provenance. Staging never defaults to production.
 
 ## One-time backend config (owner does this manually)
 

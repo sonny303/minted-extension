@@ -1,0 +1,38 @@
+{
+  "itemId": null,
+  "publisher": null,
+  "visibility": "private",
+  "audience": { "users": [], "groups": [], "domainPublishing": false },
+  "archiveSha256": null,
+  "supportedWebVersions": [],
+  "apiContractDigest": null,
+  "compatibility": {
+    "status": "UNVERIFIED",
+    "subjectDigest": null,
+    "artifactDigest": null,
+    "finishedAt": null
+  },
+  "stagingManual": {
+    "evidenceType": "user-reported",
+    "recordDigest": null,
+    "bundleDigest": null,
+    "archiveSha256": null,
+    "sourceSha": null,
+    "buildInputDigest": null,
+    "localExtensionId": null,
+    "status": "UNVERIFIED",
+    "reportedAt": null,
+    "artifactDigest": null
+  },
+  "productionVerification": {
+    "status": "UNVERIFIED",
+    "subjectDigest": null,
+    "artifactDigest": null,
+    "finishedAt": null,
+    "checks": {
+      "publicKeyProject": "UNVERIFIED",
+      "auth": "UNVERIFIED",
+      "api": "UNVERIFIED"
+    }
+  }
+}
