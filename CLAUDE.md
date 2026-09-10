@@ -189,8 +189,18 @@ close-out loop silently.
   ["https://*/*"]` lets the panel *request* origins, but it only ever requests
   the specific origins the registry names (`portalOriginPatterns`) — never
   `https://*/*` itself. `ensureContentScript` (`src/background/inject.ts`)
-  injects on demand when there's no static match. Permission/manifest changes
-  require reloading the unpacked extension.
+  injects **per frame** (falling back to `allFrames`) when there's no static
+  match, so Availity-style shells whose form lives in a child iframe still get
+  a content script. Capture/fill/match fan out across frames via
+  `webNavigation.getAllFrames` (`src/background/frameMessaging.ts`); frame IDs
+  are never persisted on field maps. Permission/manifest changes require
+  reloading the unpacked extension.
+- **Open shadow DOM is pierced.** Capture, fill, clear, picker, and the
+  Selector Workshop walk open `#shadow-root` trees (`src/content/deepDom.ts`)
+  and climb hosts for labels/hidden checks — required for LitElement /
+  Litehouse portals (e.g. BCBSNC). Closed shadow roots remain unreachable.
+  Fill events use `{ bubbles: true, composed: true }` so listeners outside the
+  shadow hear the change.
 - **The `portals` registry is a DEPLOY PREREQUISITE.** Recognition is
   `matchPortalByUrl(url, rowsFromGetApiPortals)`; over an empty table that
   returns null for every page, which is indistinguishable from "not a portal" —

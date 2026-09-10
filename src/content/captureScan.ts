@@ -2,6 +2,13 @@
 // Never reads control values. A captured field is "there is an NPI box here",
 // not "the box contains 1234567890".
 import type { PortalFieldType } from "../shared/apiTypes";
+import {
+  FILLABLE,
+  ancestorsIncludingShadow,
+  closestDeep,
+  querySelectorAllDeep,
+  querySelectorDeep,
+} from "./deepDom";
 
 export interface CapturedField {
   /** The payer's own label text, verbatim (trimmed). The server normalizes it
@@ -18,8 +25,7 @@ export interface CapturedField {
   options?: { value: string; label: string }[];
 }
 
-const FILLABLE =
-  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
+export { FILLABLE };
 
 /** Max options stored per field — matches the panel write-boundary cap. */
 const CONTROL_OPTIONS_CAP = 50;
@@ -67,7 +73,7 @@ export function compareVisualPosition(a: Element, b: Element): number {
  * Never reads a control's value.
  */
 export function isHiddenControl(el: Element): boolean {
-  for (let node: Element | null = el; node; node = node.parentElement) {
+  for (const node of ancestorsIncludingShadow(el)) {
     if (node.hasAttribute("hidden")) return true;
     if (node.getAttribute("aria-hidden") === "true") return true;
     const { display, visibility } = getComputedStyle(node);
@@ -101,20 +107,37 @@ function controlType(el: Element): PortalFieldType {
  * from the document-wide control query while `:nth-of-type` counts among a
  * parent's children, so on one example status form it produced
  * `input:nth-of-type(4)`, which matches ZERO elements. A selector that finds
- * nothing can never be filled and can never be re-found on re-capture. */
+ * nothing can never be filled and can never be re-found on re-capture.
+ *
+ * Open shadow: `parentElement` is null at the shadow root, so we climb onto
+ * the host and continue. Steps inside a shadow tree are dropped when crossing
+ * out — CSS `>` cannot pierce shadow — leaving a host-anchored path that
+ * `querySelectorDeep` can still resolve via the host id when present. */
 function structuralPath(el: Element): string {
   const steps: string[] = [];
   let node: Element | null = el;
-  while (node && node !== document.body && node.parentElement) {
-    const parent: HTMLElement = node.parentElement;
-    const tag = node.tagName.toLowerCase();
-    const position = Array.prototype.indexOf.call(parent.children, node) + 1;
-    steps.unshift(`${tag}:nth-child(${position})`);
-    if (parent.id) {
-      steps.unshift(`#${CSS.escape(parent.id)}`);
-      return steps.join(" > ");
+  while (node && node !== document.body) {
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      const tag = node.tagName.toLowerCase();
+      const position = Array.prototype.indexOf.call(parent.children, node) + 1;
+      steps.unshift(`${tag}:nth-child(${position})`);
+      if (parent.id) {
+        steps.unshift(`#${CSS.escape(parent.id)}`);
+        return steps.join(" > ");
+      }
+      node = parent;
+      continue;
     }
-    node = parent;
+    const root = node.getRootNode();
+    if (root instanceof ShadowRoot) {
+      // Cross the shadow boundary: discard in-shadow steps (not valid CSS from
+      // the document) and resume from the host.
+      steps.length = 0;
+      node = root.host;
+      continue;
+    }
+    break;
   }
   return ["body", ...steps].join(" > ");
 }
@@ -135,25 +158,65 @@ function selectorFor(el: Element): string {
   return structuralPath(el);
 }
 
+/** Longest text we will adopt as a label guess. A portal's paragraph of
+ * instructions is not a field name; past this it is prose, not a label. */
+const NEARBY_LABEL_MAX_CHARS = 120;
+
+/** Label text from a custom-element host (Litehouse / Lit etc.) wrapping a
+ * shadowed control — `label` / `aria-label` attrs, then light-DOM slotted text. */
+function hostLabel(host: Element): string {
+  const attr =
+    host.getAttribute("label")?.trim() ||
+    host.getAttribute("aria-label")?.trim() ||
+    "";
+  if (attr) return attr;
+  const parts: string[] = [];
+  for (const child of Array.from(host.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      const t = (child.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (t) parts.push(t);
+      continue;
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
+    const el = child as Element;
+    // Skip nested custom controls / their shadows — those are other fields.
+    if (el.shadowRoot) continue;
+    if (el.matches(FILLABLE)) continue;
+    const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (t && t.length <= NEARBY_LABEL_MAX_CHARS) parts.push(t);
+  }
+  return parts.join(" ").trim();
+}
+
 /** The label a human would read for this control: its <label>, then aria
  * text, then placeholder. Empty when the form gives us nothing — such a field
  * is still captured (with its selector) rather than silently dropped, because
  * a human can name it in the review UI. */
 function labelFor(el: Element): string {
   if (el.id) {
-    const explicit = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    const explicit = querySelectorDeep(`label[for="${CSS.escape(el.id)}"]`);
     const text = explicit?.textContent?.trim();
     if (text) return text;
   }
-  const wrapping = el.closest("label")?.textContent?.trim();
+  const wrapping = closestDeep(el, "label")?.textContent?.trim();
   if (wrapping) return wrapping;
   const aria = el.getAttribute("aria-label")?.trim();
   if (aria) return aria;
   const labelledBy = el.getAttribute("aria-labelledby");
   if (labelledBy) {
-    const target = document.getElementById(labelledBy);
-    const text = target?.textContent?.trim();
+    const text = labelledBy
+      .split(/\s+/)
+      .map((id) => querySelectorDeep(`#${CSS.escape(id)}`)?.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
     if (text) return text;
+  }
+  // Shadowed control: the visible caption often lives on the host
+  // (`<lh-input label="CAQH ID Number">`) rather than a <label for>.
+  const root = el.getRootNode();
+  if (root instanceof ShadowRoot) {
+    const fromHost = hostLabel(root.host);
+    if (fromHost) return fromHost;
   }
   const placeholder = (el as HTMLInputElement).placeholder?.trim();
   return placeholder ?? "";
@@ -173,10 +236,6 @@ function captureLabel(el: Element, type: PortalFieldType): string {
   return nearbyLabel(el);
 }
 
-/** Longest text we will adopt as a label guess. A portal's paragraph of
- * instructions is not a field name; past this it is prose, not a label. */
-const NEARBY_LABEL_MAX_CHARS = 120;
-
 function cleanLabelText(raw: string | null | undefined): string {
   return (raw ?? "").replace(/\s+/g, " ").trim();
 }
@@ -189,11 +248,20 @@ function cleanLabelText(raw: string | null | undefined): string {
  * certification application you would like a status on:".
  *
  * Looks only at grouping containers and their accessible names; the options
- * themselves are already preserved in `options`. */
+ * themselves are already preserved in `options`. Climbs through open shadow
+ * hosts so Litehouse `<lh-radio-group>` / slotted legends resolve. */
 function radioGroupLabel(el: HTMLInputElement): string {
-  const group = el.closest("fieldset, [role='radiogroup']");
+  const group = closestDeep(
+    el,
+    "fieldset, [role='radiogroup'], lh-radio-group",
+  );
   if (group) {
-    const legend = cleanLabelText(group.querySelector("legend")?.textContent);
+    const legend = cleanLabelText(
+      querySelectorDeep(
+        "legend, [slot='legend'], lh-group-legend",
+        group,
+      )?.textContent,
+    );
     if (legend) return legend;
     const aria = cleanLabelText(group.getAttribute("aria-label"));
     if (aria) return aria;
@@ -202,13 +270,23 @@ function radioGroupLabel(el: HTMLInputElement): string {
       // aria-labelledby is a token LIST; join what resolves, in order.
       const text = labelledBy
         .split(/\s+/)
-        .map((id) => cleanLabelText(document.getElementById(id)?.textContent))
+        .map((id) =>
+          cleanLabelText(querySelectorDeep(`#${CSS.escape(id)}`)?.textContent),
+        )
         .filter(Boolean)
         .join(" ");
       if (text) return text;
     }
-    const heading = cleanLabelText(group.querySelector("h1, h2, h3, h4, h5, h6")?.textContent);
+    const heading = cleanLabelText(
+      querySelectorDeep("h1, h2, h3, h4, h5, h6", group)?.textContent,
+    );
     if (heading && heading.length <= NEARBY_LABEL_MAX_CHARS) return heading;
+    // Custom group hosts only — never hostLabel a plain <div role=radiogroup>,
+    // which would concatenate every option's caption into one false "question".
+    if (group.tagName.includes("-")) {
+      const fromHost = cleanLabelText(hostLabel(group));
+      if (fromHost && fromHost.length <= NEARBY_LABEL_MAX_CHARS) return fromHost;
+    }
   }
   return "";
 }
@@ -224,9 +302,11 @@ function radioGroupLabel(el: HTMLInputElement): string {
  * boundary is unmoved. A guess is still only a guess: it is a starting point
  * the trainer can rename, which is why the edit UI exists. */
 function nearbyLabel(el: Element): string {
-  const ownsAControl = (node: Element): boolean => node.querySelector(FILLABLE) != null;
+  const ownsAControl = (node: Element): boolean =>
+    querySelectorDeep(FILLABLE, node) != null || node.matches(FILLABLE);
   // Two levels: the control's own siblings, then its wrapper's. Portals
-  // usually put the caption in one of those two places.
+  // usually put the caption in one of those two places. Climb via shadow host
+  // when parentElement is null inside a shadow tree.
   let node: Element | null = el;
   for (let depth = 0; node && node !== document.body && depth < 2; depth += 1) {
     for (
@@ -239,16 +319,26 @@ function nearbyLabel(el: Element): string {
       const text = cleanLabelText(previous.textContent);
       if (text && text.length <= NEARBY_LABEL_MAX_CHARS) return text;
     }
-    node = node.parentElement;
+    if (node.parentElement) {
+      node = node.parentElement;
+      continue;
+    }
+    const root = node.getRootNode();
+    node = root instanceof ShadowRoot ? root.host : null;
   }
   return "";
 }
 
 function sectionFor(el: Element): string | null {
-  const legend = el.closest("fieldset")?.querySelector("legend")?.textContent?.trim();
+  const fieldset = closestDeep(el, "fieldset");
+  const legend = fieldset
+    ? cleanLabelText(querySelectorDeep("legend", fieldset)?.textContent)
+    : "";
   if (legend) return legend;
-  const section = el.closest("section, [role='group']");
-  const heading = section?.querySelector("h1, h2, h3, h4")?.textContent?.trim();
+  const section = closestDeep(el, "section, [role='group']");
+  const heading = section
+    ? cleanLabelText(querySelectorDeep("h1, h2, h3, h4", section)?.textContent)
+    : "";
   return heading || null;
 }
 
@@ -272,13 +362,13 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
     return capOptions(options);
   }
   if (type === "radio" && el instanceof HTMLInputElement) {
-    const scope = el.form ?? document;
+    // Name-matched radios may sit in sibling shadow trees under one group host;
+    // search deep from the document (or the form) so the whole group is seen.
     const group = el.name
-      ? Array.from(
-          scope.querySelectorAll<HTMLInputElement>(
-            `input[type="radio"][name="${CSS.escape(el.name)}"]`,
-          ),
-        )
+      ? querySelectorAllDeep(
+          `input[type="radio"][name="${CSS.escape(el.name)}"]`,
+          el.form ?? document,
+        ).filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
       : [el];
     const options: { value: string; label: string }[] = [];
     for (const radio of group) {
@@ -325,28 +415,36 @@ export function describeControl(el: Element): CapturedField {
 
 /** The nearest thing to `node` that capture can actually map: the control
  * itself, the control a clicked <label> points at, or a control inside a
- * clicked wrapper. Null when the click landed on nothing mappable. */
+ * clicked wrapper (including open shadow hosts). Null when the click landed
+ * on nothing mappable. */
 export function nearestCapturableControl(node: Element | null): Element | null {
   if (node == null) return null;
-  const self = node.closest(FILLABLE);
-  if (self) return self;
-  const label = node.closest("label");
+  if (node.matches(FILLABLE)) return node;
+  for (const ancestor of ancestorsIncludingShadow(node)) {
+    if (ancestor.matches(FILLABLE)) return ancestor;
+  }
+  const label = closestDeep(node, "label");
   if (label) {
     const forId = label.getAttribute("for");
     if (forId) {
-      const target = document.getElementById(forId);
+      const target = querySelectorDeep(`#${CSS.escape(forId)}`);
       if (target?.matches(FILLABLE)) return target;
     }
-    const inner = label.querySelector(FILLABLE);
+    const inner = querySelectorDeep(FILLABLE, label);
     if (inner) return inner;
   }
-  return node.querySelector(FILLABLE);
+  // Clicked a custom host (`<lh-input>`) — take the fillable in its shadow.
+  if (node.shadowRoot) {
+    const shadowed = querySelectorDeep(FILLABLE, node.shadowRoot);
+    if (shadowed) return shadowed;
+  }
+  return querySelectorDeep(FILLABLE, node);
 }
 
 export function scanCapturableFields(): CapturedField[] {
   const seenRadioNames = new Set<string>();
   const fields: CapturedField[] = [];
-  const controls = Array.from(document.querySelectorAll(FILLABLE)).map((el, index) => ({
+  const controls = querySelectorAllDeep(FILLABLE).map((el, index) => ({
     el,
     index,
   }));

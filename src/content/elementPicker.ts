@@ -11,6 +11,7 @@ import {
   nearestCapturableControl,
   type CapturedField,
 } from "./captureScan";
+import { querySelectorAllDeep } from "./deepDom";
 
 /** What the pick produced. `cancelled` is a first-class outcome, not an error:
  * pressing Escape is a normal thing to do and must not surface as a failure. */
@@ -219,7 +220,7 @@ export function describeSelectorMatches(selector: string): SelectorMatchReport {
   }
   let els: Element[];
   try {
-    els = Array.from(document.querySelectorAll(selector));
+    els = querySelectorAllDeep(selector);
   } catch {
     return { valid: false, matches: 0, fillable: 0, radioGroup: false };
   }
@@ -267,7 +268,7 @@ function clearHighlight(): void {
     clearTimeout(highlightTimer);
     highlightTimer = null;
   }
-  for (const el of document.querySelectorAll(`.${HIGHLIGHT_CLASS}`)) {
+  for (const el of querySelectorAllDeep(`.${HIGHLIGHT_CLASS}`)) {
     el.classList.remove(HIGHLIGHT_CLASS);
   }
 }
@@ -291,7 +292,7 @@ export function highlightSelectorReport(selector: string): SelectorMatchReport {
   }
   let matches: Element[];
   try {
-    matches = Array.from(document.querySelectorAll(selector));
+    matches = querySelectorAllDeep(selector);
   } catch {
     // Invalid CSS: nothing to paint, and the report says WHY so the panel can
     // tell a typo from a field that is genuinely gone.

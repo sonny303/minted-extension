@@ -9,6 +9,11 @@ import type { FillInstruction, FillPageResult, MockDryRunSummary, ReportedField 
 import { applyTransform } from "./fill";
 import { listSharedFieldMaps, postSharedTestFill } from "./api";
 import {
+  applyFillAcrossFrames,
+  listTabFrames,
+  sendToFrame,
+} from "./frameMessaging";
+import {
   MOCK_FILL_PROFILE_VERSION,
   mockValueForToken,
 } from "../shared/mockFillProfile";
@@ -87,10 +92,22 @@ export async function fillMockPortal(input: {
   const plan = planMockFill(maps);
 
   try {
-    const pong = (await chrome.tabs.sendMessage(input.tabId, { type: "PING" })) as
-      | { ok?: boolean }
-      | undefined;
-    if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
+    const frames = await listTabFrames(input.tabId);
+    let alive = false;
+    for (const frame of frames) {
+      try {
+        const pong = (await sendToFrame(input.tabId, frame.frameId, {
+          type: "PING",
+        })) as { ok?: boolean } | undefined;
+        if (pong?.ok === true) {
+          alive = true;
+          break;
+        }
+      } catch {
+        // try next frame
+      }
+    }
+    if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
@@ -100,18 +117,12 @@ export async function fillMockPortal(input: {
 
   let pageResult: FillPageResult;
   try {
-    const response = (await chrome.tabs.sendMessage(input.tabId, {
-      type: "APPLY_FILL",
-      instructions: plan.instructions,
-    })) as { ok: boolean; data?: FillPageResult; error?: string } | undefined;
-    if (!response?.ok || !response.data) {
-      throw new Error(response?.error ?? "the page didn't confirm the mock dry run");
-    }
-    pageResult = response.data;
+    pageResult = await applyFillAcrossFrames(input.tabId, plan.instructions);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
-      message.includes("Receiving end does not exist")
+      message.includes("Receiving end does not exist") ||
+        message.includes("Could not reach the enrollment form")
         ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
         : `Mock dry run failed on the page: ${message}`,
       { cause: error },

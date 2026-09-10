@@ -50,6 +50,13 @@ import { readPanelMode, writePanelMode } from "./mode";
 import { coveragePortal, fillPortal, sandboxFillPortal } from "./fill";
 import { fillMockPortal } from "./mockFill";
 import { ensureContentScript } from "./inject";
+import {
+  clearFormAcrossFrames,
+  matchSelectorAcrossFrames,
+  pickElementAcrossFrames,
+  scanFieldsAcrossFrames,
+  sendToAllFrames,
+} from "./frameMessaging";
 import { buildSubmissionTouchBody } from "../shared/submission";
 import {
   ACTIVE_CASE_KEY,
@@ -71,12 +78,9 @@ import {
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
-import type { PickOutcome } from "../content/elementPicker";
 import { assignSortOrder } from "../shared/trainForms";
 import { browseableProviders } from "../shared/browseProviders";
-import type { CapturedField } from "../content/captureScan";
 import { isSandboxProvider } from "../shared/sandbox";
-import type { SelectorMatchReport } from "../shared/selectorMatch";
 
 // Clicking the toolbar icon toggles the workbench side panel (the action has
 // no popup). Top-level so every worker start re-asserts the behavior. The
@@ -379,17 +383,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // portal), so capture works on any DB-registered portal, not just the
       // one with a static content_scripts match.
       await ensureContentScript(request.tabId);
-      const scanned = (await chrome.tabs.sendMessage(request.tabId, {
-        type: "SCAN_FIELDS",
-      })) as
-        | { ok?: boolean; data?: CapturedField[]; error?: string }
-        | undefined;
-      if (!scanned?.ok || !scanned.data) {
-        throw new Error(
-          scanned?.error ??
-            "Could not read this form — reload the page and retry.",
-        );
-      }
+      const scannedData = await scanFieldsAcrossFrames(request.tabId);
       const previous = await readCaptureSession();
       const samePortal = previous?.portalKey === request.portalKey;
       // BITE-CAP-05 — identify the page AFTER the scan. The side panel sends a
@@ -399,7 +393,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       const previousRows = samePortal && previous ? previous.rows : [];
       const pageStep = identifyCapturePage({
         previous: previousRows,
-        scanned: scanned.data.map((f) => f.selector),
+        scanned: scannedData.map((f) => f.selector),
         candidate: request.pageStep?.trim() || "Page 1",
         urlTail: request.pageUrlTail ?? null,
         heading: null,
@@ -408,7 +402,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // E6.9 F6.9.8 — stamp the wizard page and DOM order. The scan yields
       // fields in document order, so sortOrder is positional within THIS page;
       // pages themselves order by the sequence the trainer walked them.
-      const rows: CaptureRow[] = assignSortOrder(scanned.data).map((f) => ({
+      const rows: CaptureRow[] = assignSortOrder(scannedData).map((f) => ({
         label: f.label,
         selector: f.selector,
         fieldType: f.fieldType,
@@ -466,19 +460,12 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       if (current == null)
         throw new Error("Capture this form first, then add missing fields.");
       await ensureContentScript(request.tabId);
-      const picked = (await chrome.tabs.sendMessage(request.tabId, {
-        type: "PICK_ELEMENT",
-      })) as { ok?: boolean; data?: PickOutcome; error?: string } | undefined;
-      if (!picked?.ok || !picked.data) {
-        throw new Error(
-          picked?.error ?? "Could not add a field — reload the page and retry.",
-        );
-      }
+      const pickOutcome = await pickElementAcrossFrames(request.tabId);
       // Cancelling is a normal outcome, not a failure: return the session
       // untouched so the panel simply leaves pick mode.
-      if (picked.data.status === "cancelled") return current;
+      if (pickOutcome.status === "cancelled") return current;
 
-      const field = picked.data.field;
+      const field = pickOutcome.field;
       const existing = current.rows.find((r) => r.selector === field.selector);
       if (existing) {
         // Already known. Say so by returning the session unchanged rather than
@@ -524,7 +511,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Best-effort: the pick may already have resolved, or the tab may be
       // gone. Either way the panel is leaving pick mode, so never throw.
       try {
-        await chrome.tabs.sendMessage(request.tabId, { type: "CANCEL_PICK" });
+        await sendToAllFrames(request.tabId, { type: "CANCEL_PICK" });
       } catch {
         // no content script / tab closed — nothing to cancel
       }
@@ -592,16 +579,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         "This provider isn't the organization's designated sandbox test profile — refusing to clear a form that may carry real, in-progress work.",
       );
       await ensureContentScript(request.tabId);
-      const response = (await chrome.tabs.sendMessage(request.tabId, {
-        type: "CLEAR_FORM",
-      })) as { ok?: boolean; data?: number; error?: string } | undefined;
-      if (!response?.ok || typeof response.data !== "number") {
-        throw new Error(
-          response?.error ??
-            "Could not clear this form — reload the page and retry.",
-        );
-      }
-      return { cleared: response.data };
+      const cleared = await clearFormAcrossFrames(request.tabId);
+      return { cleared };
     }
     case "REMOVE_CAPTURE_ROWS": {
       const current = await readCaptureSession();
@@ -616,25 +595,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     }
     case "TEST_CAPTURE_SELECTOR": {
       await ensureContentScript(request.tabId);
-      const result = (await chrome.tabs.sendMessage(request.tabId, {
-        type: "MATCH_SELECTOR",
-        selector: request.selector,
-        highlight: request.highlight === true,
-      })) as
-        | { ok?: boolean; data?: SelectorMatchReport; error?: string }
-        | undefined;
+      const report = await matchSelectorAcrossFrames(
+        request.tabId,
+        request.selector,
+        request.highlight === true,
+      );
       // The page reports the match SHAPE (how many, how many fillable, one
       // radio group?) — a bare count cannot tell a wrapper from a field.
-      if (
-        !result?.ok ||
-        result.data == null ||
-        typeof result.data.matches !== "number"
-      ) {
-        throw new Error(
-          result?.error ?? "Could not check this field on the page.",
-        );
-      }
-      return { selector: request.selector, ...result.data };
+      return { selector: request.selector, ...report };
     }
     case "SEND_CAPTURE": {
       const current = await readCaptureSession();

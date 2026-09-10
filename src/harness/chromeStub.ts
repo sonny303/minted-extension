@@ -69,6 +69,9 @@ export function installChromeStub(): ChromeStub {
         throw new Error("no content script in the harness");
       },
     },
+    webNavigation: {
+      getAllFrames: async () => [{ frameId: 0, url: "" }],
+    },
     // Absent on purpose: activeCase.ts optional-chains sidePanel.
     sidePanel: undefined,
   };
