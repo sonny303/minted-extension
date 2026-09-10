@@ -27,6 +27,11 @@ import {
   postFillEvent,
   postSharedTestFill,
 } from "./api";
+import {
+  applyFillAcrossFrames,
+  listTabFrames,
+  sendToFrame,
+} from "./frameMessaging";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -233,17 +238,25 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   ]);
   const { instructions, manual } = planFill(maps, profile);
 
-  // Pre-flight ping: confirm the content script is actually live in the target
-  // tab BEFORE handing it the (PHI-bearing) fill instructions. The common
-  // failure — the active tab isn't the portal, or the page hasn't finished
-  // loading the content script — throws "Receiving end does not exist" here and
-  // surfaces as clear reload guidance, instead of a cryptic messaging error
-  // after we've already planned the fill.
+  // Pre-flight ping: any frame answering is enough (Availity's form lives in
+  // a child iframe). ensureContentScript already ran in the worker.
   try {
-    const pong = (await chrome.tabs.sendMessage(request.tabId, { type: "PING" })) as
-      | { ok?: boolean }
-      | undefined;
-    if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
+    const frames = await listTabFrames(request.tabId);
+    let alive = false;
+    for (const frame of frames) {
+      try {
+        const pong = (await sendToFrame(request.tabId, frame.frameId, {
+          type: "PING",
+        })) as { ok?: boolean } | undefined;
+        if (pong?.ok === true) {
+          alive = true;
+          break;
+        }
+      } catch {
+        // try next frame
+      }
+    }
+    if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
@@ -253,14 +266,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
 
   let pageResult: FillPageResult;
   try {
-    const response = (await chrome.tabs.sendMessage(request.tabId, {
-      type: "APPLY_FILL",
-      instructions,
-    })) as { ok: boolean; data?: FillPageResult; error?: string } | undefined;
-    if (!response?.ok || !response.data) {
-      throw new Error(response?.error ?? "the page didn't confirm the fill");
-    }
-    pageResult = response.data;
+    pageResult = await applyFillAcrossFrames(request.tabId, instructions);
   } catch (error) {
     // The pre-flight ping just proved the content script is reachable, so a
     // failure here is a genuine page/apply error. The one residual edge is a
@@ -269,7 +275,8 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     // guidance is still the right advice.
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
-      message.includes("Receiving end does not exist")
+      message.includes("Receiving end does not exist") ||
+        message.includes("Could not reach the enrollment form")
         ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
         : `Fill failed on the page: ${message}`,
       { cause: error },
@@ -369,10 +376,22 @@ export async function sandboxFillPortal(
   const { instructions, manual } = planFill(maps, profile);
 
   try {
-    const pong = (await chrome.tabs.sendMessage(request.tabId, { type: "PING" })) as
-      | { ok?: boolean }
-      | undefined;
-    if (pong?.ok !== true) throw new Error("the enrollment form did not answer the pre-flight ping");
+    const frames = await listTabFrames(request.tabId);
+    let alive = false;
+    for (const frame of frames) {
+      try {
+        const pong = (await sendToFrame(request.tabId, frame.frameId, {
+          type: "PING",
+        })) as { ok?: boolean } | undefined;
+        if (pong?.ok === true) {
+          alive = true;
+          break;
+        }
+      } catch {
+        // try next frame
+      }
+    }
+    if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
@@ -382,18 +401,12 @@ export async function sandboxFillPortal(
 
   let pageResult: FillPageResult;
   try {
-    const response = (await chrome.tabs.sendMessage(request.tabId, {
-      type: "APPLY_FILL",
-      instructions,
-    })) as { ok: boolean; data?: FillPageResult; error?: string } | undefined;
-    if (!response?.ok || !response.data) {
-      throw new Error(response?.error ?? "the page didn't confirm the sandbox fill");
-    }
-    pageResult = response.data;
+    pageResult = await applyFillAcrossFrames(request.tabId, instructions);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
-      message.includes("Receiving end does not exist")
+      message.includes("Receiving end does not exist") ||
+        message.includes("Could not reach the enrollment form")
         ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
         : `Sandbox fill failed on the page: ${message}`,
       { cause: error },

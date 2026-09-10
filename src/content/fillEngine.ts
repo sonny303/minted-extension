@@ -21,6 +21,7 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // inactive wizard panel looks like. The scanner's extra zero-box filter is
 // deliberately NOT applied here; see isHiddenControl's own comment.
 import { isHiddenControl } from "./captureScan";
+import { FILLABLE, querySelectorAllDeep, querySelectorDeep } from "./deepDom";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -34,16 +35,22 @@ function normalize(text: string): string {
 
 type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
+function asFillable(el: Element | null): Fillable | null {
+  return el instanceof HTMLInputElement ||
+    el instanceof HTMLSelectElement ||
+    el instanceof HTMLTextAreaElement
+    ? el
+    : null;
+}
+
 function controlForLabel(label: HTMLLabelElement): Fillable | null {
   const control =
-    label.control ??
-    (label.htmlFor ? document.getElementById(label.htmlFor) : null) ??
-    label.querySelector("input, select, textarea");
-  return control instanceof HTMLInputElement ||
-    control instanceof HTMLSelectElement ||
-    control instanceof HTMLTextAreaElement
-    ? control
-    : null;
+    asFillable(label.control) ??
+    (label.htmlFor
+      ? asFillable(querySelectorDeep(`#${CSS.escape(label.htmlFor)}`))
+      : null) ??
+    asFillable(querySelectorDeep(FILLABLE, label));
+  return control;
 }
 
 /** The `label:` prefix the shared library uses for label-addressed maps. */
@@ -53,15 +60,30 @@ export const LABEL_SELECTOR_PREFIX = "label:";
 // text matches exactly (after normalization). Exact match is deliberate: the
 // portal has both "First Name" and "Provider's First Name".
 //
+// Also matches custom hosts that expose the caption via `label` / `aria-label`
+// (Litehouse `<lh-input label="…">`) and resolve a fillable in their shadow.
+//
 // EXPORTED so the Selector Workshop resolves a label-addressed selector the
 // same way the fill does. It used to run raw querySelectorAll, which cannot
 // parse `label:…` at all — so every library field stored that way tested as
 // "matches nothing" and read as drift on a page where it fills perfectly.
 export function byLabel(text: string): Fillable | null {
   const want = normalize(text);
-  for (const label of Array.from(document.querySelectorAll("label"))) {
+  for (const label of querySelectorAllDeep("label")) {
+    if (!(label instanceof HTMLLabelElement)) continue;
     if (normalize(label.textContent ?? "") !== want) continue;
     const control = controlForLabel(label);
+    if (control) return control;
+  }
+  // Host-attribute labels (no <label> element in the light DOM).
+  for (const host of querySelectorAllDeep("[label], [aria-label]")) {
+    const hostText =
+      host.getAttribute("label")?.trim() ||
+      host.getAttribute("aria-label")?.trim() ||
+      "";
+    if (normalize(hostText) !== want) continue;
+    const root: ParentNode = host.shadowRoot ?? host;
+    const control = asFillable(querySelectorDeep(FILLABLE, root));
     if (control) return control;
   }
   return null;
@@ -69,12 +91,7 @@ export function byLabel(text: string): Fillable | null {
 
 function bySelector(selector: string): Fillable | null {
   try {
-    const el = document.querySelector(selector);
-    return el instanceof HTMLInputElement ||
-      el instanceof HTMLSelectElement ||
-      el instanceof HTMLTextAreaElement
-      ? el
-      : null;
+    return asFillable(querySelectorDeep(selector));
   } catch {
     return null; // invalid CSS selector — treated as not found
   }
@@ -94,8 +111,9 @@ function resolveTarget(instruction: FillInstruction): Fillable | null {
 }
 
 // Set an input's value through the prototype setter so framework-controlled
-// inputs (React et al.) see the change, then fire the events the page's own
-// validation listens for.
+// inputs (React / Lit et al.) see the change, then fire the events the page's
+// own validation listens for — including composed so listeners outside a
+// shadow root still hear the change.
 function setNativeValue(el: Fillable, value: string): void {
   const proto = Object.getPrototypeOf(el) as object;
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
@@ -108,8 +126,9 @@ function setNativeValue(el: Fillable, value: string): void {
 }
 
 function fireChanged(el: HTMLElement): void {
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  const init: EventInit = { bubbles: true, composed: true, cancelable: true };
+  el.dispatchEvent(new Event("input", init));
+  el.dispatchEvent(new Event("change", init));
 }
 
 /**
@@ -127,10 +146,10 @@ function fireChanged(el: HTMLElement): void {
  */
 export function clearPortalForm(): number {
   let cleared = 0;
-  const controls = document.querySelectorAll<Fillable>(
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea',
-  );
-  for (const el of controls) {
+  const controls = querySelectorAllDeep(FILLABLE);
+  for (const node of controls) {
+    const el = asFillable(node);
+    if (!el) continue;
     try {
       if (
         el instanceof HTMLInputElement &&
@@ -200,13 +219,11 @@ function vocabularyMismatchReason(
 
 function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   const want = normalize(value);
-  const scope = el.form ?? document;
   const group = el.name
-    ? Array.from(
-        scope.querySelectorAll<HTMLInputElement>(
-          `input[type="radio"][name="${CSS.escape(el.name)}"]`,
-        ),
-      )
+    ? querySelectorAllDeep(
+        `input[type="radio"][name="${CSS.escape(el.name)}"]`,
+        el.form ?? document,
+      ).filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
     : [el];
   const match = group.find(
     (radio) =>
@@ -289,9 +306,7 @@ function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
 // The page's fillable controls — the denominator for honest coverage
 // reporting ("filled 3 of 24 mapped · ~117 fields on this page").
 function countPageFields(): number {
-  return document.querySelectorAll(
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea',
-  ).length;
+  return querySelectorAllDeep(FILLABLE).length;
 }
 
 export function applyFill(instructions: FillInstruction[]): FillPageResult {

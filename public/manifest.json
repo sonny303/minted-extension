@@ -23,7 +23,8 @@
     "storage",
     "activeTab",
     "sidePanel",
-    "scripting"
+    "scripting",
+    "webNavigation"
   ],
   "externally_connectable": {
     "matches": [
