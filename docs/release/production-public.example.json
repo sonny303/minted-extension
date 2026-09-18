@@ -1,0 +1,5 @@
+{
+  "VITE_API_BASE_URL": "https://mintedpanel.vercel.app",
+  "VITE_SUPABASE_URL": "https://fkvuhfsqcmujywzgczmc.supabase.co",
+  "VITE_SUPABASE_ANON_KEY": "REPLACE_WITH_VERIFIED_PRODUCTION_PUBLIC_KEY"
+}

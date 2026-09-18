@@ -1,0 +1,12 @@
+{
+  "itemId": null,
+  "publisher": null,
+  "visibility": "private",
+  "audience": { "users": [], "groups": [], "domainPublishing": false },
+  "itemState": "UNVERIFIED",
+  "currentVersion": null,
+  "servedWebSha": null,
+  "supportedWebVersions": [],
+  "apiContractDigest": null,
+  "checkedAt": null
+}

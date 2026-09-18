@@ -53,6 +53,15 @@ rebuild must re-emit `content.js`.
 `npm run build` (panel+background, then content — `dist/` is the loadable
 unpacked extension) · `typecheck` · `lint` · `test` (vitest) · `watch`.
 
+Guarded releases use `build:staging` or `build:production` with an explicit
+three-value public configuration file. Both run the complete two-pass build into
+separate `release-artifacts/<target>/extension` directories and verify target
+origins and package integrity. Staging is loaded locally and tested manually;
+production uses a separate restricted Store process. `check:store` validates
+local release prerequisites and does not submit or publish a package. Follow
+[`docs/release/README.md`](docs/release/README.md); the legacy `dist/` build is
+not the staging installation target.
+
 `src/harness/workbench.test.ts` drives the **real background modules** against
 `scripts/mock-panel-api.mjs`, an in-repo mirror of the panel /api contract — so
 CI never touches a real portal or the real panel. Add harness coverage for any

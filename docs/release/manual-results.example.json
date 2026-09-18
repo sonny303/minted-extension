@@ -1,0 +1,24 @@
+{
+  "evidenceType": "user-reported",
+  "testedAt": null,
+  "sourceSha": null,
+  "buildInputDigest": null,
+  "packageVersion": null,
+  "bundleDigest": null,
+  "recordDigest": null,
+  "archiveSha256": null,
+  "localExtensionId": null,
+  "chromeVersion": null,
+  "apiOrigin": "https://staging.mintedpanel.com",
+  "supabaseRef": "vmznysvietfaddakkegt",
+  "checks": {
+    "localInstallationAndStagingLabel": "PENDING",
+    "stagingOnlyNetworkDestinations": "PENDING",
+    "signInAndOwnOrganization": "BLOCKED_DEPLOYMENT_PROTECTION",
+    "tenantAndRoleBoundaries": "BLOCKED_DEPLOYMENT_PROTECTION",
+    "caseHandoffToActualLocalId": "PENDING_WEB_SENDER_VERIFICATION",
+    "syntheticFormFillAndHumanSubmitBoundary": "BLOCKED_DEPLOYMENT_PROTECTION",
+    "refreshReloadAndSignOut": "BLOCKED_DEPLOYMENT_PROTECTION"
+  },
+  "notesWithoutCredentialsOrProviderData": ""
+}

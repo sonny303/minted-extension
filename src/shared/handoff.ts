@@ -22,7 +22,13 @@ export interface SetActiveCaseMessage {
 // externally_connectable.matches already restricts who can message us, but the
 // handler re-checks the sender origin against this list so a manifest edit
 // can't silently widen the surface.
-export const HANDOFF_ALLOWED_ORIGINS: readonly string[] = ["https://mintedpanel.vercel.app"];
+// Guarded packages inject the fixed environment's web origins. Legacy builds
+// preserve the existing production handoff origin independently of API test mocks.
+declare const __MINTED_RELEASE_HANDOFF_ORIGINS__: readonly string[] | undefined;
+export const HANDOFF_ALLOWED_ORIGINS: readonly string[] =
+  typeof __MINTED_RELEASE_HANDOFF_ORIGINS__ === "undefined"
+    ? ["https://mintedpanel.vercel.app"]
+    : __MINTED_RELEASE_HANDOFF_ORIGINS__;
 
 export function isAllowedHandoffOrigin(origin: string | undefined | null): boolean {
   return origin != null && HANDOFF_ALLOWED_ORIGINS.includes(origin);

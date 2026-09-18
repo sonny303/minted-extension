@@ -6,6 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "vite build && vite build --config vite.content.config.ts",
+    "build:staging": "node scripts/release/build.mjs --target staging",
+    "build:production": "node scripts/release/build.mjs --target production",
+    "check:store": "node scripts/release/check-store.mjs",
+    "test:release": "vitest run scripts/release/contract.test.mjs scripts/release/build.test.mjs src/shared/config.test.ts src/shared/releaseConfig.test.ts src/shared/handoff.test.ts",
     "watch": "node scripts/watch.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
