@@ -154,7 +154,7 @@ export function validateManifest(manifest, target, version) {
   )
     fail("MANIFEST_TARGET");
   if (
-    !same(manifest.permissions, ["storage", "activeTab", "sidePanel", "scripting"]) ||
+    !same(manifest.permissions, ["storage", "activeTab", "sidePanel", "scripting", "webNavigation"]) ||
     !same(manifest.optional_host_permissions, ["https://*/*"]) ||
     !same(manifest.background, { service_worker: "background.js", type: "module" }) ||
     !same(manifest.side_panel, { default_path: "sidepanel.html" })

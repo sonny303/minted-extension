@@ -103,6 +103,13 @@ describe("manifest and asset boundaries", () => {
     const permissions = releaseManifest(base, "staging", "0.1.0");
     permissions.permissions.push("cookies");
     expect(() => validateManifest(permissions, "staging", "0.1.0")).toThrow("MANIFEST_PERMISSIONS");
+    const missingNavigation = releaseManifest(base, "staging", "0.1.0");
+    missingNavigation.permissions = missingNavigation.permissions.filter(
+      (permission) => permission !== "webNavigation",
+    );
+    expect(() => validateManifest(missingNavigation, "staging", "0.1.0")).toThrow(
+      "MANIFEST_PERMISSIONS",
+    );
     expect(() => releaseManifest(base, "staging", "0.2.0")).toThrow("PACKAGE_VERSION");
   });
 
