@@ -153,6 +153,72 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(fillSection.contains(doc.getElementById("case-locations-list"))).toBe(true);
   });
 
+  it("clears prior case context before a handoff facility load can scope options", () => {
+    const loadCases = codeOf(
+      MAIN.slice(MAIN.indexOf("async function loadCases("), MAIN.indexOf("async function restoreFillReport")),
+    );
+    expect(loadCases.indexOf("refreshCaseContext();")).toBeGreaterThan(-1);
+    expect(loadCases.indexOf("refreshCaseContext();")).toBeLessThan(
+      loadCases.indexOf("await sendToBackground"),
+    );
+
+    const handoffLoad = codeOf(
+      MAIN.slice(
+        MAIN.indexOf("async function loadHandoffSelection("),
+        MAIN.indexOf("async function openInCaseWork"),
+      ),
+    );
+    expect(handoffLoad.indexOf("loadCases(")).toBeLessThan(
+      handoffLoad.indexOf("loadFacilities("),
+    );
+  });
+
+  it("defers every handoff selection write until the receipt-pinned commit", () => {
+    const handoffLoad = codeOf(
+      MAIN.slice(
+        MAIN.indexOf("async function loadHandoffSelection("),
+        MAIN.indexOf("async function openInCaseWork"),
+      ),
+    );
+    expect(handoffLoad).toContain("deferSelectionWrites: true");
+    expect(handoffLoad).not.toContain('type: "SET_SELECTED_');
+
+    const apply = codeOf(
+      MAIN.slice(
+        MAIN.indexOf("async function maybeApplyHandoff("),
+        MAIN.indexOf("async function refreshActiveCase("),
+      ),
+    );
+    expect(apply).toContain("renderCaseContext(selection.contextData, true)");
+    expect(apply).toContain('type: "COMMIT_HANDOFF_SELECTION"');
+
+    const facilitiesLoad = codeOf(
+      MAIN.slice(MAIN.indexOf("async function loadFacilities("), MAIN.indexOf("async function loadProviders(")),
+    );
+    expect(facilitiesLoad).toContain("known.deferSelectionWrites !== true");
+  });
+
+  it("gates provenance, Fill, and touch work on the exact applied selection tuple", () => {
+    const readiness = codeOf(
+      MAIN.slice(MAIN.indexOf("function currentHandoffSelectionIsApplied("), MAIN.indexOf("function coverageSelectionKey(")),
+    );
+    expect(readiness).toContain("matchesAppliedHandoffSelection(");
+    expect(readiness).toContain("!currentHandoffSelectionIsApplied()");
+    expect(readiness).toContain("!currentSelectionAllowsCaseWork()");
+    expect(readiness).toContain("renderHandoffBanner()");
+
+    const banner = codeOf(
+      MAIN.slice(MAIN.indexOf("function renderHandoffBanner("), MAIN.indexOf("async function switchOrgForHandoff(")),
+    );
+    expect(banner).toContain("currentHandoffSelectionIsApplied(record)");
+
+    const apply = codeOf(
+      MAIN.slice(MAIN.indexOf("async function maybeApplyHandoff("), MAIN.indexOf("async function refreshActiveCase(")),
+    );
+    expect(apply).toContain("const committedSelection");
+    expect(apply).toContain("appliedHandoffSelection = committedSelection");
+  });
+
   it("has retired the Browse-providers dropdown", () => {
     // Superseded by free-text search, which can name the group a provider
     // belongs to — the dropdown could not, so two same-named providers were

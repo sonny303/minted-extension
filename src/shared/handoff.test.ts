@@ -3,6 +3,10 @@
 // expiry math and portal-origin matching are pinned here.
 import { describe, expect, it } from "vitest";
 import {
+  SET_ACTIVE_CASE_MESSAGE_FIXTURE,
+  SET_ACTIVE_CASE_RECEIPT_FIXTURE,
+} from "../testFixtures/extensionHandoff";
+import {
   ACTIVE_CASE_IDLE_MS,
   isActiveCaseExpired,
   isAllowedHandoffOrigin,
@@ -45,6 +49,13 @@ function record(overrides: Partial<ActiveCaseRecord> = {}): ActiveCaseRecord {
 }
 
 describe("parseSetActiveCase", () => {
+  it("accepts the exact sanitized P05 message and receipt contract", () => {
+    expect(parseSetActiveCase(SET_ACTIVE_CASE_MESSAGE_FIXTURE)).toEqual(
+      SET_ACTIVE_CASE_MESSAGE_FIXTURE,
+    );
+    expect(SET_ACTIVE_CASE_RECEIPT_FIXTURE).toEqual({ ok: true });
+  });
+
   it("accepts the locked TE-1 shape", () => {
     expect(parseSetActiveCase(validMessage)).toEqual(validMessage);
   });
@@ -64,6 +75,13 @@ describe("parseSetActiveCase", () => {
     expect(parseSetActiveCase({ ...validMessage, orgId: "" })).toBeNull();
     expect(parseSetActiveCase({ ...validMessage, portalUrl: "not a url" })).toBeNull();
     expect(parseSetActiveCase({ ...validMessage, portalUrl: "http://insecure.example" })).toBeNull();
+    expect(parseSetActiveCase({ ...validMessage, portalUrl: "https:///" })).toBeNull();
+    expect(
+      parseSetActiveCase({
+        ...validMessage,
+        portalUrl: "https://user:password@portal.example/enroll",
+      }),
+    ).toBeNull();
   });
 });
 

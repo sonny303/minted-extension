@@ -39,7 +39,16 @@ import type {
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
-import type { ActiveCaseRecord } from "../shared/handoff";
+import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
+import {
+  caseReturnUrl,
+  evaluateHandoffApplication,
+  evaluateHandoffOrg,
+  matchesAppliedHandoffSelection,
+  type AppliedHandoffSelection,
+  type HandoffContextFacts,
+  type HandoffRead,
+} from "../shared/handoffApplication";
 import {
   orderLayoutByCatalog,
   providerWebappPath,
@@ -358,10 +367,13 @@ let preferCaseFacility = false;
 // on ACTIVE_CASE_UPDATED, and on a slow poll (expiry has a clock).
 let activeCase: ActiveCaseRecord | null = null;
 let activeCaseStatus: "none" | "active" | "expired" = "none";
-// The handoff launch the panel already applied (caseId + createdAt), so a
-// re-read doesn't re-apply the same launch — but a SECOND launch (new
-// createdAt, last-launch-wins) does apply.
-let appliedHandoffKey: string | null = null;
+// The exact receipt + selection tuple the worker accepted. Provenance, Fill,
+// and case-write UI stay gated if any current picker drifts from this tuple.
+let appliedHandoffSelection: AppliedHandoffSelection | null = null;
+// While a received handoff is undergoing authenticated reads, no fill can use
+// its partially loaded selection. Only the final pure application gate moves
+// its exact tuple to appliedHandoffSelection.
+let applyingHandoffKey: string | null = null;
 // Structured-touch idempotency id — created when a
 // draft first saves, REUSED on every retry (a retry can never double-log),
 // regenerated only after a success.
@@ -1050,7 +1062,7 @@ function renderIdentityGuard(): void {
 // context carries one, it becomes the location pick unless the user already
 // picked; a fresh case selection (preferCaseFacility) overrides a remembered
 // provider location so search → case lands on the case's practice site.
-function maybeApplyCaseFacility(): void {
+function maybeApplyCaseFacility(deferSelectionWrites = false): void {
   // Wait for both the facility list and case context — clearing preferCaseFacility
   // here would race loadFacilities finishing before GET_CASE_CONTEXT returns.
   if (!facilitiesLoaded || caseContextData == null) return;
@@ -1074,11 +1086,13 @@ function maybeApplyCaseFacility(): void {
   }
   facilitySelect.value = decision.facilityId;
   if (providerId) {
-    void sendToBackground({
-      type: "SET_SELECTED_FACILITY",
-      providerId,
-      facilityId: decision.facilityId,
-    });
+    if (!deferSelectionWrites) {
+      void sendToBackground({
+        type: "SET_SELECTED_FACILITY",
+        providerId,
+        facilityId: decision.facilityId,
+      });
+    }
     void refreshFacilityCards(providerId, decision.facilityId, loadGeneration);
   }
   renderFacilityAddress();
@@ -1185,7 +1199,10 @@ function stepList(
   return list;
 }
 
-function renderCaseContext(context: CaseContext | null): void {
+function renderCaseContext(
+  context: CaseContext | null,
+  deferSelectionWrites = false,
+): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
   // Rescope #facility-select to this case's locations (or widen
@@ -1200,7 +1217,7 @@ function renderCaseContext(context: CaseContext | null): void {
   // pipeline/refs yet ("quiet") still has its own selectedFacility, and that
   // must still get adopted. Run this before the hasContent early return,
   // unconditionally (its own internal guards handle a null context safely).
-  maybeApplyCaseFacility();
+  maybeApplyCaseFacility(deferSelectionWrites);
   const refs = context?.referenceNumbers ?? [];
   const note = context?.latestNote ?? null;
   const touch = context?.latestTouch ?? null;
@@ -1436,6 +1453,29 @@ function clearFillResults(): void {
   lastFill = null;
 }
 
+function currentHandoffSelectionIsApplied(
+  record: ActiveCaseRecord | null = activeCase,
+): boolean {
+  return matchesAppliedHandoffSelection(
+    record,
+    activeCaseStatus,
+    appliedHandoffSelection,
+    {
+      providerId: selectedProviderId(),
+      caseId: selectedCaseId(),
+      facilityId: selectedFacilityId(),
+    },
+  );
+}
+
+/** A pending, rejected, expired, or picker-drifted handoff cannot expose case
+ * work. Deliberately selecting a case through the normal panel path replaces
+ * the active record with source=panel and restores ordinary manual work. */
+function currentSelectionAllowsCaseWork(): boolean {
+  if (activeCase?.source !== "handoff") return true;
+  return currentHandoffSelectionIsApplied();
+}
+
 // Hard gates, same pattern as the case rule: org resolved, provider selected,
 // facility resolved (loaded and not awaiting a pick), case selected — and the
 // portal form in the active tab. Shared by the Fill button's disabled state and
@@ -1450,6 +1490,9 @@ function isFillReady(): boolean {
     activeCaseStatus === "expired" &&
     activeCase != null &&
     activeCase.caseId === selectedCaseId();
+  const unappliedHandoffBlocked =
+    activeCase?.source === "handoff" &&
+    !currentHandoffSelectionIsApplied();
   return Boolean(
     portalOpen &&
     orgResolved() &&
@@ -1457,6 +1500,7 @@ function isFillReady(): boolean {
     facilitiesLoaded &&
     !facilityBlocked &&
     !expiredBlocked &&
+    !unappliedHandoffBlocked &&
     selectedCaseId(),
   );
 }
@@ -1472,9 +1516,12 @@ function updateFillReady(): void {
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
   fillBtn.disabled = !isFillReady();
-  // Show structured-touch form whenever a case is
-  // selected — logging is manual and independent of a fill having run.
-  touchSection.hidden = selectedCaseId() == null;
+  // A manual case can log independently of Fill. A handoff case first needs
+  // the same receipt-pinned applied tuple enforced by the worker.
+  touchSection.hidden = selectedCaseId() == null || !currentSelectionAllowsCaseWork();
+  // Provenance is selection-sensitive too. Any provider/case/facility drift
+  // must remove the applied banner and return link in the same UI turn.
+  renderHandoffBanner();
   // Every gate-state change routes through here, so this is the one place the
   // pre-fill coverage sensor re-evaluates itself.
   refreshCoverage();
@@ -1800,10 +1847,17 @@ function renderFillSummary(
   if (submitted) submitStatus.textContent = "Logged to the case.";
 }
 
+interface LoadCasesOptions {
+  preferredCaseId?: string;
+  deferContext?: boolean;
+  deferReport?: boolean;
+}
+
 async function loadCases(
   providerId: string,
   generation: number,
-): Promise<void> {
+  options: LoadCasesOptions = {},
+): Promise<HandoffRead<readonly string[]>> {
   clearFillResults();
   // Drop the previous provider's rows NOW — the active-cases list must never
   // show provider A's cases under provider B while the fetch is in flight.
@@ -1818,34 +1872,41 @@ async function loadCases(
 
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
   // A newer provider/org selection superseded this load — discard silently.
-  if (!isCurrent(generation)) return;
+  if (!isCurrent(generation)) return { status: "stale" };
   if (!response.ok) {
     setError(mainError, response.error);
     caseSelect.replaceChildren(new Option("Unavailable", ""));
     cases = [];
     renderCaseStatusPill();
     updateFillReady();
-    return;
+    return { status: "error", message: response.error };
   }
 
   cases = response.data;
-  const remembered = await sendToBackground({
-    type: "GET_SELECTED_CASE",
-    providerId,
-  });
-  if (!isCurrent(generation)) return;
-  const rememberedId =
-    remembered.ok && cases.some((c) => c.id === remembered.data)
-      ? remembered.data
+  let rememberedId: string | null;
+  if (options.preferredCaseId != null) {
+    rememberedId = cases.some((c) => c.id === options.preferredCaseId)
+      ? options.preferredCaseId
       : null;
-  // A remembered case that no longer exists (closed, or another org's) is
-  // dropped silently — from storage too, not just the dropdown.
-  if (remembered.ok && remembered.data != null && rememberedId == null) {
-    void sendToBackground({
-      type: "SET_SELECTED_CASE",
+  } else {
+    const remembered = await sendToBackground({
+      type: "GET_SELECTED_CASE",
       providerId,
-      caseId: null,
     });
+    if (!isCurrent(generation)) return { status: "stale" };
+    rememberedId =
+      remembered.ok && cases.some((c) => c.id === remembered.data)
+        ? remembered.data
+        : null;
+    // A remembered case that no longer exists (closed, or another org's) is
+    // dropped silently — from storage too, not just the dropdown.
+    if (remembered.ok && remembered.data != null && rememberedId == null) {
+      void sendToBackground({
+        type: "SET_SELECTED_CASE",
+        providerId,
+        caseId: null,
+      });
+    }
   }
   caseSelect.replaceChildren();
   const placeholder = new Option(
@@ -1868,9 +1929,12 @@ async function loadCases(
   renderActiveCases();
   // Load context for the restored case (or hide when none was restored). Runs
   // under this generation; a superseding switch discards its response.
-  refreshCaseContext();
-  await restoreFillReport(providerId, rememberedId, generation);
+  if (!options.deferContext) refreshCaseContext();
+  if (!options.deferReport) {
+    await restoreFillReport(providerId, rememberedId, generation);
+  }
   updateFillReady();
+  return { status: "ok", data: cases.map((c) => c.id) };
 }
 
 // Re-render the provider's persisted fill report when the panel reopens —
@@ -2039,8 +2103,13 @@ function rescopeFacilitySelectOptions(): void {
 async function loadFacilities(
   providerId: string,
   generation: number,
-  known: { facilityId?: string | null; state?: string } = {},
-): Promise<void> {
+  known: {
+    facilityId?: string | null;
+    state?: string;
+    strictFacility?: boolean;
+    deferSelectionWrites?: boolean;
+  } = {},
+): Promise<HandoffRead<readonly string[]>> {
   facilities = [];
   facilitiesLoaded = false;
   needsFacility = false;
@@ -2055,7 +2124,7 @@ async function loadFacilities(
       type: "GET_SELECTED_FACILITY",
       providerId,
     });
-    if (!isCurrent(generation)) return;
+    if (!isCurrent(generation)) return { status: "stale" };
     if (remembered.ok && remembered.data != null) {
       speculativeFacilityId = remembered.data;
     }
@@ -2068,21 +2137,32 @@ async function loadFacilities(
     ...(known.state ? { state: known.state } : {}),
   });
   // A newer provider/org selection superseded this load — discard silently.
-  if (!isCurrent(generation)) return;
-  if (!response.ok && speculativeFacilityId != null && response.code === 404) {
+  if (!isCurrent(generation)) return { status: "stale" };
+  if (
+    !response.ok &&
+    speculativeFacilityId != null &&
+    response.code === 404 &&
+    known.strictFacility !== true
+  ) {
     speculativeFacilityId = null;
     response = await sendToBackground({
       type: "GET_PROVIDER_FACILITIES",
       providerId,
       ...(known.state ? { state: known.state } : {}),
     });
-    if (!isCurrent(generation)) return;
+    if (!isCurrent(generation)) return { status: "stale" };
   }
   if (!response.ok) {
     facilitySelect.replaceChildren(new Option("Unavailable", ""));
     setError(mainError, response.error);
     updateFillReady(); // facilitiesLoaded stays false — gate stays closed
-    return;
+    return {
+      status: "error",
+      message: response.error,
+      ...(known.strictFacility === true && response.code === 404
+        ? { code: "not-found" as const }
+        : {}),
+    };
   }
   facilities = response.data.facilities;
   needsFacility = response.data.needsFacility;
@@ -2097,7 +2177,7 @@ async function loadFacilities(
     // reason, which is correct — not a fill blocker.
     facilitySelect.replaceChildren(new Option("No locations on file", ""));
     updateFillReady();
-    return;
+    return { status: "ok", data: [] };
   }
 
   // The server accepted the speculative id above (response.ok), so if it's
@@ -2118,7 +2198,7 @@ async function loadFacilities(
     renderFacilityAddress();
     renderIdentityGuard();
     updateFillReady();
-    return;
+    return { status: "ok", data: facilities.map((facility) => facility.id) };
   }
 
   let rememberedId = resolvedSpeculativeId;
@@ -2127,12 +2207,17 @@ async function loadFacilities(
       type: "GET_SELECTED_FACILITY",
       providerId,
     });
-    if (!isCurrent(generation)) return;
+    if (!isCurrent(generation)) return { status: "stale" };
     rememberedId =
       remembered.ok && facilities.some((f) => f.id === remembered.data)
         ? remembered.data
         : null;
-    if (remembered.ok && remembered.data != null && rememberedId == null) {
+    if (
+      known.deferSelectionWrites !== true &&
+      remembered.ok &&
+      remembered.data != null &&
+      rememberedId == null
+    ) {
       void sendToBackground({
         type: "SET_SELECTED_FACILITY",
         providerId,
@@ -2168,7 +2253,7 @@ async function loadFacilities(
   renderFacilityAddress();
   // Case facility from context resolves the
   // pick when the user hasn't chosen one — the case selected it, not a guess.
-  maybeApplyCaseFacility();
+  maybeApplyCaseFacility(known.deferSelectionWrites === true);
   renderIdentityGuard();
   updateFillReady();
   // Multi-facility: a selection that ISN'T the id this read already resolved
@@ -2184,6 +2269,7 @@ async function loadFacilities(
   ) {
     await refreshFacilityCards(providerId, selectedId, generation);
   }
+  return { status: "ok", data: facilities.map((facility) => facility.id) };
 }
 
 async function loadProviders(generation: number): Promise<void> {
@@ -2600,7 +2686,8 @@ signoutBtn.addEventListener("click", () => {
     // cards, context, search results, banners, the touch draft.
     activeCase = null;
     activeCaseStatus = "none";
-    appliedHandoffKey = null;
+    appliedHandoffSelection = null;
+    applyingHandoffKey = null;
     handoffNotice = null;
     renderHandoffBanner();
     renderQuickCards(null);
@@ -2657,7 +2744,7 @@ providerBarSwitch.addEventListener("click", () => {
 facilitySelect.addEventListener("change", () => {
   const providerId = selectedProviderId();
   const facilityId = selectedFacilityId();
-  if (providerId) {
+  if (providerId && applyingHandoffKey == null) {
     void sendToBackground({
       type: "SET_SELECTED_FACILITY",
       providerId,
@@ -3092,6 +3179,122 @@ async function selectCaseInPanel(
   if (recordEntry && isCurrent(generation)) await refreshActiveCase(false);
 }
 
+interface HandoffSelectionEvidence {
+  status: "loaded";
+  generation: number;
+  providers: HandoffRead<readonly string[]>;
+  cases: HandoffRead<readonly string[]>;
+  context: HandoffRead<HandoffContextFacts>;
+  facilities: HandoffRead<readonly string[]>;
+  contextData: CaseContext | null;
+  selectedProviderId: string | null;
+  selectedCaseId: string | null;
+  selectedFacilityId: string | null;
+}
+
+type HandoffSelectionLoad = HandoffSelectionEvidence | { status: "stale" };
+
+/** Load a received handoff without persisting any provider/case/facility pick.
+ * The caller applies the pure authenticated gate first, then commits the three
+ * selection keys. This prevents a failed or stale handoff from replacing an
+ * unrelated valid remembered selection. */
+async function loadHandoffSelection(
+  record: ActiveCaseRecord,
+): Promise<HandoffSelectionLoad> {
+  clearSandboxOnRealSelection();
+  const generation = bumpGeneration();
+  preferCaseFacility = record.facilityId == null;
+
+  let providerRead: HandoffRead<readonly string[]>;
+  const providerResponse = await sendToBackground({ type: "LIST_PROVIDERS" });
+  if (!isCurrent(generation)) return { status: "stale" };
+  if (!providerResponse.ok) {
+    providerRead = { status: "error", message: providerResponse.error };
+  } else {
+    providers = browseableProviders(providerResponse.data);
+    providerRead = {
+      status: "ok",
+      data: providers.map((provider) => provider.id),
+    };
+  }
+
+  if (
+    providerRead.status !== "ok" ||
+    !providerRead.data.includes(record.providerId)
+  ) {
+    const blocked: HandoffRead<readonly string[]> = {
+      status: "error",
+      message: "Provider unavailable",
+    };
+    return {
+      status: "loaded",
+      generation,
+      providers: providerRead,
+      cases: blocked,
+      context: { status: "error", message: "Provider unavailable" },
+      facilities: blocked,
+      contextData: null,
+      selectedProviderId: selectedProviderId(),
+      selectedCaseId: selectedCaseId(),
+      selectedFacilityId: selectedFacilityId(),
+    };
+  }
+
+  setSelectedProviderId(record.providerId);
+  renderProviderCard(
+    providers.find((provider) => provider.id === record.providerId) ?? null,
+  );
+  const [caseRead, facilityRead, contextResponse] = await Promise.all([
+    loadCases(record.providerId, generation, {
+      preferredCaseId: record.caseId,
+      deferContext: true,
+      deferReport: true,
+    }),
+    loadFacilities(record.providerId, generation, {
+      facilityId: record.facilityId,
+      strictFacility: record.facilityId != null,
+      deferSelectionWrites: true,
+    }),
+    sendToBackground({ type: "GET_CASE_CONTEXT", caseId: record.caseId }),
+  ]);
+  if (!isCurrent(generation)) return { status: "stale" };
+
+  let contextData: CaseContext | null = null;
+  let contextRead: HandoffRead<HandoffContextFacts>;
+  if (!contextResponse.ok) {
+    contextRead = {
+      status: "error",
+      message: contextResponse.error,
+      ...(contextResponse.code === 404 ? { code: "not-found" as const } : {}),
+    };
+  } else {
+    contextData = contextResponse.data;
+    contextRead = {
+      status: "ok",
+      data: {
+        providerId: contextData.provider?.id ?? null,
+        selectedFacilityId: contextData.selectedFacility?.id ?? null,
+        ...(contextData.facilities != null
+          ? { facilityIds: contextData.facilities.map((facility) => facility.id) }
+          : {}),
+      },
+    };
+  }
+
+  return {
+    status: "loaded",
+    generation,
+    providers: providerRead,
+    cases: caseRead,
+    context: contextRead,
+    facilities: facilityRead,
+    contextData,
+    selectedProviderId: selectedProviderId(),
+    selectedCaseId: selectedCaseId(),
+    selectedFacilityId: selectedFacilityId(),
+  };
+}
+
 /**
  * Open Work cases mode before loading a search selection so the destination
  * is on screen during the async load. setPanelMode between two org-scoped
@@ -3246,7 +3449,7 @@ searchInput.addEventListener("input", () => {
 let handoffNotice: string | null = null;
 
 function handoffKey(record: ActiveCaseRecord): string {
-  return `${record.caseId}:${record.createdAt}`;
+  return activeCaseReceiptKey(record);
 }
 
 function bannerButton(label: string, onClick: () => void): HTMLButtonElement {
@@ -3291,10 +3494,15 @@ function renderHandoffBanner(): void {
       text,
       bannerButton("Dismiss", () => {
         void (async () => {
-          await sendToBackground({ type: "CLEAR_ACTIVE_CASE" });
-          activeCase = null;
-          activeCaseStatus = "none";
-          renderHandoffBanner();
+          await sendToBackground(
+            record.source === "handoff"
+              ? {
+                  type: "CLEAR_ACTIVE_CASE_IF_CURRENT",
+                  receiptKey: handoffKey(record),
+                }
+              : { type: "CLEAR_ACTIVE_CASE" },
+          );
+          await refreshActiveCase();
         })();
       }),
     );
@@ -3324,40 +3532,53 @@ function renderHandoffBanner(): void {
   }
 
   // Applied handoff: a quiet provenance line while the context is live.
-  if (appliedHandoffKey === handoffKey(record)) {
+  if (currentHandoffSelectionIsApplied(record)) {
     handoffBanner.hidden = false;
     const text = document.createElement("span");
     text.textContent = "Working from a Minted Panel handoff.";
-    handoffBanner.append(text);
+    const returnLink = document.createElement("a");
+    returnLink.className = "link banner-action";
+    returnLink.href = caseReturnUrl(API_BASE_URL, record.caseId);
+    returnLink.target = "_blank";
+    returnLink.rel = "noreferrer";
+    returnLink.textContent = "Return to case ↗";
+    handoffBanner.append(text, returnLink);
   }
 }
 
-// The org-switch path for a cross-org handoff. The switch itself wipes the
-// worker's org-scoped state (including the handoff record), so the
-// context is captured FIRST and re-entered as a fresh active-case record
-// after the switch.
+// The org-switch path for a cross-org handoff. SET_ACTIVE_ORG clears prior
+// org selections while preserving this exact pending handoff record.
 async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   const target = record.orgId;
   if (target == null) return;
-  appliedHandoffKey = handoffKey(record);
   const generation = bumpGeneration();
+  const response = await sendToBackground({
+    type: "SET_ACTIVE_ORG_FOR_HANDOFF",
+    orgId: target,
+    receiptKey: handoffKey(record),
+  });
+  if (!isCurrent(generation)) return;
+  if (!response.ok) {
+    handoffNotice = response.error;
+    renderHandoffBanner();
+    return;
+  }
+  if (!response.data) {
+    await refreshActiveCase();
+    return;
+  }
   activeOrgId = target;
   renderOrgContext();
   orgSelect.value = target;
-  await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: target });
-  if (!isCurrent(generation)) return;
   clearFillResults();
   hideSearchResults();
   orgReady = true;
   renderModeSurfaces();
   renderIdentityGuard();
-  await selectCaseInPanel(
-    record.providerId,
-    record.caseId,
-    true,
-    record.facilityId,
-  );
-  renderHandoffBanner();
+  // The receipt-bound org switch preserves this matching handoff record. Re-read
+  // it, then run the same authenticated application gate as a same-org launch.
+  await refreshActiveCase();
+  void loadPortalRegistry(loadGeneration);
 }
 
 // Apply handoff: validate org first — a
@@ -3366,44 +3587,169 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
 // a SECOND launch (new createdAt) applies again — last launch wins.
 async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   const key = handoffKey(record);
-  if (appliedHandoffKey === key) return;
+  if (currentHandoffSelectionIsApplied(record)) return;
+  if (applyingHandoffKey === key) return;
   if (orgs.length === 0) return; // orgs not loaded yet — the next refresh applies
 
-  if (record.orgId != null) {
-    const member = orgs.some((o) => o.orgId === record.orgId);
-    if (!member) {
-      // Not this account's org: discard, say so explicitly.
-      appliedHandoffKey = key;
-      await sendToBackground({ type: "CLEAR_ACTIVE_CASE" });
-      activeCase = null;
-      activeCaseStatus = "none";
-      handoffNotice =
-        "A case was handed off for an organization this account isn't a member of, so it was discarded. Sign in with the right account, or use search below.";
+  const resolvedOrg =
+    orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
+  const orgDecision = evaluateHandoffOrg(
+    record,
+    orgs.map((org) => org.orgId),
+    resolvedOrg,
+  );
+  if (orgDecision.status === "rejected") {
+    // Not this account's org: discard, say so explicitly. Receipt was real;
+    // authenticated application was refused.
+    const cleared = await sendToBackground({
+      type: "CLEAR_ACTIVE_CASE_IF_CURRENT",
+      receiptKey: key,
+    });
+    if (!cleared.ok) {
+      handoffNotice = cleared.error;
       renderHandoffBanner();
+      updateFillReady();
       return;
     }
-    const resolvedOrg =
-      orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
-    if (resolvedOrg !== record.orgId) {
-      // Member, but the panel is operating as a different org (or none yet):
-      // the banner prompts the explicit switch. Nothing is applied.
-      renderHandoffBanner();
+    if (!cleared.data) {
+      await refreshActiveCase();
       return;
     }
+    activeCase = null;
+    activeCaseStatus = "none";
+    handoffNotice =
+      "A case was handed off for an organization this account isn't a member of, so it was discarded. Sign in with the right account, or use search below.";
+    renderHandoffBanner();
+    updateFillReady();
+    return;
+  }
+  if (orgDecision.status === "needs-org-switch") {
+    // Member, but the panel is operating as a different org (or none yet):
+    // the banner prompts the explicit switch. Nothing is applied.
+    renderHandoffBanner();
+    updateFillReady();
+    return;
   }
 
-  appliedHandoffKey = key;
-  // Pass handoff facilityId through to facility load
-  // (switchOrgForHandoff, just above, already threads it) — a launch from the
-  // webapp that named a location still had to wait for the case-context
-  // refresh to discover it. No state: not part of the locked handoff payload.
-  await selectCaseInPanel(
-    record.providerId,
-    record.caseId,
-    false,
-    record.facilityId,
-  );
+  applyingHandoffKey = key;
+  handoffNotice = null;
+  updateFillReady();
+  const selection = await loadHandoffSelection(record);
+  if (selection.status === "stale" || applyingHandoffKey !== key) {
+    if (applyingHandoffKey === key) applyingHandoffKey = null;
+    updateFillReady();
+    return;
+  }
+
+  const currentResponse = await sendToBackground({ type: "GET_ACTIVE_CASE" });
+  if (!isCurrent(selection.generation) || applyingHandoffKey !== key) {
+    if (applyingHandoffKey === key) applyingHandoffKey = null;
+    updateFillReady();
+    return;
+  }
+  const currentReceipt =
+    currentResponse.ok && currentResponse.data.status === "active"
+      ? currentResponse.data.record
+      : null;
+  let decision = evaluateHandoffApplication({
+    receipt: record,
+    currentReceipt,
+    memberOrgIds: orgs.map((org) => org.orgId),
+    resolvedOrgId: resolvedOrg,
+    providers: selection.providers,
+    cases: selection.cases,
+    context: selection.context,
+    facilities: selection.facilities,
+    selectedProviderId: selection.selectedProviderId,
+    selectedCaseId: selection.selectedCaseId,
+    selectedFacilityId: selection.selectedFacilityId,
+  });
+  if (decision.status === "rejected") {
+    applyingHandoffKey = null;
+    handoffNotice = decision.message;
+    renderHandoffBanner();
+    updateFillReady();
+    return;
+  }
+
+  // Render only verified case context. For an explicit facility, retain the
+  // exact selected secondary (if any); case selectedFacility is the primary
+  // compatibility field and must not silently replace it.
+  if (selection.contextData != null) {
+    caseContextCaseId = record.caseId;
+    if (record.facilityId != null) preferCaseFacility = false;
+    renderCaseContext(selection.contextData, true);
+  }
+
+  const committedSelection: AppliedHandoffSelection = {
+    receiptKey: key,
+    providerId: record.providerId,
+    caseId: record.caseId,
+    facilityId: selectedFacilityId(),
+  };
+  const selectionCommit = await sendToBackground({
+    type: "COMMIT_HANDOFF_SELECTION",
+    ...committedSelection,
+  });
+  if (!isCurrent(selection.generation) || applyingHandoffKey !== key) {
+    if (applyingHandoffKey === key) applyingHandoffKey = null;
+    updateFillReady();
+    return;
+  }
+  if (!selectionCommit.ok) {
+    applyingHandoffKey = null;
+    handoffNotice = selectionCommit.error;
+    renderHandoffBanner();
+    updateFillReady();
+    return;
+  }
+  if (!selectionCommit.data) {
+    applyingHandoffKey = null;
+    await refreshActiveCase();
+    return;
+  }
+
+  // Re-read after persistence: logout/org/account change or a newer handoff
+  // during the loaders/writes cannot be revived by this completion.
+  const finalResponse = await sendToBackground({ type: "GET_ACTIVE_CASE" });
+  if (!isCurrent(selection.generation) || applyingHandoffKey !== key) {
+    if (applyingHandoffKey === key) applyingHandoffKey = null;
+    updateFillReady();
+    return;
+  }
+  const finalReceipt =
+    finalResponse.ok && finalResponse.data.status === "active"
+      ? finalResponse.data.record
+      : null;
+  decision = evaluateHandoffApplication({
+    receipt: record,
+    currentReceipt: finalReceipt,
+    memberOrgIds: orgs.map((org) => org.orgId),
+    resolvedOrgId: resolvedOrg,
+    providers: selection.providers,
+    cases: selection.cases,
+    context: selection.context,
+    facilities: selection.facilities,
+    selectedProviderId: selectedProviderId(),
+    selectedCaseId: selectedCaseId(),
+    selectedFacilityId: selectedFacilityId(),
+  });
+  if (decision.status === "rejected") {
+    applyingHandoffKey = null;
+    handoffNotice = decision.message;
+    renderHandoffBanner();
+    updateFillReady();
+    return;
+  }
+
+  activeCase = finalReceipt;
+  activeCaseStatus = "active";
+  appliedHandoffSelection = committedSelection;
+  applyingHandoffKey = null;
+  handoffNotice = null;
+  await restoreFillReport(record.providerId, record.caseId, selection.generation);
   renderHandoffBanner();
+  updateFillReady();
 }
 
 // Re-read the worker's active-case state. Runs when the panel opens, when the

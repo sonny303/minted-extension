@@ -59,16 +59,20 @@ import {
 } from "./frameMessaging";
 import { buildSubmissionTouchBody } from "../shared/submission";
 import {
-  ACTIVE_CASE_KEY,
+  APPLIED_HANDOFF_KEY,
+  assertCaseWriteMatchesActiveCase,
+  assertFillMatchesActiveCase,
   bindFillTab,
   clearActiveCase,
+  clearActiveCaseIfCurrent,
+  clearActiveCaseForOrgChange,
+  commitForCurrentHandoff,
   enterActiveCase,
   getActiveCaseState,
-  readActiveCaseRecord,
+  mutateCurrentHandoff,
   registerActiveCaseListeners,
   touchActiveCaseActivity,
 } from "./activeCase";
-import { resolveActiveCaseState } from "../shared/handoff";
 import {
   applyRowEdit,
   identifyCapturePage,
@@ -129,18 +133,24 @@ async function writeSessionString(
 // reports, submit idempotency ids, and the active-case context (a handoff for
 // org A must never survive into org B — TE-3's cleared-on-org-change rule).
 // Runs when the active org changes and as part of the full clear below.
-async function clearOrgScopedState(): Promise<void> {
+async function clearOrgSelections(): Promise<void> {
   const all = await chrome.storage.session.get(null);
   const keys = Object.keys(all).filter(
     (key) =>
       key === SELECTED_PROVIDER_KEY ||
-      key === ACTIVE_CASE_KEY ||
       key.startsWith(SELECTED_CASE_PREFIX) ||
       key.startsWith(SELECTED_FACILITY_PREFIX) ||
       key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
       key.startsWith(FILL_REPORT_PREFIX),
   );
   if (keys.length) await chrome.storage.session.remove(keys);
+}
+
+async function clearOrgScopedState(
+  preserveHandoffOrgId: string | null = null,
+): Promise<void> {
+  await clearActiveCaseForOrgChange(preserveHandoffOrgId);
+  await clearOrgSelections();
 }
 
 // The full wipe: org-scoped state PLUS the active org and the owner marker.
@@ -295,10 +305,17 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // or fill reports. Re-asserting the same org (or staying in single-org
       // mode, null -> null) clears nothing.
       const previous = await readActiveOrgId();
-      if (previous !== request.orgId) await clearOrgScopedState();
+      if (previous !== request.orgId) await clearOrgScopedState(request.orgId);
       await writeActiveOrgId(request.orgId);
       return null;
     }
+    case "SET_ACTIVE_ORG_FOR_HANDOFF":
+      return mutateCurrentHandoff(request.receiptKey, async (record) => {
+        if (record.orgId !== request.orgId) return false;
+        await clearOrgSelections();
+        await writeActiveOrgId(request.orgId);
+        return true;
+      });
     case "LIST_PORTALS":
       return listPortals();
     case "LIST_PROVIDERS":
@@ -364,6 +381,32 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "CLEAR_ACTIVE_CASE":
       await clearActiveCase();
       return null;
+    case "CLEAR_ACTIVE_CASE_IF_CURRENT":
+      return clearActiveCaseIfCurrent(request.receiptKey);
+    case "COMMIT_HANDOFF_SELECTION":
+      return commitForCurrentHandoff(
+        request.receiptKey,
+        {
+          providerId: request.providerId,
+          caseId: request.caseId,
+          facilityId: request.facilityId,
+        },
+        async () => {
+          // One storage operation keeps the three selection identities aligned.
+          // A null facility reads back as no selection, matching removal semantics.
+          await chrome.storage.session.set({
+            [SELECTED_PROVIDER_KEY]: request.providerId,
+            [SELECTED_CASE_PREFIX + request.providerId]: request.caseId,
+            [SELECTED_FACILITY_PREFIX + request.providerId]: request.facilityId,
+            [APPLIED_HANDOFF_KEY]: {
+              receiptKey: request.receiptKey,
+              providerId: request.providerId,
+              caseId: request.caseId,
+              facilityId: request.facilityId,
+            },
+          });
+        },
+      );
     case "COMPLETE_TASK_STEP": {
       const result = await completeTaskStep(request.taskId, request.stepId);
       return { allDone: result.allDone };
@@ -700,6 +743,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // network failure replays instead of double-logging.
       const validation = validateStructuredTouch(request.draft);
       if (!validation.ok) throw new Error(validation.message);
+      await assertCaseWriteMatchesActiveCase(request.caseId);
       const { touch } = await postSubmissionTouch(
         request.caseId,
         buildStructuredTouchBody(request.draft, request.idempotencyId),
@@ -784,20 +828,13 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "GET_FILL_REPORT":
       return readFillReport(request.providerId);
     case "FILL": {
-      // F4.3.1: NEVER fill from expired context. When the active-case record
-      // covers this case and has expired (bound tab closed / 60 minutes
-      // idle), the fill is refused with the re-launch guidance — the panel
-      // also gates this, but the worker is the enforcement point.
-      const record = await readActiveCaseRecord();
-      if (
-        record != null &&
-        record.caseId === request.caseId &&
-        resolveActiveCaseState(record, Date.now()).status === "expired"
-      ) {
-        throw new Error(
-          "This case's context expired - re-launch it from Minted Panel or re-select the case, then fill again.",
-        );
-      }
+      // The worker is the final authority: an expired context cannot fill,
+      // and a handoff must match the exact receipt-pinned applied selection.
+      await assertFillMatchesActiveCase({
+        providerId: request.providerId,
+        caseId: request.caseId,
+        facilityId: request.facilityId,
+      });
       // Inject content.js when it isn't already there (any dynamically-registered portal)
       // before fillPortal's pre-flight PING, so fill reaches any DB-registered
       // portal, not just the statically-matched one.

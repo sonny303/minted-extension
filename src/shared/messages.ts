@@ -41,6 +41,11 @@ export type BgRequest =
   // (provider, case, facility, reports, active-case context) in the worker
   // before the new id is stored. null = single-org mode, no x-org-id header.
   | { type: "SET_ACTIVE_ORG"; orgId: string | null }
+  | {
+      type: "SET_ACTIVE_ORG_FOR_HANDOFF";
+      orgId: string;
+      receiptKey: string;
+    }
   // E6.9 F6.9.7: which job the panel is doing. The worker owns it because the
   // mode decides whether a request carries x-org-id at all (training writes
   // the shared library and is org-free), so a mode switch must never race a
@@ -188,6 +193,16 @@ export type BgRequest =
       orgId: string | null;
     }
   | { type: "CLEAR_ACTIVE_CASE" }
+  | { type: "CLEAR_ACTIVE_CASE_IF_CURRENT"; receiptKey: string }
+  // Internal panel-to-worker commit. receiptKey is extension-generated and is
+  // never added to the web SET_ACTIVE_CASE wire contract.
+  | {
+      type: "COMMIT_HANDOFF_SELECTION";
+      receiptKey: string;
+      providerId: string;
+      caseId: string;
+      facilityId: string | null;
+    }
   // E4.3 F4.3.4/TE-6: the server-derived queue top (or null = queue clear).
   | { type: "GET_NEXT_BEST_ACTION"; limit?: number }
   // S6.2 — record a CAQH attestation and stamp the fields the fill carried.
@@ -323,6 +338,7 @@ export interface BgResponseMap {
   LIST_MY_ORGS: UserOrgMembership[];
   GET_ACTIVE_ORG: string | null;
   SET_ACTIVE_ORG: null;
+  SET_ACTIVE_ORG_FOR_HANDOFF: boolean;
   GET_PANEL_MODE: PanelMode;
   SET_PANEL_MODE: null;
   LIST_PROVIDERS: ProviderListItem[];
@@ -359,6 +375,8 @@ export interface BgResponseMap {
   GET_ACTIVE_CASE: ActiveCaseState;
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;
+  CLEAR_ACTIVE_CASE_IF_CURRENT: boolean;
+  COMMIT_HANDOFF_SELECTION: boolean;
   GET_NEXT_BEST_ACTION: NextBestActionResult;
   RECORD_CAQH_ATTESTATION: {
     caqhLastAttestedDate: string | null;

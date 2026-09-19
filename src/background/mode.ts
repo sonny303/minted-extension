@@ -11,7 +11,7 @@
 // never silently persists into someone else's case work on a shared machine.
 import { DEFAULT_PANEL_MODE, parsePanelMode, type PanelMode } from "../shared/panelMode";
 
-const PANEL_MODE_KEY = "minted.panelMode";
+export const PANEL_MODE_KEY = "minted.panelMode";
 
 export async function readPanelMode(): Promise<PanelMode> {
   const entry = await chrome.storage.session.get(PANEL_MODE_KEY);
