@@ -280,6 +280,35 @@ describe("P06 receiver ordering", () => {
     await expect(assertCaseWriteMatchesActiveCase(CASE_B)).resolves.toBeUndefined();
   });
 
+  it("blocks portal submission logging until the current handoff selection is applied", async () => {
+    const { handleRequest } = await import("./index");
+    await handleExternalMessage(message(CASE_A), APP_ORIGIN);
+    const pending = await readActiveCaseRecord();
+    if (pending == null) throw new Error("expected pending receipt");
+
+    await expect(
+      handleRequest({
+        type: "MARK_SUBMITTED",
+        providerId: pending.providerId,
+        caseId: CASE_A,
+        portalKey: pending.portalKey ?? "regional_enrollment",
+        fillSessionId: "0f0e73c2-51f1-4be9-9f2e-0a4c7f2fbb01",
+        bumpStatus: false,
+      }),
+    ).rejects.toThrow(/active handoff is not applied/i);
+
+    await handleRequest({
+      type: "COMMIT_HANDOFF_SELECTION",
+      receiptKey: activeCaseReceiptKey(pending),
+      providerId: pending.providerId,
+      caseId: pending.caseId,
+      facilityId: pending.facilityId,
+    });
+    // After apply the write gate opens; the route may still fail later on the
+    // network mock — the assertion under test is only the pre-write handoff check.
+    await expect(assertCaseWriteMatchesActiveCase(CASE_A)).resolves.toBeUndefined();
+  });
+
   it("commits all selection identities only for the current receipt", async () => {
     await handleExternalMessage(message(CASE_A), APP_ORIGIN);
     const receiptA = await readActiveCaseRecord();

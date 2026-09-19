@@ -70,6 +70,28 @@ export type HandoffApplicationDecision =
       message: string;
     };
 
+/** Permanent application failures must not re-run on the 30s active-case poll.
+ * Transient reasons (reads, races, org switch) may recover on a later pass. */
+export function isTerminalHandoffRejection(
+  reason: HandoffApplicationRejectionReason,
+): boolean {
+  switch (reason) {
+    case "nonmember-org":
+    case "provider-unavailable":
+    case "case-unavailable":
+    case "provider-mismatch":
+    case "facility-unavailable":
+    case "facility-not-on-case":
+      return true;
+    case "stale-receipt":
+    case "wrong-org":
+    case "required-read-failed":
+    case "selection-mismatch":
+    case "facility-selection-mismatch":
+      return false;
+  }
+}
+
 export function evaluateHandoffOrg(
   receipt: ActiveCaseRecord,
   memberOrgIds: readonly string[],

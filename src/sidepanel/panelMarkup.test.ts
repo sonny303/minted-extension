@@ -198,6 +198,31 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(facilitiesLoad).toContain("known.deferSelectionWrites !== true");
   });
 
+  it("does not rescope facilities against prior case context during deferred handoff loads", () => {
+    const facilitiesLoad = codeOf(
+      MAIN.slice(
+        MAIN.indexOf("async function loadFacilities("),
+        MAIN.indexOf("async function loadProviders("),
+      ),
+    );
+    // A prior case's sole location must not clobber the receipt facility while
+    // loadCases is still clearing that stale context on another Promise.all arm.
+    expect(facilitiesLoad).toMatch(
+      /if\s*\(\s*known\.deferSelectionWrites\s*!==\s*true\s*\)\s*\{[^}]*rescopeFacilitySelectOptions\(\)/s,
+    );
+  });
+
+  it("latches terminal handoff application failures so the poll cannot re-read", () => {
+    const apply = codeOf(
+      MAIN.slice(
+        MAIN.indexOf("async function maybeApplyHandoff("),
+        MAIN.indexOf("async function refreshActiveCase("),
+      ),
+    );
+    expect(apply).toContain("isTerminalHandoffRejection");
+    expect(apply).toContain("rejectedHandoffKey");
+  });
+
   it("gates provenance, Fill, and touch work on the exact applied selection tuple", () => {
     const readiness = codeOf(
       MAIN.slice(MAIN.indexOf("function currentHandoffSelectionIsApplied("), MAIN.indexOf("function coverageSelectionKey(")),

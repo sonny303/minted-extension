@@ -4,8 +4,10 @@ import {
   caseReturnUrl,
   evaluateHandoffApplication,
   evaluateHandoffOrg,
+  isTerminalHandoffRejection,
   matchesAppliedHandoffSelection,
   type HandoffApplicationInput,
+  type HandoffApplicationRejectionReason,
 } from "./handoffApplication";
 
 const CASE_ID = "b7a90000-0000-4000-a000-0000000000c1";
@@ -262,5 +264,31 @@ describe("same-case return", () => {
     expect(caseReturnUrl("https://staging.mintedpanel.com", CASE_ID)).toBe(
       `https://staging.mintedpanel.com/cases/${CASE_ID}`,
     );
+  });
+});
+
+describe("terminal handoff rejection", () => {
+  it("latches permanent failures and leaves recoverable races/reads open", () => {
+    const terminal: HandoffApplicationRejectionReason[] = [
+      "nonmember-org",
+      "provider-unavailable",
+      "case-unavailable",
+      "provider-mismatch",
+      "facility-unavailable",
+      "facility-not-on-case",
+    ];
+    const transient: HandoffApplicationRejectionReason[] = [
+      "stale-receipt",
+      "wrong-org",
+      "required-read-failed",
+      "selection-mismatch",
+      "facility-selection-mismatch",
+    ];
+    for (const reason of terminal) {
+      expect(isTerminalHandoffRejection(reason)).toBe(true);
+    }
+    for (const reason of transient) {
+      expect(isTerminalHandoffRejection(reason)).toBe(false);
+    }
   });
 });

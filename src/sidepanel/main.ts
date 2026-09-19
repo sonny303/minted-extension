@@ -44,6 +44,7 @@ import {
   caseReturnUrl,
   evaluateHandoffApplication,
   evaluateHandoffOrg,
+  isTerminalHandoffRejection,
   matchesAppliedHandoffSelection,
   type AppliedHandoffSelection,
   type HandoffContextFacts,
@@ -374,6 +375,9 @@ let appliedHandoffSelection: AppliedHandoffSelection | null = null;
 // its partially loaded selection. Only the final pure application gate moves
 // its exact tuple to appliedHandoffSelection.
 let applyingHandoffKey: string | null = null;
+// Terminal authenticated failures for one receipt. Cleared only by a newer
+// receipt key so the 30s poll cannot re-hit audited profile/case reads.
+let rejectedHandoffKey: string | null = null;
 // Structured-touch idempotency id — created when a
 // draft first saves, REUSED on every retry (a retry can never double-log),
 // regenerated only after a success.
@@ -2249,11 +2253,19 @@ async function loadFacilities(
   // picked) before this facilities load completed: rescope down to it before
   // the freshly-built full-provider-set options above get a pick applied
   // over them. A no-op when no case (or a case with no locations) is in play.
-  rescopeFacilitySelectOptions();
-  renderFacilityAddress();
-  // Case facility from context resolves the
-  // pick when the user hasn't chosen one — the case selected it, not a guess.
-  maybeApplyCaseFacility(known.deferSelectionWrites === true);
+  //
+  // Handoff loads defer selection writes and must NOT rescope here: a prior
+  // case's facilities can still be in memory on the parallel Promise.all arm
+  // and a sole-scoped rebuild would clobber the receipt's explicit facility.
+  if (known.deferSelectionWrites !== true) {
+    rescopeFacilitySelectOptions();
+    renderFacilityAddress();
+    // Case facility from context resolves the
+    // pick when the user hasn't chosen one — the case selected it, not a guess.
+    maybeApplyCaseFacility(false);
+  } else {
+    renderFacilityAddress();
+  }
   renderIdentityGuard();
   updateFillReady();
   // Multi-facility: a selection that ISN'T the id this read already resolved
@@ -2688,6 +2700,7 @@ signoutBtn.addEventListener("click", () => {
     activeCaseStatus = "none";
     appliedHandoffSelection = null;
     applyingHandoffKey = null;
+    rejectedHandoffKey = null;
     handoffNotice = null;
     renderHandoffBanner();
     renderQuickCards(null);
@@ -3589,6 +3602,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   const key = handoffKey(record);
   if (currentHandoffSelectionIsApplied(record)) return;
   if (applyingHandoffKey === key) return;
+  if (rejectedHandoffKey === key) return;
   if (orgs.length === 0) return; // orgs not loaded yet — the next refresh applies
 
   const resolvedOrg =
@@ -3617,6 +3631,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
     }
     activeCase = null;
     activeCaseStatus = "none";
+    rejectedHandoffKey = key;
     handoffNotice =
       "A case was handed off for an organization this account isn't a member of, so it was discarded. Sign in with the right account, or use search below.";
     renderHandoffBanner();
@@ -3632,6 +3647,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   }
 
   applyingHandoffKey = key;
+  rejectedHandoffKey = null;
   handoffNotice = null;
   updateFillReady();
   const selection = await loadHandoffSelection(record);
@@ -3666,6 +3682,9 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   });
   if (decision.status === "rejected") {
     applyingHandoffKey = null;
+    if (isTerminalHandoffRejection(decision.reason)) {
+      rejectedHandoffKey = key;
+    }
     handoffNotice = decision.message;
     renderHandoffBanner();
     updateFillReady();
@@ -3736,6 +3755,9 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   });
   if (decision.status === "rejected") {
     applyingHandoffKey = null;
+    if (isTerminalHandoffRejection(decision.reason)) {
+      rejectedHandoffKey = key;
+    }
     handoffNotice = decision.message;
     renderHandoffBanner();
     updateFillReady();
@@ -3746,6 +3768,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   activeCaseStatus = "active";
   appliedHandoffSelection = committedSelection;
   applyingHandoffKey = null;
+  rejectedHandoffKey = null;
   handoffNotice = null;
   await restoreFillReport(record.providerId, record.caseId, selection.generation);
   renderHandoffBanner();

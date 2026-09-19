@@ -875,6 +875,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // browser session: a retry after a network failure replays the same id,
       // so the server returns the stored touch instead of appending a second
       // one. A new fill session gets a fresh id.
+      await assertCaseWriteMatchesActiveCase(request.caseId);
       const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${request.caseId}.${request.fillSessionId ?? "none"}`;
       let idempotencyId = await readSessionString(idKey);
       if (!idempotencyId) {
