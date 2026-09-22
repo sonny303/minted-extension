@@ -82,35 +82,35 @@ describe("explicit environment configuration", () => {
 describe("manifest and asset boundaries", () => {
   it("keeps exact environment-owned origins and separate names", () => {
     for (const target of ["staging", "production"]) {
-      const manifest = releaseManifest(base, target, "0.1.0");
+      const manifest = releaseManifest(base, target, base.version);
       expect(manifest.externally_connectable.matches).toEqual(
         targetFor(target).origins.map((origin) => `${origin}/*`),
       );
       expect(manifest.host_permissions).toContain(`${publicConfig(target).VITE_SUPABASE_URL}/*`);
-      expect(() => validateManifest(manifest, target, "0.1.0")).not.toThrow();
+      expect(() => validateManifest(manifest, target, base.version)).not.toThrow();
       expect(() =>
-        validateManifest(manifest, target === "staging" ? "production" : "staging", "0.1.0"),
+        validateManifest(manifest, target === "staging" ? "production" : "staging", base.version),
       ).toThrow();
     }
-    expect(releaseManifest(base, "staging", "0.1.0").name).toContain("STAGING (Local)");
+    expect(releaseManifest(base, "staging", base.version).name).toContain("STAGING (Local)");
     expect(base.name).toBe("Minted Panel Workbench");
   });
 
   it("rejects broad permissions, foreign senders and version drift", () => {
-    const manifest = releaseManifest(base, "staging", "0.1.0");
+    const manifest = releaseManifest(base, "staging", base.version);
     manifest.externally_connectable.matches.push("https://www.mintedpanel.com/*");
-    expect(() => validateManifest(manifest, "staging", "0.1.0")).toThrow("MANIFEST_TARGET");
-    const permissions = releaseManifest(base, "staging", "0.1.0");
+    expect(() => validateManifest(manifest, "staging", base.version)).toThrow("MANIFEST_TARGET");
+    const permissions = releaseManifest(base, "staging", base.version);
     permissions.permissions.push("cookies");
-    expect(() => validateManifest(permissions, "staging", "0.1.0")).toThrow("MANIFEST_PERMISSIONS");
-    const missingNavigation = releaseManifest(base, "staging", "0.1.0");
+    expect(() => validateManifest(permissions, "staging", base.version)).toThrow("MANIFEST_PERMISSIONS");
+    const missingNavigation = releaseManifest(base, "staging", base.version);
     missingNavigation.permissions = missingNavigation.permissions.filter(
       (permission) => permission !== "webNavigation",
     );
-    expect(() => validateManifest(missingNavigation, "staging", "0.1.0")).toThrow(
+    expect(() => validateManifest(missingNavigation, "staging", base.version)).toThrow(
       "MANIFEST_PERMISSIONS",
     );
-    expect(() => releaseManifest(base, "staging", "0.2.0")).toThrow("PACKAGE_VERSION");
+    expect(() => releaseManifest(base, "staging", "9.9.9")).toThrow("PACKAGE_VERSION");
   });
 
   it("rejects wrong-target URLs and embedded credentials without echoing contents", () => {

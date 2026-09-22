@@ -2,6 +2,7 @@ node_modules/
 dist/
 release-artifacts/
 *.local
+*.zip
 .DS_Store
 
 # Claude Code agent worktree scratch (transient, never commit)

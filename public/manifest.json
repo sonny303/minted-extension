@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Minted Panel Workbench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One-click payer portal form fill from Minted Panel provider data.",
   "action": {
     "default_title": "Minted Panel Workbench",
@@ -28,11 +28,13 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://mintedpanel.vercel.app/*"
+      "https://mintedpanel.vercel.app/*",
+      "https://mintedpanel.com/*"
     ]
   },
   "host_permissions": [
     "https://mintedpanel.vercel.app/*",
+    "https://mintedpanel.com/*",
     "https://fkvuhfsqcmujywzgczmc.supabase.co/*"
   ],
   "optional_host_permissions": [
