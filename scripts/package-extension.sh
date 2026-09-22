@@ -30,12 +30,12 @@ rm -f "$ZIP_PATH"
 )
 
 echo "==> Verifying package contents..."
-if ! unzip -l "$ZIP_PATH" | grep -q " manifest.json$"; then
+if ! unzip -l "$ZIP_PATH" | grep " manifest.json$" > /dev/null; then
   echo "Error: manifest.json is NOT at the root of the archive!"
   exit 1
 fi
 
-if unzip -l "$ZIP_PATH" | grep -q "__MACOSX"; then
+if unzip -l "$ZIP_PATH" | grep "__MACOSX" > /dev/null; then
   echo "Error: Archive contains __MACOSX metadata files!"
   exit 1
 fi
