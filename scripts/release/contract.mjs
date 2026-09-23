@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { URL } from "node:url";
 
 export const TARGETS = Object.freeze({
   staging: Object.freeze({
@@ -67,9 +68,49 @@ export function targetFor(target) {
   return TARGETS[target];
 }
 
-/** Public key classification is structural, not authentication/project verification. */
-export function validatePublicConfiguration(target, config, now = Date.now()) {
+/** A candidate is one exact HTTPS origin. Paths, queries, fragments, ports and
+ * credentials are intentionally excluded so it can be used unchanged for the
+ * API base, host permission and external handoff sender allowlist. */
+export function validateCandidateOrigin(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 253)
+    fail("CANDIDATE_ORIGIN");
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    fail("CANDIDATE_ORIGIN");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== "/" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.port !== "" ||
+    parsed.origin !== value ||
+    parsed.hostname === "" ||
+    TARGETS.staging.origins.includes(parsed.origin) ||
+    TARGETS.production.origins.includes(parsed.origin)
+  )
+    fail("CANDIDATE_ORIGIN");
+  return parsed.origin;
+}
+
+function handoffOrigins(target, candidateOrigin) {
   const expected = targetFor(target);
+  if (candidateOrigin === undefined || candidateOrigin === null) return [...expected.origins];
+  if (target !== "staging") fail("CANDIDATE_TARGET");
+  return [...expected.origins, validateCandidateOrigin(candidateOrigin)];
+}
+
+/** Public key classification is structural, not authentication/project verification. */
+export function validatePublicConfiguration(target, config, now = Date.now(), options = {}) {
+  const expected = targetFor(target);
+  if (options === null || typeof options !== "object" || Array.isArray(options))
+    fail("PUBLIC_CONFIGURATION");
+  const expectedApi = options.apiOrigin ?? expected.api;
+  if (typeof expectedApi !== "string") fail("PUBLIC_CONFIGURATION");
   if (!Number.isSafeInteger(now) || now < 0) fail("INVALID_CLOCK");
   if (
     !exactKeys(config, PUBLIC_FIELDS) ||
@@ -77,7 +118,7 @@ export function validatePublicConfiguration(target, config, now = Date.now()) {
   )
     fail("PUBLIC_CONFIGURATION");
   if (
-    config.VITE_API_BASE_URL !== expected.api ||
+    config.VITE_API_BASE_URL !== expectedApi ||
     config.VITE_SUPABASE_URL !== `https://${expected.ref}.supabase.co`
   )
     fail("CONFIGURATION_TARGET");
@@ -102,24 +143,26 @@ export function validatePublicConfiguration(target, config, now = Date.now()) {
   return { ...config };
 }
 
-export function releaseManifest(base, target, version) {
+export function releaseManifest(base, target, version, options = {}) {
   const expected = targetFor(target);
+  const origins = handoffOrigins(target, options.candidateOrigin);
   if (base.version !== version || !versionParts(version)) fail("PACKAGE_VERSION");
   const manifest = JSON.parse(JSON.stringify(base));
   manifest.name = expected.name;
   manifest.action.default_title = expected.name;
   manifest.host_permissions = [
-    ...expected.origins.map((origin) => `${origin}/*`),
+    ...origins.map((origin) => `${origin}/*`),
     `https://${expected.ref}.supabase.co/*`,
   ];
-  manifest.externally_connectable = { matches: expected.origins.map((origin) => `${origin}/*`) };
+  manifest.externally_connectable = { matches: origins.map((origin) => `${origin}/*`) };
   if (target === "staging") manifest.version_name = `${version} staging local`;
-  validateManifest(manifest, target, version);
+  validateManifest(manifest, target, version, options);
   return manifest;
 }
 
-export function validateManifest(manifest, target, version) {
+export function validateManifest(manifest, target, version, options = {}) {
   const expected = targetFor(target);
+  const origins = handoffOrigins(target, options.candidateOrigin);
   const keys = [
     "manifest_version",
     "name",
@@ -145,11 +188,11 @@ export function validateManifest(manifest, target, version) {
     fail("MANIFEST_IDENTITY");
   if (
     !same(manifest.host_permissions, [
-      ...expected.origins.map((origin) => `${origin}/*`),
+      ...origins.map((origin) => `${origin}/*`),
       `https://${expected.ref}.supabase.co/*`,
     ]) ||
     !same(manifest.externally_connectable, {
-      matches: expected.origins.map((origin) => `${origin}/*`),
+      matches: origins.map((origin) => `${origin}/*`),
     })
   )
     fail("MANIFEST_TARGET");
@@ -201,6 +244,8 @@ export function validateStoreDestination({
     storeInstallation: "UNVERIFIED",
     nativeBehavior: "UNVERIFIED",
   };
+  if (Object.hasOwn(record ?? {}, "candidate") || Object.hasOwn(stagingRecord ?? {}, "candidate"))
+    return reject("CANDIDATE_NOT_STORE_QUALIFIED");
   const sourceValid = (source) =>
     source?.dirty === false &&
     gitSha(source.sha) &&
