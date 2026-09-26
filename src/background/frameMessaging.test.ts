@@ -1,12 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   aggregateScannedFields,
+  applyFillAcrossFrames,
   filterShellNoise,
   mergeFillPageResults,
   mergeSelectorReports,
 } from "./frameMessaging";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import type { CapturedField } from "../content/captureScan";
+import type { ContentRequest, FillInstruction } from "../shared/fill";
+import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const field = (over: Partial<CapturedField> & { label: string }): CapturedField => ({
   label: over.label,
@@ -60,21 +65,23 @@ describe("aggregateScannedFields", () => {
 });
 
 describe("mergeFillPageResults", () => {
-  it("lets a fill in one frame win over not-found in another", () => {
+  it("does not let a same-label result from another map suppress a gap", () => {
     const merged = mergeFillPageResults([
       {
-        filled: [],
-        skipped: [{ label: "NPI", reason: FIELD_NOT_FOUND_REASON, mapId: "m1" }],
+        filled: ["Provider name"],
+        skipped: [],
         pageFields: 1,
       },
       {
-        filled: ["NPI"],
-        skipped: [],
+        filled: [],
+        skipped: [{ label: "Provider name", reason: FIELD_NOT_FOUND_REASON, mapId: "m2" }],
         pageFields: 8,
       },
     ]);
-    expect(merged.filled).toEqual(["NPI"]);
-    expect(merged.skipped).toEqual([]);
+    expect(merged.filled).toEqual(["Provider name"]);
+    expect(merged.skipped).toEqual([
+      { label: "Provider name", reason: FIELD_NOT_FOUND_REASON, mapId: "m2" },
+    ]);
     expect(merged.pageFields).toBe(9);
   });
 
@@ -105,5 +112,179 @@ describe("mergeSelectorReports", () => {
         { valid: true, matches: 1, fillable: 1, radioGroup: false },
       ]),
     ).toEqual({ valid: true, matches: 1, fillable: 1, radioGroup: false });
+  });
+});
+
+describe("applyFillAcrossFrames public probe/apply boundary", () => {
+  const mapId = "4f0d6e10-4f6f-4a7d-8d80-5a3a16ea4e73";
+  const instruction: FillInstruction = {
+    mapId,
+    label: "Synthetic identifier",
+    selector: "#synthetic-id",
+    selectorFallbacks: [],
+    fieldType: "text",
+    value: "synthetic-only",
+    pageStep: "credentials",
+  };
+  const probeRow = (over: Record<string, unknown> = {}) => ({
+    mapId,
+    pageStatus: "eligible",
+    targetStatus: "unique",
+    pageSettled: true,
+    radioGroup: false,
+    pageFields: 1,
+    ...over,
+  });
+  function installFrames(sendMessage: (message: ContentRequest, frameId: number) => unknown, frameIds = [0]): void {
+    vi.stubGlobal("chrome", {
+      webNavigation: {
+        getAllFrames: vi.fn().mockResolvedValue(frameIds.map((frameId) => ({ frameId, url: "https://payer.example/enrollment/credentials" }))),
+      },
+      tabs: {
+        sendMessage: vi.fn((_: number, message: ContentRequest, options: { frameId: number }) => sendMessage(message, options.frameId)),
+      },
+    });
+  }
+
+  it("treats malformed or incomplete probe rows as uncertainty and never applies", async () => {
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") return { ok: true, data: [{ ...probeRow(), pageSettled: "yes" }] };
+      throw new Error("apply must not run after malformed probe data");
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "unverified",
+      reasonCode: "context_changed",
+      attempted: false,
+    });
+  });
+
+  it("rejects duplicate map rows as an incomplete probe result", async () => {
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") return { ok: true, data: [probeRow(), probeRow()] };
+      throw new Error("apply must not run after duplicate probe rows");
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "unverified",
+      reasonCode: "context_changed",
+      attempted: false,
+    });
+  });
+
+  it("keeps an inaccessible frame as explicit uncertainty instead of applying elsewhere", async () => {
+    installFrames((message, frameId) => {
+      if (frameId === 1) throw new Error("no content script");
+      if (message.type === "PROBE_FILL") return { ok: true, data: [probeRow()] };
+      throw new Error("apply must not run with an unchecked frame");
+    }, [0, 1]);
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "unverified",
+      reasonCode: "frame_inaccessible",
+      attempted: false,
+      frameKey: null,
+    });
+  });
+
+  it("qualifies not-found only after a complete settled search", async () => {
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") return { ok: true, data: [probeRow({ targetStatus: "missing" })] };
+      throw new Error("apply must not run for a qualified miss");
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "not_found",
+      reasonCode: "target_missing",
+      attempted: false,
+      notFoundEvidence: {
+        stepKnown: true,
+        frameAccessible: true,
+        pageSettled: true,
+        searchComplete: true,
+        targetAbsent: true,
+      },
+    });
+  });
+
+  it("invalidates later absence snapshots after an earlier apply can reveal a panel", async () => {
+    const mapTwo = "52b2323d-902c-4cef-8f46-a9e60a67421e";
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: [
+            probeRow({ mapId }),
+            probeRow({ mapId: mapTwo, targetStatus: "missing" }),
+          ],
+        };
+      }
+      if (message.type !== "APPLY_FILL") throw new Error("unexpected message type");
+      const routed = message.instructions[0] as FillInstruction;
+      const telemetry = routed.telemetry!;
+      return {
+        ok: true,
+        data: {
+          filled: [routed.label],
+          attemptedLabels: [routed.label],
+          skipped: [],
+          pageFields: 1,
+          fieldOutcomes: [{
+            mapId: routed.mapId,
+            targetKey: telemetry.targetKey,
+            frameKey: telemetry.frameKey,
+            stepKey: telemetry.stepKey,
+            attempted: true,
+            outcome: "unverified",
+            reasonCode: "readback_unavailable",
+          }],
+        },
+      };
+    });
+    const result = await applyFillAcrossFrames(1, [
+      instruction,
+      { ...instruction, mapId: mapTwo, label: "Dependent field", selector: "#dependent" },
+    ], { captureV2: true });
+    expect(result.fieldOutcomes?.map(({ outcome, reasonCode, attempted }) => ({ outcome, reasonCode, attempted }))).toEqual([
+      { outcome: "unverified", reasonCode: "readback_unavailable", attempted: true },
+      { outcome: "unverified", reasonCode: "context_changed", attempted: false },
+    ]);
+  });
+
+  it.each([true, false])("uses the matching apply identity only (identity match: %s)", async (identityMatches) => {
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") return { ok: true, data: [probeRow()] };
+      if (message.type !== "APPLY_FILL") throw new Error("unexpected message type");
+      const routed = message.instructions[0] as FillInstruction;
+      const telemetry = routed.telemetry!;
+      return {
+        ok: true,
+        data: {
+          filled: [instruction.label],
+          attemptedLabels: [instruction.label],
+          skipped: [],
+          pageFields: 1,
+          fieldOutcomes: [{
+            mapId,
+            targetKey: identityMatches ? telemetry.targetKey : createFillEventV2OpaqueKey("t"),
+            frameKey: telemetry.frameKey,
+            stepKey: telemetry.stepKey,
+            attempted: true,
+            outcome: "unverified",
+            reasonCode: "readback_unavailable",
+          }],
+        },
+      };
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.fieldOutcomes).toHaveLength(1);
+    expect(result.fieldOutcomes?.[0]?.outcome).toBe("unverified");
+    if (identityMatches) {
+      expect(result.fieldOutcomes?.[0]?.attempted).toBe(true);
+      expect(result.fieldOutcomes?.[0]?.reasonCode).toBe("readback_unavailable");
+    } else {
+      expect(result.fieldOutcomes?.[0]?.attempted).toBe(false);
+      expect(result.fieldOutcomes?.[0]?.reasonCode).toBe("context_changed");
+    }
   });
 });

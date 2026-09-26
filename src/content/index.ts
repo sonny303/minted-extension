@@ -10,7 +10,7 @@
 //
 // Idempotent: all-frames re-injection must not stack duplicate listeners.
 import type { ContentRequest } from "../shared/fill";
-import { applyFill, clearPortalForm } from "./fillEngine";
+import { applyFill, clearPortalForm, probeFillOnPage } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
 import {
   cancelElementPick,
@@ -79,6 +79,14 @@ if (!contentGlobal.__mintedPanelContentInstalled) {
         });
         return false;
       }
+      if (message?.type === "PROBE_FILL") {
+        // The bounded mutation-quiet wait lets delayed panels render before a
+        // selector miss is classified. The request contains shape only.
+        probeFillOnPage(message.instructions ?? [])
+          .then((result) => sendResponse({ ok: true, data: result }))
+          .catch(() => sendResponse({ ok: false, error: "Could not inspect this form" }));
+        return true;
+      }
       if (message?.type === "CLEAR_FORM") {
         try {
           sendResponse({ ok: true, data: clearPortalForm() });
@@ -95,12 +103,12 @@ if (!contentGlobal.__mintedPanelContentInstalled) {
       }
       if (message?.type === "APPLY_FILL") {
         try {
-          sendResponse({ ok: true, data: applyFill(message.instructions ?? []) });
-        } catch (error) {
+          sendResponse({ ok: true, data: applyFill(message.instructions ?? [], message.requireUniqueTarget === true) });
+        } catch {
           sendResponse({
             ok: false,
-            error:
-              error instanceof Error ? error.message : "Fill failed on the page",
+            // Page exceptions can embed entered values; report a fixed reason.
+            error: "Fill failed on the page",
           });
         }
         return false;

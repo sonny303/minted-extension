@@ -27,6 +27,7 @@ import { readActiveOrgId } from "./orgState";
 import { readPanelMode } from "./mode";
 import { shouldSendOrgHeader } from "../shared/panelMode";
 import type { ReportedField } from "../shared/fill";
+import { isFillEventV2Advertised, type FillEventV2Metadata } from "../shared/fillEventV2";
 
 export class ApiError extends Error {
   constructor(
@@ -255,11 +256,15 @@ export async function proposeSharedFieldMap(input: {
 // (F6.9.9: pages seen, fields captured, mapped count). The shared tier only,
 // on the same user-scoped guard as the propose above, because training names
 // no org.
-export async function listSharedFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
-  const { data } = await apiFetch<PortalFieldMap[]>(
+export async function listSharedFieldMapsWithMeta(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
+  const { data, meta } = await apiFetch<PortalFieldMap[]>(
     `/api/shared-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
   );
-  return data;
+  return { maps: data, fillEventV2: isFillEventV2Advertised(meta) };
+}
+
+export async function listSharedFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
+  return (await listSharedFieldMapsWithMeta(portalKey)).maps;
 }
 
 // POST /api/shared-test-fills — record a Train-forms synthetic fill as an
@@ -274,11 +279,13 @@ export async function postSharedTestFill(body: {
   completedAt?: string;
   orgId?: string | null;
   mockProfileVersion?: number;
+  v2?: FillEventV2Metadata;
 }): Promise<string> {
+  const { v2, ...base } = body;
   const { data } = await apiFetch<{ session: { id: string } }>("/api/shared-test-fills", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...base, ...(v2 ?? {}) }),
   });
   return data.session.id;
 }
@@ -359,11 +366,15 @@ export async function getCaseContext(caseId: string): Promise<CaseContext> {
   return data;
 }
 
-export async function getPortalFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
-  const { data } = await apiFetch<PortalFieldMap[]>(
+export async function getPortalFieldMapsWithMeta(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
+  const { data, meta } = await apiFetch<PortalFieldMap[]>(
     `/api/portal-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
   );
-  return data;
+  return { maps: data, fillEventV2: isFillEventV2Advertised(meta) };
+}
+
+export async function getPortalFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {
+  return (await getPortalFieldMapsWithMeta(portalKey)).maps;
 }
 
 // PHI-dense payload (unmasked by design for form fill). Never log it.
@@ -395,13 +406,15 @@ export interface FillEventBody {
   completedAt: string;
   fieldsFilled: number;
   fieldsSkipped: unknown;
+  v2?: FillEventV2Metadata;
 }
 
 export async function postFillEvent(body: FillEventBody): Promise<void> {
+  const { v2, ...base } = body;
   await apiFetch("/api/fill-events", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...base, ...(v2 ?? {}) }),
   });
 }
 

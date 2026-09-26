@@ -6,8 +6,8 @@
 
 import type { PortalFieldMap } from "../shared/apiTypes";
 import type { FillInstruction, FillPageResult, MockDryRunSummary, ReportedField } from "../shared/fill";
-import { applyTransform } from "./fill";
-import { listSharedFieldMaps, postSharedTestFill } from "./api";
+import { applyTransform, createV2Outcomes, sanitizeLegacyFields } from "./fill";
+import { listSharedFieldMapsWithMeta, postSharedTestFill } from "./api";
 import {
   applyFillAcrossFrames,
   listTabFrames,
@@ -18,6 +18,7 @@ import {
   mockValueForToken,
 } from "../shared/mockFillProfile";
 import { classifyFieldMap } from "../shared/fieldClassify";
+import { buildFillEventV2Metadata, FILL_EVENT_V2_LIMIT_ERROR, type FillEventV2Metadata } from "../shared/fillEventV2";
 
 export interface MockDryRunPlan {
   instructions: FillInstruction[];
@@ -88,7 +89,7 @@ export async function fillMockPortal(input: {
 }): Promise<MockDryRunSummary> {
   const startedAt = new Date().toISOString();
   const fillSessionId = crypto.randomUUID();
-  const maps = await listSharedFieldMaps(input.portalKey);
+  const { maps, fillEventV2 } = await listSharedFieldMapsWithMeta(input.portalKey);
   const plan = planMockFill(maps);
 
   try {
@@ -117,7 +118,8 @@ export async function fillMockPortal(input: {
 
   let pageResult: FillPageResult;
   try {
-    pageResult = await applyFillAcrossFrames(input.tabId, plan.instructions);
+    // Always capture local truth; only serialization is capability-gated.
+    pageResult = await applyFillAcrossFrames(input.tabId, plan.instructions, { captureV2: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
@@ -130,29 +132,59 @@ export async function fillMockPortal(input: {
   }
 
   const completedAt = new Date().toISOString();
-  const skipped = pageResult.skipped;
-  const fieldsSkipped = [...skipped, ...plan.gaps];
-  const pass =
-    plan.gaps.length === 0 &&
-    skipped.length === 0 &&
-    (pageResult.filled.length > 0 || plan.instructions.length === 0);
-  const result = await postSharedTestFill({
-    id: fillSessionId,
-    portalKey: input.portalKey,
-    fieldsFilled: pageResult.filled.length,
-    fieldsSkipped,
-    startedAt,
-    completedAt,
-    orgId: input.orgId,
-    mockProfileVersion: MOCK_FILL_PROFILE_VERSION,
-  });
+  const notChecked = pageResult.skipped.filter((field) => ["other_page", "page_unknown", "hidden", "unverified"].includes(String(field.kind)));
+  const skipped = pageResult.skipped.filter((field) => !notChecked.includes(field));
+  const fieldsSkipped = [...pageResult.skipped, ...plan.gaps];
+  const localOutcomes = createV2Outcomes(pageResult, plan.gaps, plan.instructions);
+  const localAttempted = localOutcomes.filter((field) => field.attempted).length;
+  const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
+  let telemetry: FillEventV2Metadata | null = null;
+  let logError: string | null = null;
+  if (fillEventV2) {
+    try {
+      telemetry = buildFillEventV2Metadata(localOutcomes);
+    } catch (error) {
+      logError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
+        ? FILL_EVENT_V2_LIMIT_ERROR
+        : "Fill telemetry validation failed; telemetry was not recorded.";
+    }
+  }
+  let resultId: string | null = null;
+  try {
+    if (fillEventV2 && !telemetry) throw new Error(logError ?? "Fill telemetry validation failed; telemetry was not recorded.");
+    resultId = await postSharedTestFill({
+      id: fillSessionId,
+      portalKey: input.portalKey,
+      fieldsFilled: telemetry?.fieldsVerified ?? pageResult.filled.length,
+      fieldsSkipped: telemetry ? [] : sanitizeLegacyFields(fieldsSkipped),
+      startedAt,
+      completedAt,
+      orgId: input.orgId,
+      mockProfileVersion: MOCK_FILL_PROFILE_VERSION,
+      ...(telemetry ? { v2: telemetry } : {}),
+    });
+  } catch (error) {
+    logError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
+      ? FILL_EVENT_V2_LIMIT_ERROR
+      : "Mock fill ran, but telemetry could not be recorded.";
+  }
+  // R1 has no semantic readback, so a setter-accepted synthetic run cannot be
+  // called passed even when the V2 server capability is absent.
+  const pass = localVerified > 0 && plan.gaps.length === 0 && skipped.length === 0;
 
   return {
     pass,
-    filled: pageResult.filled.length,
+    filled: localVerified,
     skipped,
     gaps: plan.gaps,
-    fillSessionId: result,
+    fillSessionId: resultId ?? "",
     mockProfileVersion: MOCK_FILL_PROFILE_VERSION,
+    fieldsAttempted: localAttempted,
+    fieldsVerified: localVerified,
+    attemptedLabels: pageResult.attemptedLabels ?? [],
+    notChecked,
+    fieldOutcomes: localOutcomes,
+    logError,
+    ...(telemetry ? { schemaVersion: 2 as const } : {}),
   };
 }

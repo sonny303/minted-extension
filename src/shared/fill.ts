@@ -3,6 +3,7 @@
 // side panel (renders the outcome). Instructions carry only what the page
 // needs — selectors and final values — never tokens or auth material.
 import type { PortalFieldType } from "./apiTypes";
+import type { FillEventV2FieldOutcome, FillEventV2Metadata } from "./fillEventV2";
 
 export interface FillInstruction {
   mapId: string;
@@ -17,6 +18,10 @@ export interface FillInstruction {
    * means legacy / unnamed — fill still attempts it. Used at apply time to
    * classify exact off-page misses (DYN-PAGE-01). */
   pageStep: string | null;
+  /** Per-run correlation key used to bind a probe to the immediate apply. */
+  probeKey?: string;
+  /** Run-local, value-free identity used only when V2 telemetry is advertised. */
+  telemetry?: { targetKey: string; frameKey: string; stepKey: string | null };
 }
 
 // Why a mapped field wasn't (fully) filled — machine-readable so the fix-it
@@ -37,7 +42,9 @@ export type ReportedFieldKind =
   | "review"
   | "skipped"
   | "other_page"
-  | "hidden";
+  | "hidden"
+  | "page_unknown"
+  | "unverified";
 
 export interface ReportedField {
   label: string;
@@ -51,9 +58,35 @@ export interface ReportedField {
 // What the content script did with the instructions it was handed.
 export interface FillPageResult {
   filled: string[]; // labels
+  attemptedLabels?: string[];
   skipped: ReportedField[]; // matched-but-unappliable or selector not found
   // Fillable controls counted on the page — the honest denominator for how
   // much of the form the mapped fields actually cover.
+  pageFields: number;
+  /** Value-free V2 identities; never include labels, values, selectors, or URLs. */
+  fieldOutcomes?: FillEventV2FieldOutcome[];
+}
+
+/** Shape-only route probe. Values and display labels are deliberately absent. */
+export interface FillProbeInstruction {
+  mapId: string;
+  /** Opaque per-run identity; never derived from form data or a selector. */
+  probeKey: string;
+  selector: string;
+  selectorFallbacks: string[];
+  fieldType: PortalFieldType;
+  pageStep: string | null;
+}
+
+export type FillProbePageStatus = "eligible" | "other_page" | "page_unknown";
+export type FillProbeTargetStatus = "unique" | "hidden" | "ambiguous" | "missing" | "unsupported";
+
+export interface FillProbeResult {
+  mapId: string;
+  pageStatus: FillProbePageStatus;
+  targetStatus: FillProbeTargetStatus;
+  pageSettled: boolean;
+  radioGroup: boolean;
   pageFields: number;
 }
 
@@ -63,11 +96,17 @@ export interface SandboxFillSummary {
   skipped: ReportedField[];
   manual: ReportedField[];
   pageFields: number;
-  /** Selectors this run wrote, so "Clear portal form" can undo exactly them. */
-  filledSelectors: string[];
   fillSessionId: string | null;
   /** Non-fatal: the fill happened even if the machine log did not. */
   logError: string | null;
+  schemaVersion?: 2;
+  fieldsAttempted?: number;
+  fieldsVerified?: number;
+  fieldsRejected?: number;
+  attemptedLabels?: string[];
+  notChecked?: ReportedField[];
+  /** Local run identities; the sandbox clear action is still page-wide. */
+  fieldOutcomes?: FillEventV2FieldOutcome[];
 }
 
 export interface MockDryRunSummary {
@@ -77,6 +116,13 @@ export interface MockDryRunSummary {
   gaps: ReportedField[];
   fillSessionId: string;
   mockProfileVersion: number;
+  schemaVersion?: 2;
+  fieldsAttempted?: number;
+  fieldsVerified?: number;
+  attemptedLabels?: string[];
+  notChecked?: ReportedField[];
+  fieldOutcomes?: FillEventV2FieldOutcome[];
+  logError?: string | null;
 }
 
 // The read-only coverage sensor shown BEFORE a fill (Epic 3a): how many mapped
@@ -110,6 +156,15 @@ export interface FillSummary {
   // Fillable controls on the page (from FillPageResult). Optional so reports
   // persisted before this field restore cleanly.
   pageFields?: number;
+  /** Present only when the server advertised V2. Setter acceptance remains unverified in R1. */
+  schemaVersion?: 2;
+  fieldsAttempted?: number;
+  fieldsVerified?: number;
+  fieldsRejected?: number;
+  attemptedLabels?: string[];
+  notChecked?: ReportedField[];
+  fieldOutcomes?: FillEventV2FieldOutcome[];
+  telemetry?: FillEventV2Metadata;
 }
 
 // One persisted fill outcome, keyed per (provider, portal) in
@@ -132,7 +187,8 @@ export interface FillReportRecord {
 
 export type ContentRequest =
   | { type: "PING" }
-  | { type: "APPLY_FILL"; instructions: FillInstruction[] }
+  | { type: "APPLY_FILL"; instructions: FillInstruction[]; requireUniqueTarget?: boolean }
+  | { type: "PROBE_FILL"; instructions: FillProbeInstruction[] }
   // S5.2: read the form's SHAPE (labels/selectors/types only — never a value).
   | { type: "SCAN_FIELDS" }
   // 2026-08-19 manual mapping. PICK_ELEMENT is the ONE async content request:
