@@ -1361,6 +1361,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // portal, not just the statically-matched one.
       await ensureContentScript(request.tabId);
       const orgId = await readActiveOrgId();
+      const attemptRevision = fillSelectionRevision;
       const summary = await fillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
@@ -1374,10 +1375,15 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         aiStatus: request.aiStatus,
         orgId,
       });
+      // Context invalidation can race the awaited content apply or fill-event
+      // request. A canceled operation may return a static-only summary, but it
+      // must never replace the newer selection's persisted review/report.
+      if (attemptRevision !== fillSelectionRevision) return summary;
       // The fill is this case's binding moment for an in-panel selection
       // (TE-17): the portal tab it ran in becomes the bound tab, and the
       // activity resets the idle clock.
       await bindFillTab(request.caseId, request.tabId);
+      if (attemptRevision !== fillSelectionRevision) return summary;
       // Persist the review state so reopening the panel restores it. A
       // storage failure must not un-report a successful fill.
       try {

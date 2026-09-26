@@ -121,6 +121,25 @@ describe("AI fill review", () => {
     expect(input.value).toBe("");
   });
 
+  it("rejects a select redirected to a different option by the portal handler", () => {
+    document.body.innerHTML = `
+      <select id="state"><option value="">Choose</option><option value="CO">Colorado</option><option value="NY">New York</option></select>
+    `;
+    const selector = scan("scan-select-redirect");
+    const select = document.querySelector<HTMLSelectElement>("#state")!;
+    select.addEventListener("change", () => { select.value = "NY"; });
+
+    const result = applyAiFill("scan-select-redirect", "fill-select-redirect", [{
+      mapId: "ai:#state", label: selector, selector, selectorFallbacks: [], fieldType: "select",
+      value: "Colorado", pageStep: null, kind: "ai", token: "provider.state", confidence: 0.93,
+    }]);
+
+    expect(result.writes).toEqual([]);
+    expect(result.skipped[0]?.reason).toBe("AI write did not read back");
+    expect(select.value).toBe("");
+    expect(select.classList.contains("mp-fill-ai")).toBe(false);
+  });
+
   it("keeps accepted writes clearable until submission, then gives static writes the green decoration", () => {
     document.body.innerHTML = '<input id="first"><input id="second">';
     scan("scan-accept");

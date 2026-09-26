@@ -11,6 +11,7 @@ import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import type { SelectorMatchReport } from "../shared/selectorMatch";
 import type { PickOutcome } from "../content/elementPicker";
 import type { ControlSummary } from "../shared/nanoAi";
+import { pageScopeMatches } from "../shared/pageScope";
 
 export interface TabFrame {
   frameId: number;
@@ -164,7 +165,7 @@ export function mergeFillPageResults(results: FillPageResult[]): FillPageResult 
 export async function scanUnmappedControlsAcrossFrames(
   tabId: number,
   scanId: string,
-  activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null }>,
+  activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null; pageUrlScope?: string }>,
 ): Promise<AiScanAcrossFrames> {
   const frames = await listTabFrames(tabId);
   const scanned = await Promise.all(frames.map(async (frame): Promise<FramedAiScan | null> => {
@@ -172,7 +173,7 @@ export async function scanUnmappedControlsAcrossFrames(
       const raw = (await sendToFrame(tabId, frame.frameId, {
         type: "SCAN_UNMAPPED_CONTROLS",
         scanId,
-        activeMaps,
+        activeMaps: activeMaps.filter((map) => pageScopeMatches(map.pageUrlScope, frame.url)),
       })) as { ok?: boolean; data?: unknown } | undefined;
       if (!raw?.ok || !Array.isArray(raw.data)) return null;
       return {
@@ -221,11 +222,32 @@ export async function clearAiScanAcrossFrames(
 export async function clearAiFillAcrossFrames(
   tabId: number,
   fillSessionId: string,
+  frameIds?: number[],
 ): Promise<number> {
-  const responses = await sendToAllFrames(tabId, { type: "CLEAR_AI_FILL", fillSessionId });
+  const responses = frameIds == null
+    ? await sendToAllFrames(tabId, { type: "CLEAR_AI_FILL", fillSessionId })
+    : await Promise.all(frameIds.map(async (frameId): Promise<FrameResponse> => {
+        try {
+          const raw = (await sendToFrame(tabId, frameId, {
+            type: "CLEAR_AI_FILL",
+            fillSessionId,
+          })) as { ok?: boolean; data?: unknown } | undefined;
+          return raw?.ok
+            ? { frameId, ok: true, data: raw.data }
+            : { frameId, ok: false };
+        } catch {
+          return { frameId, ok: false };
+        }
+      }));
   return responses.reduce((count, response) =>
     response.ok && typeof response.data === "number" ? count + response.data : count,
   0);
+}
+
+export interface AiFillApplyLifecycle {
+  isCancelled: () => boolean;
+  validate: () => Promise<void>;
+  onDispatch?: (frameId: number) => void;
 }
 
 export async function acceptAiFillAcrossFrames(
@@ -250,10 +272,19 @@ export async function applyAiFillAcrossBoundFrames(
   fillSessionId: string,
   frames: FramedAiScan[],
   instructions: FillInstruction[],
+  lifecycle?: AiFillApplyLifecycle,
 ): Promise<FillPageResult> {
-  const liveFrames = await listTabFrames(tabId);
+  const assertCurrent = async (): Promise<void> => {
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+    await lifecycle?.validate();
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+  };
+  await assertCurrent();
   const results: FillPageResult[] = [];
   for (const frame of frames) {
+    await assertCurrent();
+    const liveFrames = await listTabFrames(tabId);
+    await assertCurrent();
     const stillLive = liveFrames.some((current) =>
       current.frameId === frame.frameId && current.url === frame.url,
     );
@@ -273,6 +304,8 @@ export async function applyAiFillAcrossBoundFrames(
       });
       continue;
     }
+    await assertCurrent();
+    lifecycle?.onDispatch?.(frame.frameId);
     try {
       const raw = (await sendToFrame(tabId, frame.frameId, {
         type: "APPLY_AI_FILL",
@@ -280,6 +313,14 @@ export async function applyAiFillAcrossBoundFrames(
         fillSessionId,
         instructions: forFrame,
       })) as { ok?: boolean; data?: unknown } | undefined;
+      try {
+        await assertCurrent();
+      } catch (error) {
+        // Invalidation may race a content reply. Clear this frame after the
+        // reply as well as during cancellation so late writes cannot survive.
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw error;
+      }
       if (raw?.ok && raw.data) {
         const result = raw.data as FillPageResult;
         // The transient frame binding lets learning preserve each iframe's
@@ -301,6 +342,18 @@ export async function applyAiFillAcrossBoundFrames(
         });
       }
     } catch {
+      if (lifecycle) {
+        try {
+          await assertCurrent();
+        } catch (error) {
+          await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+          throw error;
+        }
+      }
+      if (lifecycle?.isCancelled()) {
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw new Error("AI fill operation was cancelled");
+      }
       results.push({
         filled: [],
         writes: [],
@@ -313,6 +366,7 @@ export async function applyAiFillAcrossBoundFrames(
       });
     }
   }
+  await assertCurrent();
   return mergeFillPageResults(results);
 }
 
@@ -346,10 +400,30 @@ export async function applyFillAcrossFrames(
   tabId: number,
   instructions: FillInstruction[],
 ): Promise<FillPageResult> {
-  const responses = await sendToAllFrames(tabId, {
-    type: "APPLY_FILL",
-    instructions,
-  });
+  const frames = await listTabFrames(tabId);
+  const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+    const scoped = instructions.filter((instruction) =>
+      pageScopeMatches(instruction.pageUrlScope, frame.url),
+    );
+    if (scoped.length === 0) {
+      return {
+        frameId: frame.frameId,
+        ok: true,
+        data: { filled: [], writes: [], skipped: [], pageFields: 0 },
+      };
+    }
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "APPLY_FILL",
+        instructions: scoped,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      return raw?.ok
+        ? { frameId: frame.frameId, ok: true, data: raw.data }
+        : { frameId: frame.frameId, ok: false };
+    } catch {
+      return { frameId: frame.frameId, ok: false };
+    }
+  }));
   const pageResults: FillPageResult[] = [];
   for (const response of responses) {
     if (!response.ok || !response.data) continue;

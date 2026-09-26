@@ -1852,3 +1852,178 @@ describe("TE-3 — latency budgets on the seeded mock harness", () => {
     expect(elapsed).toBeLessThan(1100); // < 3×400ms ⇒ genuinely concurrent
   });
 });
+
+describe("Astra F2 — worker cancellation stays live through delayed frame apply", () => {
+  const TAB_ID = 91;
+  const TAB_URL = "https://portal.example.com/enroll/form";
+  const FRAME_URL = "https://portal.example.com/enroll/embedded";
+  const frames = [
+    { frameId: 0, url: TAB_URL },
+    { frameId: 3, url: FRAME_URL },
+  ];
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let previousTabGet: typeof chrome.tabs.get;
+  let previousGetAllFrames: typeof chrome.webNavigation.getAllFrames;
+
+  beforeEach(async () => {
+    stub.reset();
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: FIXTURES.PRIMARY_ORG });
+    await handleRequest({
+      type: "ENTER_ACTIVE_CASE",
+      caseId: FIXTURES.CASE_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      orgId: FIXTURES.PRIMARY_ORG,
+    });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+
+    stub.setQueryTabs([{ id: TAB_ID, url: TAB_URL, active: true, windowId: 1 } as chrome.tabs.Tab]);
+    previousSendMessage = chrome.tabs.sendMessage;
+    previousTabGet = chrome.tabs.get;
+    previousGetAllFrames = chrome.webNavigation.getAllFrames;
+    chrome.tabs.get = (async (tabId: number) => ({
+      id: tabId,
+      url: TAB_URL,
+      active: true,
+      windowId: 1,
+    })) as typeof chrome.tabs.get;
+    chrome.webNavigation.getAllFrames = (async () => frames) as unknown as typeof chrome.webNavigation.getAllFrames;
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+    chrome.tabs.get = previousTabGet;
+    chrome.webNavigation.getAllFrames = previousGetAllFrames;
+  });
+
+  it("cancels after A-B-A switches, clears the delayed frame, and lets a refill own the report", async () => {
+    const { handleRequest, AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    let releaseFirstApply!: () => void;
+    let announceFirstApply!: () => void;
+    const firstApplyStarted = new Promise<void>((resolve) => { announceFirstApply = resolve; });
+    const blockedFirstApply = new Promise<void>((resolve) => { releaseFirstApply = resolve; });
+    const appliedFrames: number[] = [];
+    const clearedFrames: number[] = [];
+    const aiSessionIds: string[] = [];
+    const controlsByFrame = new Map<number, Array<{ selector: string; label: string; controlType: "text" }>>([
+      [0, [{ selector: "#ai-npi", label: "NPI", controlType: "text" }]],
+      [3, [{ selector: "#ai-email", label: "Email", controlType: "text" }]],
+    ]);
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      rawMessage: unknown,
+      options?: chrome.tabs.MessageSendOptions,
+    ) => {
+      const message = rawMessage as {
+        type?: string;
+        fillSessionId?: string;
+        instructions?: Array<{ selector: string; token?: string; confidence?: number }>;
+      };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "SCAN_UNMAPPED_CONTROLS") {
+        return { ok: true, data: controlsByFrame.get(frameId) ?? [] };
+      }
+      if (message.type === "CLEAR_AI_SCAN") return { ok: true, data: null };
+      if (message.type === "APPLY_FILL") {
+        return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+      }
+      if (message.type === "APPLY_AI_FILL") {
+        appliedFrames.push(frameId);
+        if (message.fillSessionId) aiSessionIds.push(message.fillSessionId);
+        if (frameId === 0) {
+          announceFirstApply();
+          await blockedFirstApply;
+        }
+        const writes = (message.instructions ?? []).map((instruction) => ({
+          selector: instruction.selector,
+          kind: "ai" as const,
+          token: instruction.token,
+          confidence: instruction.confidence,
+        }));
+        return { ok: true, data: { filled: writes.map((write) => write.selector), writes, skipped: [], pageFields: 2 } };
+      }
+      if (message.type === "CLEAR_AI_FILL") {
+        clearedFrames.push(frameId);
+        return { ok: true, data: 1 };
+      }
+      throw new Error(`unexpected content message: ${message.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+
+    const prepared = await handleRequest({
+      type: "PREPARE_AI_FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+    }) as import("../shared/fill").AiFillPreparation;
+    expect(prepared.controls.map((control) => control.selector)).toEqual(["#ai-npi", "#ai-email"]);
+
+    const originalFill = handleRequest({
+      type: "FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+      aiScanId: prepared.scanId,
+      aiMatches: [
+        { selector: "#ai-npi", token: "provider.npi", confidence: 0.95 },
+        { selector: "#ai-email", token: "provider.email", confidence: 0.95 },
+      ],
+    });
+    await firstApplyStarted;
+
+    // Each public selection route advances the worker generation. Returning
+    // to the original tuple cannot make the in-flight scan current again.
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: "secondary-provider" });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE2_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY2_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: "30563fd6-8e95-46a0-8e1c-cb3b968b3c3d" });
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: FIXTURES.PRIMARY_ORG });
+    await handleRequest({
+      type: "ENTER_ACTIVE_CASE",
+      caseId: FIXTURES.CASE_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      orgId: FIXTURES.PRIMARY_ORG,
+    });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+
+    const refill = await handleRequest({
+      type: "FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+    }) as import("../shared/fill").FillSummary;
+    const reportKey = `minted.fillReport.${FIXTURES.PROVIDER_ID}.${FIXTURES.PORTAL_KEY}`;
+    const currentReport = stub.sessionStore.get(reportKey) as import("../shared/fill").FillReportRecord;
+    expect(currentReport.summary.fillSessionId).toBe(refill.fillSessionId);
+    expect(currentReport.summary.aiReview).toBeFalsy();
+
+    releaseFirstApply();
+    const stale = await originalFill as import("../shared/fill").FillSummary;
+    expect(appliedFrames).toEqual([0]);
+    expect(clearedFrames).toContain(0);
+    expect(clearedFrames).not.toContain(3);
+    expect(aiSessionIds).toHaveLength(1);
+    expect(stale.aiReview).toBeNull();
+    expect(stale.aiFilled).toBe(0);
+    expect((await import("../background/fill")).readActiveAiReview(aiSessionIds[0]!)).toBeNull();
+    expect(stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY)).toBeNull();
+    expect((stub.sessionStore.get(reportKey) as import("../shared/fill").FillReportRecord).summary.fillSessionId)
+      .toBe(refill.fillSessionId);
+  });
+});

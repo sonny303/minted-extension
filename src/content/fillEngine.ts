@@ -15,6 +15,7 @@ import {
   resolveFillPage,
 } from "../shared/fillPage";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
+import { pageScopeMatches } from "../shared/pageScope";
 import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // DYN-PAGE-02 — the SAME "positively hidden" rule the scanner uses, shared
 // rather than copied so the two surfaces can never disagree about what an
@@ -182,8 +183,8 @@ function labelTextOf(input: HTMLInputElement): string {
 }
 
 type ApplyOutcome =
-  | { ok: true; changed: boolean; target: Fillable }
-  | { ok: false; reason: string; kind?: ReportedFieldKind };
+  | { ok: true; changed: boolean; target: Fillable; expectedValue: string | boolean }
+  | { ok: false; reason: string; kind?: ReportedFieldKind; target?: Fillable };
 
 /** DYN-PAGE-02 — the control resolved but sits in an inactive panel, so the
  * fill declines to write it. Never drift: the selector was found. */
@@ -248,14 +249,18 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   if (isHiddenControl(match)) return HIDDEN_OUTCOME;
   const changed = !match.checked;
   if (changed) match.click();
-  return { ok: true, changed, target: match };
+  if (!match.checked) return { ok: false, reason: "field did not retain the requested value", target: match };
+  return { ok: true, changed, target: match, expectedValue: true };
 }
 
 function applyCheckbox(el: HTMLInputElement, value: string): ApplyOutcome {
   const wantChecked = TRUTHY.has(normalize(value));
   const changed = el.checked !== wantChecked;
   if (changed) el.click();
-  return { ok: true, changed, target: el };
+  if (el.checked !== wantChecked) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, changed, target: el, expectedValue: wantChecked };
 }
 
 function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
@@ -279,7 +284,10 @@ function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
     el.value = match.value;
     fireChanged(el);
   }
-  return { ok: true, changed, target: el };
+  if (el.value !== match.value) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, changed, target: el, expectedValue: match.value };
 }
 
 function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
@@ -307,7 +315,10 @@ function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
   }
   const changed = el.value !== instruction.value;
   setNativeValue(el, instruction.value);
-  return { ok: true, changed, target: el };
+  if (el.value !== instruction.value) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, changed, target: el, expectedValue: instruction.value };
 }
 
 function installFillStyle(el: Element): void {
@@ -360,6 +371,10 @@ export function applyAiValue(
   } else if (el.value !== "") {
     return { ok: false, reason: "field already has a value" };
   }
+  const previousValue: string | boolean =
+    el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")
+      ? el.checked
+      : el.value;
 
   const fieldType = el instanceof HTMLSelectElement
     ? "select"
@@ -378,13 +393,33 @@ export function applyAiValue(
     pageStep: null,
     kind: "ai",
   });
-  if (!outcome.ok) return { ok: false, reason: outcome.reason };
-  const writtenValue = outcome.target instanceof HTMLInputElement && outcome.target.type === "checkbox"
-    ? String(outcome.target.checked)
-    : outcome.target instanceof HTMLInputElement && outcome.target.type === "radio"
-      ? String(outcome.target.checked)
-      : outcome.target.value;
+  if (!outcome.ok) {
+    if (outcome.target) {
+      const currentValue: string | boolean =
+        outcome.target instanceof HTMLInputElement &&
+        (outcome.target.type === "radio" || outcome.target.type === "checkbox")
+          ? outcome.target.checked
+          : outcome.target.value;
+      // Restore only while the rejected value remains the immediate result of
+      // this write; later user edits are never overwritten by the caller.
+      if (currentValue !== previousValue) restoreAiValueWithoutEvents(outcome.target, previousValue);
+      return { ok: false, reason: "AI write did not read back" };
+    }
+    return { ok: false, reason: outcome.reason };
+  }
+  const writtenValue = String(outcome.expectedValue);
   return { ...outcome, writtenValue };
+}
+
+function restoreAiValueWithoutEvents(el: Fillable, value: string | boolean): void {
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+    el.checked = value === true;
+    return;
+  }
+  const next = typeof value === "string" ? value : "";
+  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
+  if (descriptor?.set) descriptor.set.call(el, next);
+  else el.value = next;
 }
 
 export function restoreAiValue(el: Fillable, previous: string | boolean): void {
@@ -428,6 +463,15 @@ export function applyFillOnPage(
     try {
       if (isOtherPageInstruction(instruction, currentPage)) {
         skipped.push(otherPageReport(instruction));
+        continue;
+      }
+      if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
+        skipped.push({
+          label: instruction.label,
+          reason: "mapping is scoped to a different page",
+          mapId: instruction.mapId,
+          kind: "other_page",
+        });
         continue;
       }
       const target = resolveTarget(instruction);

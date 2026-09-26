@@ -17,6 +17,8 @@ export interface FillInstruction {
    * means legacy / unnamed — fill still attempts it. Used at apply time to
    * classify exact off-page misses (DYN-PAGE-01). */
   pageStep: string | null;
+  /** Exact canonical origin+path for Nano-learned static mappings only. */
+  pageUrlScope?: string;
   /** The visual review lane. Omitted by older callers and treated as static. */
   kind?: "static" | "ai";
   /** Catalog identifier only; never a value. Present on AI suggestions. */
@@ -205,7 +207,7 @@ export type ContentRequest =
   | {
       type: "SCAN_UNMAPPED_CONTROLS";
       scanId: string;
-      activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null }>;
+      activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null; pageUrlScope?: string }>;
     }
   | {
       type: "APPLY_AI_FILL";

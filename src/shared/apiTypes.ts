@@ -37,6 +37,8 @@ export interface PortalFieldMap {
   orgId: string | null;
   portalKey: string;
   urlPattern: string | null;
+  /** Additive provenance; absent on pre-migration server responses. */
+  learnedVia?: "manual" | "nano" | null;
   pageStep: string | null;
   mapType: FillMode;
   selector: string;

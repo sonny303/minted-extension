@@ -408,11 +408,15 @@ export interface FillEventBody {
   fieldsSkipped: unknown;
 }
 
-export async function postFillEvent(body: FillEventBody): Promise<void> {
+export async function postFillEvent(
+  body: FillEventBody,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
   await apiFetch("/api/fill-events", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
 }
 

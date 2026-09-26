@@ -14,6 +14,8 @@ import {
 export interface ActiveMapSelectors {
   selector: string;
   selectorFallbacks?: readonly string[] | null;
+  /** Worker sends only scopes matching this frame; retained for wire typing. */
+  pageUrlScope?: string;
 }
 
 interface ScannedControl {

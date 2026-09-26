@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   sendToFrame: vi.fn(),
   applyFillAcrossFrames: vi.fn(),
   applyAiFillAcrossBoundFrames: vi.fn(),
+  clearAiFillAcrossFrames: vi.fn(),
 }));
 
 vi.mock("./api", () => ({
@@ -24,10 +25,9 @@ vi.mock("./api", () => ({
 vi.mock("./frameMessaging", () => ({
   ...mocks,
   acceptAiFillAcrossFrames: vi.fn(),
-  clearAiFillAcrossFrames: vi.fn(),
 }));
 
-const { fillPortal, prepareAiFillPortal } = await import("./fill");
+const { fillPortal, prepareAiFillPortal, invalidatePendingAiScans, readActiveAiReview } = await import("./fill");
 
 const request = {
   tabId: 7,
@@ -88,6 +88,7 @@ beforeEach(() => {
   mocks.sendToFrame.mockResolvedValue({ ok: true });
   mocks.applyFillAcrossFrames.mockResolvedValue(pageResult([]));
   mocks.applyAiFillAcrossBoundFrames.mockImplementation(async (_tabId, _scanId, _sessionId, _frames, instructions) => pageResult(instructions));
+  mocks.clearAiFillAcrossFrames.mockResolvedValue(0);
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -112,6 +113,11 @@ describe("local AI fill orchestration", () => {
       expect.any(String),
       prepared.controls.length ? [{ frameId: 0, url: "https://portal.example/form?person=private#step", controls: [control] }] : [],
       [expect.objectContaining({ selector: "#npi", value: "1234567890", kind: "ai" })],
+      expect.objectContaining({
+        isCancelled: expect.any(Function),
+        validate: expect.any(Function),
+        onDispatch: expect.any(Function),
+      }),
     );
     expect(mocks.postFillEvent).toHaveBeenCalledTimes(1);
     expect(mocks.postFillEvent.mock.calls[0]?.[0]).toMatchObject({ fieldsFilled: 1, caseId: "case-1", providerId: "provider-1" });
@@ -166,5 +172,50 @@ describe("local AI fill orchestration", () => {
     expect(mocks.clearAiScanAcrossFrames).toHaveBeenCalledTimes(1);
     expect(mocks.applyFillAcrossFrames).not.toHaveBeenCalled();
     expect(mocks.applyAiFillAcrossBoundFrames).not.toHaveBeenCalled();
+  });
+
+  it("cancels a delayed AI apply on context invalidation and never recreates a review", async () => {
+    let current = true;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const validate = vi.fn(async () => {
+      if (!current) throw new Error("context changed");
+    });
+    const prepared = await prepareAiFillPortal(request, {
+      orgId: "org-1", revision: 1, selectionRevision: 1,
+      tabUrl: "https://portal.example/form", validate,
+    });
+    mocks.applyAiFillAcrossBoundFrames.mockImplementation(async (
+      _tabId,
+      _scanId,
+      _sessionId,
+      _frames,
+      instructions,
+      lifecycle,
+    ) => {
+      lifecycle?.onDispatch(0);
+      markStarted();
+      await blocked;
+      if (lifecycle?.isCancelled()) throw new Error("cancelled");
+      return pageResult(instructions);
+    });
+
+    const pending = fillPortal(request, {
+      scanId: prepared.scanId,
+      candidates: [{ selector: "#npi", token: "provider.npi", confidence: 0.91 }],
+    });
+    await started;
+    current = false;
+    await invalidatePendingAiScans(request.tabId);
+    release();
+    const summary = await pending;
+
+    expect(mocks.clearAiFillAcrossFrames).toHaveBeenCalledWith(request.tabId, expect.any(String), [0]);
+    expect(mocks.postFillEvent).not.toHaveBeenCalled();
+    expect(summary.aiReview).toBeNull();
+    expect(summary.aiFilled).toBe(0);
+    expect(readActiveAiReview(summary.fillSessionId ?? "missing")).toBeNull();
   });
 });

@@ -69,12 +69,9 @@ export function applyAiFill(
     const written = liveValue(target);
     const isToggle = target instanceof HTMLInputElement &&
       (target.type === "checkbox" || target.type === "radio");
-    const readbackMatches = isToggle
-      ? written === true
-      : target instanceof HTMLSelectElement
-        ? written !== previous
-        : written === instruction.value;
-    if (!readbackMatches || String(written) !== result.writtenValue) {
+    const readbackMatches = (isToggle ? written === true : true) &&
+      String(written) === result.writtenValue;
+    if (!readbackMatches) {
       if (written !== previous) restoreAiValue(target, previous);
       skipped.push({ label: instruction.selector, reason: "AI write did not read back", kind: "skipped" });
       continue;

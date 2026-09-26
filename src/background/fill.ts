@@ -41,6 +41,7 @@ import {
   scanUnmappedControlsAcrossFrames,
   sendToFrame,
   type FramedAiScan,
+  type AiFillApplyLifecycle,
 } from "./frameMessaging";
 
 const STATE_ABBREVS: Record<string, string> = {
@@ -165,6 +166,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       fieldType: map.fieldType,
       value: applyTransform(String(raw), map.transform),
       pageStep: map.pageStep ?? null,
+      ...(map.learnedVia === "nano" ? { pageUrlScope: map.urlPattern ?? "" } : {}),
       kind: "static",
     });
     if (map.source === "manual_partial") {
@@ -254,6 +256,14 @@ interface PreparedAiFill {
   tokenCatalog: string[];
   unprocessedControls: number;
   createdAt: number;
+  operation?: AiFillOperation;
+}
+
+interface AiFillOperation {
+  fillSessionId: string;
+  cancelled: boolean;
+  dispatchedFrameIds: Set<number>;
+  abortController: AbortController;
 }
 
 export interface AcceptedAiFillReceipt {
@@ -287,6 +297,7 @@ export function canonicalLearningPageUrl(value: string): string | null {
 }
 
 const preparedAiFills = new Map<string, PreparedAiFill>();
+const activeAiOperations = new Map<string, { prepared: PreparedAiFill; operation: AiFillOperation }>();
 const activeAiReviews = new Map<string, {
   request: FillRequest;
   guard: AiFillGuard;
@@ -297,6 +308,33 @@ const AI_PREPARED_MAX_AGE_MS = 120_000;
 
 async function discardPreparedAiFill(scanId: string, prepared: PreparedAiFill): Promise<void> {
   preparedAiFills.delete(scanId);
+  if (prepared.operation) await cancelAiOperation(prepared, prepared.operation);
+  await clearAiScanAcrossFrames(
+    prepared.request.tabId,
+    prepared.scanId,
+    prepared.frames.map((frame) => frame.frameId),
+  );
+}
+
+async function cancelAiOperation(prepared: PreparedAiFill, operation: AiFillOperation): Promise<void> {
+  operation.cancelled = true;
+  operation.abortController.abort();
+  activeAiReviews.delete(operation.fillSessionId);
+  await clearAiFillAcrossFrames(
+    prepared.request.tabId,
+    operation.fillSessionId,
+    [...operation.dispatchedFrameIds],
+  );
+  await clearAiScanAcrossFrames(
+    prepared.request.tabId,
+    prepared.scanId,
+    prepared.frames.map((frame) => frame.frameId),
+  );
+}
+
+async function finishAiOperation(prepared: PreparedAiFill, operation: AiFillOperation): Promise<void> {
+  activeAiOperations.delete(operation.fillSessionId);
+  if (preparedAiFills.get(prepared.scanId) === prepared) preparedAiFills.delete(prepared.scanId);
   await clearAiScanAcrossFrames(
     prepared.request.tabId,
     prepared.scanId,
@@ -346,6 +384,7 @@ export async function prepareAiFillPortal(
     maps.filter((map) => map.mapType === "web").map((map) => ({
       selector: map.selector,
       selectorFallbacks: map.selectorFallbacks ?? [],
+      ...(map.learnedVia === "nano" ? { pageUrlScope: map.urlPattern ?? "" } : {}),
     })),
   );
   try {
@@ -395,10 +434,11 @@ export async function prepareAiFillPortal(
 }
 
 export async function invalidatePendingAiScans(tabId?: number): Promise<void> {
-  for (const [scanId, prepared] of preparedAiFills) {
+  for (const [scanId, prepared] of [...preparedAiFills]) {
     if (tabId != null && prepared.request.tabId !== tabId) continue;
     preparedAiFills.delete(scanId);
-    await clearAiScanAcrossFrames(prepared.request.tabId, scanId, prepared.frames.map((frame) => frame.frameId));
+    if (prepared.operation) await cancelAiOperation(prepared, prepared.operation);
+    else await clearAiScanAcrossFrames(prepared.request.tabId, scanId, prepared.frames.map((frame) => frame.frameId));
   }
 }
 
@@ -415,6 +455,10 @@ export function removeActiveAiReview(fillSessionId: string): void {
 }
 
 export async function invalidateActiveAiReviews(tabId?: number): Promise<void> {
+  for (const { prepared, operation } of [...activeAiOperations.values()]) {
+    if (tabId != null && prepared.request.tabId !== tabId) continue;
+    await cancelAiOperation(prepared, operation);
+  }
   for (const [fillSessionId, active] of activeAiReviews) {
     if (tabId != null && active.request.tabId !== tabId) continue;
     activeAiReviews.delete(fillSessionId);
@@ -457,6 +501,7 @@ export async function fillPortal(
   // submission, tying the business log to this machine log.
   const fillSessionId = crypto.randomUUID();
   let prepared: PreparedAiFill | null = null;
+  let operation: AiFillOperation | null = null;
   if (options.scanId) {
     prepared = preparedAiFills.get(options.scanId) ?? null;
     if (!prepared || !sameFillRequest(prepared.request, request)) {
@@ -495,7 +540,17 @@ export async function fillPortal(
       await discardPreparedAiFill(options.scanId, prepared);
       throw error;
     }
-    preparedAiFills.delete(options.scanId);
+    if (prepared.operation) {
+      throw new Error("This AI fill is already being applied.");
+    }
+    operation = {
+      fillSessionId,
+      cancelled: false,
+      dispatchedFrameIds: new Set(),
+      abortController: new AbortController(),
+    };
+    prepared.operation = operation;
+    activeAiOperations.set(fillSessionId, { prepared, operation });
   } else if (options.candidates?.length) {
     throw new Error("AI suggestions have no matching form scan. Run Fill again.");
   }
@@ -513,6 +568,17 @@ export async function fillPortal(
         return { maps, profile };
       })();
   const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+
+  const assertPreparedCurrent = async (): Promise<void> => {
+    if (!prepared || !operation) return;
+    if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+    await prepared.guard.validate();
+    if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+  };
 
   // Resolve only catalog values already retained by the worker. The panel
   // sends selector/token/confidence triples, never provider values.
@@ -541,14 +607,17 @@ export async function fillPortal(
   // Pre-flight ping: any frame answering is enough (Availity's form lives in
   // a child iframe). ensureContentScript already ran in the worker.
   try {
-    await prepared?.guard.validate();
+    await assertPreparedCurrent();
     const frames = await listTabFrames(request.tabId);
+    await assertPreparedCurrent();
     let alive = false;
     for (const frame of frames) {
       try {
+        await assertPreparedCurrent();
         const pong = (await sendToFrame(request.tabId, frame.frameId, {
           type: "PING",
         })) as { ok?: boolean } | undefined;
+        await assertPreparedCurrent();
         if (pong?.ok === true) {
           alive = true;
           break;
@@ -559,6 +628,10 @@ export async function fillPortal(
     }
     if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
+    if (prepared && operation) {
+      await cancelAiOperation(prepared, operation);
+      await finishAiOperation(prepared, operation);
+    }
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
       { cause: error },
@@ -567,8 +640,14 @@ export async function fillPortal(
 
   let pageResultStatic: FillPageResult;
   try {
+    await assertPreparedCurrent();
     pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills);
+    await assertPreparedCurrent();
   } catch (error) {
+    if (prepared && operation) {
+      await cancelAiOperation(prepared, operation);
+      await finishAiOperation(prepared, operation);
+    }
     // The pre-flight ping just proved the content script is reachable, so a
     // failure here is a genuine page/apply error. The one residual edge is a
     // tab that navigates away in the window between the ping and this call —
@@ -588,30 +667,40 @@ export async function fillPortal(
   let aiPageResult: FillPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
   if (prepared) {
     try {
-      await prepared.guard.validate();
+      await assertPreparedCurrent();
+      const lifecycle: AiFillApplyLifecycle = {
+        isCancelled: () => operation?.cancelled === true || preparedAiFills.get(prepared!.scanId) !== prepared,
+        validate: () => prepared!.guard.validate(),
+        onDispatch: (frameId) => operation?.dispatchedFrameIds.add(frameId),
+      };
       aiPageResult = await applyAiFillAcrossBoundFrames(
         request.tabId,
         prepared.scanId,
         fillSessionId,
         prepared.frames,
         aiInstructions,
+        lifecycle,
       );
+      await assertPreparedCurrent();
       aiStatus = aiInstructions.length > 0 && aiPageResult.writes?.length
         ? "ready"
         : "no-matches";
     } catch {
+      if (operation) await cancelAiOperation(prepared, operation);
+      aiPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
       aiStatus = "error";
     } finally {
       await clearAiScanAcrossFrames(request.tabId, prepared.scanId, prepared.frames.map((frame) => frame.frameId));
     }
   }
 
-  const pageResult = {
+  const combinePageResult = (): FillPageResult => ({
     filled: [...pageResultStatic.filled, ...aiPageResult.filled],
     writes: [...(pageResultStatic.writes ?? []), ...(aiPageResult.writes ?? [])],
     skipped: [...pageResultStatic.skipped, ...aiPageResult.skipped],
     pageFields: pageResultStatic.pageFields,
-  } satisfies FillPageResult;
+  });
+  let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
 
   // Log the attempt. A logging failure must not un-report a successful fill,
@@ -619,6 +708,7 @@ export async function fillPortal(
   let eventRecorded = true;
   let eventError: string | null = null;
   try {
+    await assertPreparedCurrent();
     await postFillEvent({
       id: fillSessionId,
       caseId: request.caseId,
@@ -635,7 +725,7 @@ export async function fillPortal(
         ...pageResult.skipped.map((f) => ({ ...f, kind: f.kind ?? "skipped" })),
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ],
-    });
+    }, { signal: operation?.abortController.signal });
   } catch (error) {
     eventRecorded = false;
     // eventError is the COMPLETE warning line the panel shows verbatim. A 403
@@ -647,6 +737,19 @@ export async function fillPortal(
     } else {
       const detail = error instanceof Error ? error.message : "unknown error";
       eventError = `Fill applied, but it couldn't be logged to Minted Panel: ${detail}. Retry from the case record.`;
+    }
+  }
+
+  if (prepared && operation) {
+    try {
+      await assertPreparedCurrent();
+    } catch {
+      await cancelAiOperation(prepared, operation);
+    }
+    if (operation.cancelled) {
+      aiPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
+      aiStatus = "error";
+      pageResult = combinePageResult();
     }
   }
 
@@ -672,7 +775,7 @@ export async function fillPortal(
         pageUrl: canonicalLearningPageUrl(sourceUrl),
       };
     });
-  const aiReview: AiFillReview | null = prepared || options.aiStatus
+  const aiReview: AiFillReview | null = !operation?.cancelled && (prepared || options.aiStatus)
     ? {
         scanId: prepared?.scanId ?? null,
         fillSessionId,
@@ -682,14 +785,15 @@ export async function fillPortal(
         accepted: false,
       }
     : null;
-  if (prepared && reviewWrites.length > 0 && eventRecorded) {
+  if (prepared && operation && !operation.cancelled &&
+    preparedAiFills.get(prepared.scanId) === prepared && reviewWrites.length > 0 && eventRecorded) {
     activeAiReviews.set(fillSessionId, {
       request,
       guard: prepared.guard,
       review: aiReview!,
     });
   }
-  return {
+  const summary: FillSummary = {
     filled: staticFilled + aiFilled,
     filledLabels: pageResult.filled,
     skipped: pageResult.skipped,
@@ -708,6 +812,8 @@ export async function fillPortal(
     facilityId: request.facilityId,
     state: request.state,
   };
+  if (prepared && operation) await finishAiOperation(prepared, operation);
+  return summary;
 }
 
 // ---------------------------------------------------------------------------

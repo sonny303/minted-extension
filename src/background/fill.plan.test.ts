@@ -18,7 +18,7 @@ function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "select
     id: over.id,
     orgId: over.orgId ?? null,
     portalKey: over.portalKey ?? "demo",
-    urlPattern: null,
+    urlPattern: over.urlPattern ?? null,
     pageStep: over.pageStep ?? null,
     mapType: over.mapType ?? "web",
     selector: over.selector,
@@ -32,6 +32,7 @@ function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "select
     fieldType: over.fieldType ?? "text",
     notes: over.notes ?? null,
     status: over.status ?? "approved",
+    ...(over.learnedVia !== undefined ? { learnedVia: over.learnedVia } : {}),
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   };
@@ -85,6 +86,27 @@ describe("planFill", () => {
       profile,
     );
     expect(plan.staticFills[0]?.pageStep).toBe("credentials");
+  });
+
+  it("carries exact URL scope only for Nano-learned maps", () => {
+    const plan = planFill(
+      [
+        map({
+          id: "learned",
+          selector: "#field",
+          learnedVia: "nano",
+          urlPattern: "https://portal.example/provider",
+        }),
+        map({
+          id: "legacy",
+          selector: "#legacy",
+          urlPattern: "https://portal.example/provider",
+        }),
+      ],
+      profile,
+    );
+    expect(plan.staticFills[0]?.pageUrlScope).toBe("https://portal.example/provider");
+    expect(plan.staticFills[1]).not.toHaveProperty("pageUrlScope");
   });
 
   it("routes file/manual/no_mapping/no_value into manual with kinds", () => {
