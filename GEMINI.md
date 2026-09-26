@@ -11,5 +11,5 @@ Binding rules for Gemini / Antigravity agents working on `minted-extension`.
 ```bash
 npm run typecheck
 npm test
-node --test scripts/release/contract.test.mjs
+npx vitest run scripts/release/contract.test.mjs
 ```

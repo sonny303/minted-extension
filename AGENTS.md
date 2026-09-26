@@ -47,7 +47,7 @@ npm run typecheck
 npm test
 
 # Verify release contract (version bumps, manifest permissions, domain targets)
-node --test scripts/release/contract.test.mjs
+npx vitest run scripts/release/contract.test.mjs
 
 # Package clean zip for Chrome Web Store upload
 ./scripts/package-extension.sh
