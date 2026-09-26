@@ -15,9 +15,12 @@ import type {
   FillCoverage,
   FillReportRecord,
   FillSummary,
+  AiFillReview,
   MockDryRunSummary,
   ReportedField,
 } from "../shared/fill";
+import { canUseNano, matchUnmappedFields, NANO_LIMITS } from "../shared/nanoAi";
+import { aiReviewStatusText, bindAiReviewActions } from "./aiReviewController";
 import {
   sendToBackground,
   type AuthState,
@@ -269,6 +272,11 @@ const fillNote = el<HTMLElement>("fill-note");
 const fillResults = el<HTMLElement>("fill-results");
 const fillReportTime = el<HTMLElement>("fill-report-time");
 const fillSummaryBox = el<HTMLElement>("fill-summary");
+const fillAiReview = el<HTMLElement>("fill-ai-review");
+const fillAiStatus = el<HTMLElement>("fill-ai-status");
+const fillAiAcceptBtn = el<HTMLButtonElement>("fill-ai-accept");
+const fillAiClearBtn = el<HTMLButtonElement>("fill-ai-clear");
+const fillAiRetryBtn = el<HTMLButtonElement>("fill-ai-retry");
 const fillSkippedBox = el<HTMLElement>("fill-skipped");
 const fillManualBox = el<HTMLElement>("fill-manual");
 const fillEventWarn = el<HTMLElement>("fill-event-warn");
@@ -306,7 +314,12 @@ interface LastFill {
   caseId: string;
   portalKey: string;
   fillSessionId: string | null;
+  submitted: boolean;
 }
+
+let lastAiReview: AiFillReview | null = null;
+let lastFillTabId: number | null = null;
+let lastFillPageUrl: string | null = null;
 
 let orgs: UserOrgMembership[] = [];
 // The multi-org pick (the worker sends it as x-org-id). Stays null in
@@ -1435,6 +1448,24 @@ function renderSelectedProvider(): void {
 }
 
 function clearFillResults(): void {
+  const previousReview = lastAiReview;
+  const previousTabId = lastFillTabId;
+  if (previousReview && !previousReview.cleared) {
+    void sendToBackground({
+      type: "CLEAR_AI_FILL",
+      tabId: previousTabId,
+      fillSessionId: previousReview.fillSessionId,
+    });
+  }
+  lastAiReview = null;
+  lastFillTabId = null;
+  lastFillPageUrl = null;
+  fillAiReview.hidden = true;
+  fillAiStatus.textContent = "";
+  fillAiAcceptBtn.disabled = false;
+  fillAiClearBtn.disabled = false;
+  fillAiRetryBtn.disabled = false;
+  fillAiRetryBtn.hidden = true;
   nbaSection.hidden = true;
   nbaSection.replaceChildren();
   touchStatus.hidden = true;
@@ -1785,8 +1816,11 @@ function renderFillSummary(
 ): void {
   fillResults.hidden = false;
   fillReportTime.hidden = restored == null;
+  lastAiReview = summary.aiReview ?? null;
   if (restored)
     fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
+  const staticFilled = summary.staticFilled ?? summary.filled;
+  const aiFilled = summary.aiFilled ?? 0;
   const attempted = summary.filled + summary.skipped.length;
   // The heading carries the counts, so no pill; the rows are the filled field
   // LABELS from the page result — values are never retained (PHI). The page
@@ -1798,11 +1832,12 @@ function renderFillSummary(
       : "";
   fillSummaryBox.replaceChildren(
     bucketDetails(
-      `Filled ${summary.filled} of ${attempted} mapped fields.${pageNote}`,
+      `Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled} of ${attempted} actual writes.${pageNote}`,
       null,
-      summary.filledLabels,
+      summary.writtenSelectors ?? summary.filledLabels,
     ),
   );
+  renderAiReview(summary.aiReview ?? null, restored ?? null);
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
   // Manual/gap bucket shows fix-it links, scoped to the
   // fill that actually ran (lastFill), not whatever is selected now.
@@ -1849,6 +1884,26 @@ function renderFillSummary(
   markSubmittedBtn.textContent = "Mark submitted";
   submitStatus.hidden = !submitted;
   if (submitted) submitStatus.textContent = "Logged to the case.";
+}
+
+function renderAiReview(review: AiFillReview | null, restored: { completedAt: string; submitted: boolean } | null = null): void {
+  lastAiReview = review;
+  fillAiReview.hidden = review == null;
+  if (!review) return;
+  const count = review.writes.length;
+  const learning = review.learning;
+  fillAiStatus.textContent = aiReviewStatusText(review);
+  const submitted = restored?.submitted === true || learning?.state === "pending" || learning?.state === "learned";
+  const canClear = !submitted && !review.cleared && learning?.state !== "learned" && count > 0;
+  const canAccept = canClear && !review.accepted && review.status === "ready" && lastFill?.fillSessionId != null;
+  const canRetry = restored?.submitted === true && learning?.state === "failed" &&
+    learning.reason !== "missing_page_scope" && lastFill?.fillSessionId != null;
+  fillAiAcceptBtn.hidden = !canAccept;
+  fillAiClearBtn.hidden = !canClear;
+  fillAiRetryBtn.hidden = !canRetry;
+  fillAiAcceptBtn.disabled = !canAccept;
+  fillAiClearBtn.disabled = !canClear;
+  fillAiRetryBtn.disabled = !canRetry;
 }
 
 interface LoadCasesOptions {
@@ -1969,6 +2024,7 @@ async function restoreFillReport(
     caseId: record.caseId,
     portalKey: record.portalKey,
     fillSessionId: record.summary.fillSessionId,
+    submitted: record.submitted,
   };
   renderFillSummary(record.summary, {
     completedAt: record.completedAt,
@@ -2561,8 +2617,21 @@ function syncQueueVisibility(): void {
 // The panel reflects the ACTIVE tab: re-detect on tab switch and on
 // navigation in the active tab (a fill result stays on screen — the user
 // hops to the portal tab to submit, then comes back for Mark submitted).
-chrome.tabs.onActivated.addListener(() => void detectPortal());
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (lastAiReview && !lastAiReview.accepted && tabId !== lastFillTabId) {
+    lastAiReview = { ...lastAiReview, status: "error" };
+    renderAiReview(lastAiReview);
+  }
+  void detectPortal();
+});
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (
+    _tabId === lastFillTabId && changeInfo.url != null &&
+    changeInfo.url !== lastFillPageUrl && lastAiReview && !lastAiReview.accepted
+  ) {
+    lastAiReview = { ...lastAiReview, status: "error" };
+    renderAiReview(lastAiReview);
+  }
   if (
     tab.active &&
     (changeInfo.url != null || changeInfo.status === "complete")
@@ -2820,6 +2889,22 @@ caseSelect.addEventListener("change", () => {
   applyCaseChoice(caseSelect.value || null, true);
 });
 
+bindAiReviewActions(
+  { accept: fillAiAcceptBtn, clear: fillAiClearBtn, retry: fillAiRetryBtn },
+  {
+    getReview: () => lastAiReview,
+    getTabId: () => lastFillTabId,
+    getFillSessionId: () => lastFill?.fillSessionId ?? null,
+    isSubmitted: () => lastFill?.submitted === true || lastAiReview?.learning?.state === "pending" ||
+      lastAiReview?.learning?.state === "learned",
+    accept: (tabId, fillSessionId) => sendToBackground({ type: "ACCEPT_AI_FILL", tabId, fillSessionId }),
+    clear: (tabId, fillSessionId) => sendToBackground({ type: "CLEAR_AI_FILL", tabId, fillSessionId }),
+    retry: (fillSessionId) => sendToBackground({ type: "RETRY_AI_LEARNING", fillSessionId }),
+    update: (review, submitted) => renderAiReview(review, { completedAt: "", submitted }),
+    showError: (message) => setError(mainError, message),
+  },
+);
+
 fillBtn.addEventListener("click", () => {
   // Capture the selection generation at click. If the operator switches
   // provider/org/case while this fill is in flight, the generation changes and
@@ -2855,20 +2940,74 @@ fillBtn.addEventListener("click", () => {
     fillBtn.textContent = "Filling…";
     fillBtn.classList.add("filling");
     fillNote.hidden = false;
-    const response = await sendToBackground({
-      type: "FILL",
-      tabId: tab.id,
-      providerId,
-      caseId,
-      portalKey: clickPortal.key,
-      state: selectedCaseState(),
-      facilityId,
-    });
-    fillBtn.textContent = "Fill this page";
-    fillBtn.disabled = false;
-    fillBtn.classList.remove("filling");
-    fillNote.hidden = true;
-    updateFillReady();
+    const originalUrl = tab.url ?? "";
+    let response: Awaited<ReturnType<typeof sendToBackground<"FILL">>>;
+    try {
+      let aiScanId: string | undefined;
+      let aiMatches: Array<{ selector: string; token: string; confidence: number }> = [];
+      let aiStatus: "unavailable" | "no-matches" | "error" | undefined;
+      const nanoReady = await canUseNano();
+      if (!isCurrent(generation)) return;
+      if (!nanoReady) {
+        aiStatus = "unavailable";
+      } else {
+        const prepared = await sendToBackground({
+          type: "PREPARE_AI_FILL",
+          tabId: tab.id,
+          providerId,
+          caseId,
+          portalKey: clickPortal.key,
+          state: selectedCaseState(),
+          facilityId,
+        });
+        if (!isCurrent(generation)) return;
+        if (prepared.ok) {
+          aiScanId = prepared.data.scanId;
+          const boundedControls = prepared.data.controls.slice(0, NANO_LIMITS.maxControls);
+          const matches = await matchUnmappedFields(boundedControls, prepared.data.tokenCatalog);
+          aiMatches = matches.filter((match) => match.confidence >= 0.85);
+          if (aiMatches.length === 0) aiStatus = "no-matches";
+        } else if (/selection changed|form changed|expired/i.test(prepared.error)) {
+          setError(mainError, prepared.error);
+          return;
+        } else {
+          aiStatus = "error";
+        }
+      }
+
+      // A delayed local prompt never gets to apply to another active tab or a
+      // new document. The worker repeats this binding check before writes.
+      const currentTab = await queryActiveTab();
+      if (
+        !isCurrent(generation) || currentTab?.id !== tab.id ||
+        (currentTab.url ?? "") !== originalUrl ||
+        matchPortalByUrl(currentTab.url, portalRows)?.key !== clickPortal.key
+      ) {
+        setError(mainError, "The portal page changed during AI review. Run Fill again.");
+        return;
+      }
+
+      response = await sendToBackground({
+        type: "FILL",
+        tabId: tab.id,
+        providerId,
+        caseId,
+        portalKey: clickPortal.key,
+        state: selectedCaseState(),
+        facilityId,
+        ...(aiScanId ? { aiScanId, aiMatches } : {}),
+        ...(aiStatus ? { aiStatus } : {}),
+      });
+    } catch (error) {
+      setError(mainError, error instanceof Error ? error.message : "AI review failed.");
+      return;
+    } finally {
+      fillBtn.textContent = "Fill this page";
+      fillBtn.disabled = false;
+      fillBtn.classList.remove("filling");
+      fillNote.hidden = true;
+      updateFillReady();
+    }
     // Selection changed mid-fill: drop this result so it can't render under the
     // provider now selected. Button chrome above is already restored.
     if (!isCurrent(generation)) return;
@@ -2881,7 +3020,10 @@ fillBtn.addEventListener("click", () => {
       caseId,
       portalKey: clickPortal.key,
       fillSessionId: response.data.fillSessionId,
+      submitted: false,
     };
+    lastFillTabId = tab.id;
+    lastFillPageUrl = originalUrl;
     renderFillSummary(response.data);
   })();
 });
@@ -2976,6 +3118,9 @@ markSubmittedBtn.addEventListener("click", () => {
     }
     dupConfirmPending = false;
     dupWarn.hidden = true;
+    if (lastFill?.fillSessionId === context.fillSessionId) {
+      lastFill = { ...lastFill, submitted: true };
+    }
     submitStatus.classList.remove("partial");
     submitDetails.hidden = true;
     taskLink.hidden = true;
@@ -3000,6 +3145,10 @@ markSubmittedBtn.addEventListener("click", () => {
     }
     submitStatus.textContent = lines.join(" ");
     submitStatus.classList.toggle("partial", bump != null && !bump.applied);
+    if (lastAiReview) {
+      lastAiReview = { ...lastAiReview, learning: response.data.learning };
+      renderAiReview(lastAiReview, { completedAt: "", submitted: true });
+    }
     // Point 6: drop the now-closed task from the case's portalTasks so a later
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);

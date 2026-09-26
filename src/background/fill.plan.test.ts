@@ -73,10 +73,10 @@ describe("planFill", () => {
       ],
       profile,
     );
-    expect(plan.instructions).toHaveLength(1);
-    expect(plan.instructions[0]?.label).toBe("First Name");
-    expect(plan.instructions[0]?.value).toBe("Ada");
-    expect(plan.instructions[0]?.pageStep).toBeNull();
+    expect(plan.staticFills).toHaveLength(1);
+    expect(plan.staticFills[0]?.label).toBe("First Name");
+    expect(plan.staticFills[0]?.value).toBe("Ada");
+    expect(plan.staticFills[0]?.pageStep).toBeNull();
   });
 
   it("carries trained pageStep onto each instruction (DYN-PAGE-01)", () => {
@@ -84,7 +84,7 @@ describe("planFill", () => {
       [map({ id: "a", selector: "label:First Name", pageStep: "credentials" })],
       profile,
     );
-    expect(plan.instructions[0]?.pageStep).toBe("credentials");
+    expect(plan.staticFills[0]?.pageStep).toBe("credentials");
   });
 
   it("routes file/manual/no_mapping/no_value into manual with kinds", () => {
@@ -104,8 +104,8 @@ describe("planFill", () => {
       ],
       profile,
     );
-    expect(plan.instructions.map((i) => i.label)).toEqual(["Const"]);
-    expect(plan.instructions[0]?.value).toBe("FIXED");
+    expect(plan.staticFills.map((i) => i.label)).toEqual(["Const"]);
+    expect(plan.staticFills[0]?.value).toBe("FIXED");
     expect(plan.manual.map((g) => g.kind)).toEqual(["file", "manual", "no_value", "no_mapping"]);
   });
 
@@ -123,7 +123,7 @@ describe("planFill", () => {
       ],
       profile,
     );
-    expect(plan.instructions[0]?.value).toBe("05/04/1980");
+    expect(plan.staticFills[0]?.value).toBe("05/04/1980");
     expect(plan.manual).toEqual([
       {
         label: "DOB",

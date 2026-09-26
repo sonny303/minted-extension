@@ -1,12 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyAiFillAcrossBoundFrames,
   aggregateScannedFields,
   filterShellNoise,
   mergeFillPageResults,
   mergeSelectorReports,
+  scanUnmappedControlsAcrossFrames,
 } from "./frameMessaging";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import type { CapturedField } from "../content/captureScan";
+import type { ControlSummary } from "../shared/nanoAi";
+import type { FillInstruction } from "../shared/fill";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const field = (over: Partial<CapturedField> & { label: string }): CapturedField => ({
   label: over.label,
@@ -105,5 +111,84 @@ describe("mergeSelectorReports", () => {
         { valid: true, matches: 1, fillable: 1, radioGroup: false },
       ]),
     ).toEqual({ valid: true, matches: 1, fillable: 1, radioGroup: false });
+  });
+});
+
+describe("AI frame binding", () => {
+  const control: ControlSummary = {
+    selector: "#npi",
+    label: "NPI",
+    controlType: "text",
+  };
+
+  it("rejects selectors that are duplicated across frames", async () => {
+    const sendMessage = vi.fn().mockImplementation((_tabId: number, message: { type: string }, options: { frameId: number }) => {
+      expect(options.frameId).toBeGreaterThanOrEqual(0);
+      if (message.type === "SCAN_UNMAPPED_CONTROLS") return { ok: true, data: [control] };
+      return { ok: true, data: null };
+    });
+    vi.stubGlobal("chrome", {
+      tabs: { sendMessage },
+      webNavigation: { getAllFrames: vi.fn().mockResolvedValue([
+        { frameId: 0, url: "https://portal.example/form" },
+        { frameId: 3, url: "https://portal.example/embedded" },
+      ]) },
+    });
+
+    const result = await scanUnmappedControlsAcrossFrames(7, "scan-1", []);
+    expect(result.controls).toEqual([]);
+    expect(result.ambiguousSelectors).toEqual(["#npi"]);
+    expect(result.frames.map((frame) => frame.controls)).toEqual([[], []]);
+  });
+
+  it("sends a candidate only to its scanned frame, not every frame", async () => {
+    const sendMessage = vi.fn().mockImplementation((_tabId: number, message: { type: string }, options: { frameId: number }) => {
+      if (message.type === "APPLY_AI_FILL") {
+        if (options.frameId !== 3) return { ok: false };
+        return { ok: true, data: { filled: ["#npi"], writes: [{ selector: "#npi", kind: "ai", token: "provider.npi", confidence: 0.9 }], skipped: [], pageFields: 0 } };
+      }
+      return { ok: true, data: null };
+    });
+    vi.stubGlobal("chrome", {
+      tabs: { sendMessage },
+      webNavigation: { getAllFrames: vi.fn().mockResolvedValue([
+        { frameId: 0, url: "https://portal.example/form" },
+        { frameId: 3, url: "https://portal.example/embedded" },
+      ]) },
+    });
+    const instruction: FillInstruction = {
+      mapId: "ai:#npi", label: "#npi", selector: "#npi", selectorFallbacks: [],
+      fieldType: "text", value: "123", pageStep: null, kind: "ai", token: "provider.npi", confidence: 0.9,
+    };
+    const result = await applyAiFillAcrossBoundFrames(7, "scan-2", "fill-2", [
+      { frameId: 3, url: "https://portal.example/embedded", controls: [control] },
+    ], [instruction]);
+
+    expect(result.writes).toEqual([{
+      selector: "#npi", kind: "ai", token: "provider.npi", confidence: 0.9,
+      pageUrl: "https://portal.example/embedded",
+    }]);
+    const applyCalls = sendMessage.mock.calls.filter((call) => call[1].type === "APPLY_AI_FILL");
+    expect(applyCalls.map((call) => call[2].frameId)).toEqual([3]);
+  });
+
+  it("refuses a frame whose URL changed after the scan", async () => {
+    const sendMessage = vi.fn();
+    vi.stubGlobal("chrome", {
+      tabs: { sendMessage },
+      webNavigation: { getAllFrames: vi.fn().mockResolvedValue([
+        { frameId: 3, url: "https://portal.example/new" },
+      ]) },
+    });
+    const instruction: FillInstruction = {
+      mapId: "ai:#npi", label: "#npi", selector: "#npi", selectorFallbacks: [],
+      fieldType: "text", value: "123", pageStep: null, kind: "ai", token: "provider.npi", confidence: 0.9,
+    };
+    const result = await applyAiFillAcrossBoundFrames(7, "scan-3", "fill-3", [
+      { frameId: 3, url: "https://portal.example/old", controls: [control] },
+    ], [instruction]);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.writes).toEqual([]);
+    expect(result.skipped[0]?.reason).toBe("AI frame changed after scan");
   });
 });

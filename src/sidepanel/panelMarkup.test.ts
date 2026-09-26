@@ -52,6 +52,30 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect([...counts].filter(([, n]) => n > 1).map(([id]) => id)).toEqual([]);
   });
 
+  it("exposes two-tone AI review with explicit accept and clear actions", () => {
+    expect(doc.getElementById("fill-ai-review")).not.toBeNull();
+    expect(doc.getElementById("fill-ai-status")).not.toBeNull();
+    expect(doc.getElementById("fill-ai-accept")?.textContent).toContain("Accept all");
+    expect(doc.getElementById("fill-ai-clear")?.textContent).toContain("Clear suggestions");
+
+    const code = codeOf(MAIN);
+    expect(code).toContain('type: "ACCEPT_AI_FILL"');
+    expect(code).toContain('type: "CLEAR_AI_FILL"');
+    expect(code).toContain('Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled}');
+    expect(code).toContain("await matchUnmappedFields(boundedControls, prepared.data.tokenCatalog)");
+  });
+
+  it("uses the on-device model in the panel and keeps values out of the Nano request", () => {
+    const code = codeOf(MAIN);
+    const fillFlow = code.slice(code.indexOf('fillBtn.addEventListener("click"'), code.indexOf('// Several matching tasks'));
+    expect(fillFlow).toContain("await canUseNano()");
+    expect(fillFlow).toContain('type: "PREPARE_AI_FILL"');
+    expect(fillFlow).toContain('type: "FILL"');
+    expect(fillFlow).toContain("aiMatches");
+    expect(fillFlow).not.toContain("profile.tokens");
+    expect(fillFlow).not.toContain("fetch(");
+  });
+
   // The 2026-08-19 three-mode split. These are the containers renderModeSurfaces
   // toggles; if one is renamed, the mode switch silently stops hiding a surface.
   it("carries the three mode buttons and the surfaces they toggle", () => {

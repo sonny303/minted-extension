@@ -12,6 +12,8 @@
 import type { ContentRequest } from "../shared/fill";
 import { applyFill, clearPortalForm } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
+import { beginUnmappedControlScan, clearUnmappedControlScan } from "./controlScanner";
+import { acceptAiFill, applyAiFill, clearAiFill, finalizeAiFill } from "./aiFillEngine";
 import {
   cancelElementPick,
   describeSelectorMatches,
@@ -44,6 +46,47 @@ if (!contentGlobal.__mintedPanelContentInstalled) {
               error instanceof Error ? error.message : "Could not read this form",
           });
         }
+        return false;
+      }
+      if (message?.type === "SCAN_UNMAPPED_CONTROLS") {
+        try {
+          sendResponse({
+            ok: true,
+            data: beginUnmappedControlScan(message.scanId, message.activeMaps ?? []),
+          });
+        } catch {
+          sendResponse({ ok: false, error: "Could not scan unmapped controls" });
+        }
+        return false;
+      }
+      if (message?.type === "CLEAR_AI_SCAN") {
+        clearUnmappedControlScan(message.scanId);
+        sendResponse({ ok: true, data: null });
+        return false;
+      }
+      if (message?.type === "APPLY_AI_FILL") {
+        try {
+          sendResponse({
+            ok: true,
+            data: applyAiFill(message.scanId, message.fillSessionId, message.instructions ?? []),
+          });
+        } catch {
+          sendResponse({ ok: false, error: "AI suggestions could not be applied" });
+        }
+        return false;
+      }
+      if (message?.type === "CLEAR_AI_FILL") {
+        sendResponse({ ok: true, data: clearAiFill(message.fillSessionId) });
+        return false;
+      }
+      if (message?.type === "ACCEPT_AI_FILL") {
+        acceptAiFill(message.fillSessionId);
+        sendResponse({ ok: true, data: null });
+        return false;
+      }
+      if (message?.type === "FINALIZE_AI_FILL") {
+        finalizeAiFill(message.fillSessionId);
+        sendResponse({ ok: true, data: null });
         return false;
       }
       if (message?.type === "PICK_ELEMENT") {

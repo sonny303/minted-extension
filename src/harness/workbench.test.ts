@@ -48,7 +48,7 @@ import {
   recognizeForm,
   resolveTrainRecognition,
 } from "../shared/trainForms";
-import { coveragePortal } from "../background/fill";
+import { coveragePortal, planFill } from "../background/fill";
 import {
   bindFillTab,
   enterActiveCase,
@@ -113,8 +113,12 @@ interface MockApi {
       [key: string]: unknown;
     }>;
     touches: Map<string, unknown>;
+    fillSessions: Map<string, Record<string, unknown>>;
+    learnedMaps: Map<string, Record<string, unknown>>;
+    learningRequests: Array<{ body: Record<string, unknown>; orgId: string | null }>;
     viewPrefs: Map<string, string[]>;
     failTouches: number;
+    failLearnings: number;
     // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
     completedSteps: Set<string>;
     // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
@@ -160,6 +164,14 @@ beforeEach(() => {
   stub.reset();
 });
 
+afterEach(() => {
+  mock.state.touches.clear();
+  mock.state.fillSessions.clear();
+  mock.state.learningRequests.length = 0;
+  mock.state.failTouches = 0;
+  mock.state.failLearnings = 0;
+});
+
 const HANDOFF = {
   type: "SET_ACTIVE_CASE",
   caseId: FIXTURES.CASE_ID as string,
@@ -168,6 +180,96 @@ const HANDOFF = {
   portalUrl: "https://portal.example.com/enroll/form",
 };
 const APP_ORIGIN = "https://mintedpanel.vercel.app";
+
+const AI_FILL_SESSION = "11111111-2222-4333-8444-555555555566";
+const AI_SELECTOR = "#ai-npi";
+const AI_PAGE_URL = "https://portal.example.com/enroll/form";
+const AI_MAPPING = {
+  selector: AI_SELECTOR,
+  token: "provider.npi",
+  confidence: 0.93,
+  fieldType: "text" as const,
+  pageUrl: AI_PAGE_URL,
+};
+
+async function seedAcceptedAiLearningReceipt(options: {
+  mappings?: typeof AI_MAPPING[];
+  facilityId?: string | null;
+  selectionRevision?: number;
+  eventRecorded?: boolean;
+} = {}) {
+  const { AI_ACCEPTED_RECEIPT_KEY, AI_SELECTION_REVISION_KEY } = await import("../background/index");
+  const mappings = options.mappings ?? [AI_MAPPING];
+  const facilityId = options.facilityId === undefined ? FIXTURES.FACILITY_ID : options.facilityId;
+  const selectionRevision = options.selectionRevision ?? 4;
+  const reportKey = `minted.fillReport.${FIXTURES.PROVIDER_ID}.${FIXTURES.PORTAL_KEY}`;
+  const learning = { state: "accepted" as const, confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0 };
+  await enterActiveCase({ caseId: FIXTURES.CASE_ID, providerId: FIXTURES.PROVIDER_ID, orgId: FIXTURES.PRIMARY_ORG });
+  await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+  await writePanelMode("case");
+  stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+  stub.sessionStore.set("minted.selectedProviderId", FIXTURES.PROVIDER_ID);
+  stub.sessionStore.set(`minted.selectedCaseId.${FIXTURES.PROVIDER_ID}`, FIXTURES.CASE_ID);
+  stub.sessionStore.set(`minted.selectedFacilityId.${FIXTURES.PROVIDER_ID}`, facilityId);
+  stub.sessionStore.set(AI_SELECTION_REVISION_KEY, selectionRevision);
+  stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+    tabId: 21,
+    fillSessionId: AI_FILL_SESSION,
+    providerId: FIXTURES.PROVIDER_ID,
+    caseId: FIXTURES.CASE_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    state: "KS",
+    facilityId,
+    orgId: FIXTURES.PRIMARY_ORG,
+    actorId: FIXTURES.USER_ID,
+    selectionRevision,
+    touchRecorded: false,
+    learning,
+    mappings,
+  });
+  stub.sessionStore.set(reportKey, {
+    tabId: 21,
+    providerId: FIXTURES.PROVIDER_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    caseId: FIXTURES.CASE_ID,
+    completedAt: "2026-09-26T12:00:00.000Z",
+    submitted: false,
+    summary: {
+      filled: mappings.length,
+      filledLabels: mappings.map((mapping) => mapping.selector),
+      skipped: [],
+      manual: [],
+      eventRecorded: options.eventRecorded ?? true,
+      eventError: null,
+      fillSessionId: AI_FILL_SESSION,
+      pageFields: mappings.length,
+      staticFilled: 0,
+      aiFilled: mappings.length,
+      writtenSelectors: mappings.map((mapping) => mapping.selector),
+      orgId: FIXTURES.PRIMARY_ORG,
+      facilityId,
+      state: "KS",
+      aiReview: {
+        scanId: "scan-ai-session",
+        fillSessionId: AI_FILL_SESSION,
+        status: "ready",
+        writes: mappings,
+        unprocessedControls: 0,
+        accepted: true,
+        learning,
+      },
+    },
+  });
+  mock.state.fillSessions.set(AI_FILL_SESSION, {
+    id: AI_FILL_SESSION,
+    caseId: FIXTURES.CASE_ID,
+    providerId: FIXTURES.PROVIDER_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    fieldsFilled: mappings.length,
+  });
+  mock.state.learningRequests.length = 0;
+  return { reportKey, mappings, learning };
+}
 
 async function forceIdle(minutes: number): Promise<void> {
   const record = (await readActiveCaseRecord()) as ActiveCaseRecord;
@@ -413,6 +515,229 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     expect(state.status).toBe("active");
     if (state.status === "active")
       expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
+  });
+});
+
+describe("Step6 — accepted AI learning follows the logged human touch", () => {
+  async function markSubmitted(fillSessionId = AI_FILL_SESSION) {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({
+      type: "MARK_SUBMITTED",
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      fillSessionId,
+    });
+  }
+
+  it("learns an accepted receipt only after the touch and keeps original iframe URLs value-free", async () => {
+    const secondFrameUrl = "https://portal.example.com/embedded/step-2";
+    const mappings = [
+      AI_MAPPING,
+      { ...AI_MAPPING, selector: "#ai-license", pageUrl: secondFrameUrl },
+    ];
+    const { reportKey } = await seedAcceptedAiLearningReceipt({ mappings });
+
+    const result = await markSubmitted() as {
+      learning: { state: string; confirmedSavedCount: number; insertedCount: number };
+    };
+
+    expect(result.learning).toMatchObject({ state: "learned", confirmedSavedCount: 2, insertedCount: 2 });
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(2);
+    expect(mock.state.learningRequests.map((entry) => entry.body.page_url).sort()).toEqual([
+      AI_PAGE_URL,
+      secondFrameUrl,
+    ].sort());
+    for (const { body } of mock.state.learningRequests) {
+      expect(body).not.toHaveProperty("org_id");
+      expect(body).not.toHaveProperty("actor_id");
+      expect(JSON.stringify(body)).not.toContain("1234567890");
+      expect(JSON.stringify(body)).not.toContain("Alex");
+    }
+
+    const storedReceipt = stub.sessionStore.get("minted.aiAcceptedReceipt") as Record<string, unknown>;
+    expect(storedReceipt).toMatchObject({ touchRecorded: true, learning: { state: "learned" } });
+    expect(JSON.stringify(stub.sessionStore.get(reportKey))).not.toContain("1234567890");
+    expect(JSON.stringify(storedReceipt)).not.toContain("1234567890");
+
+    // A subsequent fill's normal map fetch exposes the learned mapping as a
+    // green static map; no special cache or client-side fallback is needed.
+    const maps = await getPortalFieldMaps(FIXTURES.PORTAL_KEY);
+    const { profile } = await getProviderProfile(FIXTURES.PROVIDER_ID, {
+      facilityId: FIXTURES.FACILITY_ID,
+      state: "KS",
+    });
+    expect(planFill(maps, profile).staticFills.map((fill) => fill.selector)).toContain(AI_SELECTOR);
+  });
+
+  it("does not learn when the AI suggestions were cleared before submission", async () => {
+    await seedAcceptedAiLearningReceipt();
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "CLEAR_AI_FILL", tabId: 21, fillSessionId: AI_FILL_SESSION });
+    await markSubmitted();
+
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("does not learn when the AI review was never accepted", async () => {
+    const { reportKey } = await seedAcceptedAiLearningReceipt();
+    const report = stub.sessionStore.get(reportKey) as Record<string, unknown>;
+    const summary = report.summary as Record<string, unknown>;
+    const review = summary.aiReview as Record<string, unknown>;
+    stub.sessionStore.set(reportKey, {
+      ...report,
+      summary: { ...summary, aiReview: { ...review, accepted: false } },
+    });
+    stub.sessionStore.set("minted.aiAcceptedReceipt", null);
+    await markSubmitted();
+
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("keeps a failed touch separate from learning", async () => {
+    await seedAcceptedAiLearningReceipt();
+    mock.state.failTouches = 1;
+
+    await expect(markSubmitted()).rejects.toThrow(ApiError);
+    expect(mock.state.touches.size).toBe(0);
+    expect(mock.state.learningRequests).toHaveLength(0);
+    expect(stub.sessionStore.get("minted.aiAcceptedReceipt")).toMatchObject({
+      touchRecorded: false,
+      learning: { state: "accepted" },
+    });
+  });
+
+  it("preserves a successful touch after learning fails and retry performs learning only", async () => {
+    await seedAcceptedAiLearningReceipt();
+    mock.state.failLearnings = 1;
+    const first = await markSubmitted() as { learning: { state: string } };
+    expect(first.learning.state).toBe("failed");
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(1);
+    const touchRequestsBeforeRetry = mock.state.requests.filter((entry) => entry.path.includes("/touches")).length;
+
+    const { handleRequest } = await import("../background/index");
+    const retried = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as {
+      state: string;
+      confirmedSavedCount: number;
+    };
+    expect(retried).toMatchObject({ state: "learned", confirmedSavedCount: 1 });
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.requests.filter((entry) => entry.path.includes("/touches"))).toHaveLength(touchRequestsBeforeRetry);
+    expect(mock.state.learningRequests).toHaveLength(2);
+  });
+
+  it("returns honest idempotent replay counts and rejects learning after a facility switch", async () => {
+    const { handleRequest, AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    await seedAcceptedAiLearningReceipt();
+    // An approved matching map already exists. Retry confirms it, with no
+    // inserted count, instead of inventing a newly saved Good Catch.
+    mock.state.fieldMaps.push({
+      ...(mock.state.fieldMaps.find((map) => map.selector === "#npi") ?? {}),
+      id: "fm-ai-replay",
+      selector: AI_SELECTOR,
+      token: AI_MAPPING.token,
+      status: "approved",
+    });
+    const receipt = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...receipt,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    mock.state.touches.set("existing-touch", {
+      id: "existing-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const replay = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as {
+      state: string; confirmedSavedCount: number; insertedCount: number;
+    };
+    expect(replay).toMatchObject({ state: "learned", confirmedSavedCount: 1, insertedCount: 0 });
+
+    // A different selected secondary facility revokes the persisted receipt;
+    // the retry route makes no network write.
+    await seedAcceptedAiLearningReceipt({ facilityId: FIXTURES.FACILITY_ID });
+    const fresh = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...fresh,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    stub.sessionStore.set(`minted.selectedFacilityId.${FIXTURES.PROVIDER_ID}`, FIXTURES.FACILITY2_ID);
+    mock.state.touches.set("existing-touch-2", {
+      id: "existing-touch-2", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const requestsBefore = mock.state.learningRequests.length;
+    const changed = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(changed.state).toBe("revoked");
+    expect(mock.state.learningRequests).toHaveLength(requestsBefore);
+  });
+
+  it("rejects an A-to-B-to-A facility switch using the persisted selection revision", async () => {
+    const { handleRequest } = await import("../background/index");
+    await seedAcceptedAiLearningReceipt();
+    await handleRequest({
+      type: "SET_SELECTED_FACILITY",
+      providerId: FIXTURES.PROVIDER_ID,
+      facilityId: FIXTURES.FACILITY2_ID,
+    });
+    await handleRequest({
+      type: "SET_SELECTED_FACILITY",
+      providerId: FIXTURES.PROVIDER_ID,
+      facilityId: FIXTURES.FACILITY_ID,
+    });
+
+    await expect(handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION })).rejects.toThrow(/receipt/);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("survives worker restart from session receipt and refuses an unlogged fill report", async () => {
+    const seeded = await seedAcceptedAiLearningReceipt();
+    const { AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    const receipt = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...receipt,
+      touchRecorded: true,
+      learning: { state: "pending", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0 },
+    });
+    mock.state.touches.set("restart-touch", {
+      id: "restart-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    vi.resetModules();
+    const workerAfterRestart = await import("../background/index");
+    const restoredReport = await workerAfterRestart.handleRequest({
+      type: "GET_FILL_REPORT", providerId: FIXTURES.PROVIDER_ID,
+    }) as { submitted: boolean; summary: { aiReview?: { learning?: { state?: string } } } };
+    expect(restoredReport).toMatchObject({
+      submitted: true,
+      summary: { aiReview: { learning: { state: "failed" } } },
+    });
+    const restored = await workerAfterRestart.handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(restored.state).toBe("learned");
+
+    // A forged/stale accepted receipt without a successful fill-event report
+    // is revoked and cannot become a learned portal map.
+    await seedAcceptedAiLearningReceipt({ eventRecorded: false });
+    const current = stub.sessionStore.get(workerAfterRestart.AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(workerAfterRestart.AI_ACCEPTED_RECEIPT_KEY, {
+      ...current,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    mock.state.touches.set("unlogged-touch", {
+      id: "unlogged-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const before = mock.state.learningRequests.length;
+    const refused = await workerAfterRestart.handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(refused.state).toBe("revoked");
+    expect(mock.state.learningRequests).toHaveLength(before);
+    expect(seeded.mappings).toHaveLength(1);
   });
 });
 

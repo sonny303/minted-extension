@@ -10,10 +10,23 @@ import type { FillInstruction, FillPageResult, ReportedField } from "../shared/f
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import type { SelectorMatchReport } from "../shared/selectorMatch";
 import type { PickOutcome } from "../content/elementPicker";
+import type { ControlSummary } from "../shared/nanoAi";
 
 export interface TabFrame {
   frameId: number;
   url: string;
+}
+
+export interface FramedAiScan {
+  frameId: number;
+  url: string;
+  controls: ControlSummary[];
+}
+
+export interface AiScanAcrossFrames {
+  frames: FramedAiScan[];
+  controls: ControlSummary[];
+  ambiguousSelectors: string[];
 }
 
 /** Frames in the tab, or `[{ frameId: 0 }]` when webNavigation is unavailable. */
@@ -109,12 +122,14 @@ function reportKey(field: ReportedField): string {
  */
 export function mergeFillPageResults(results: FillPageResult[]): FillPageResult {
   const filledLabels = new Set<string>();
+  const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped = new Map<string, ReportedField>();
   let pageFields = 0;
 
   for (const result of results) {
     pageFields += result.pageFields;
     for (const label of result.filled) filledLabels.add(label);
+    writes.push(...(result.writes ?? []));
   }
 
   for (const result of results) {
@@ -138,9 +153,167 @@ export function mergeFillPageResults(results: FillPageResult[]): FillPageResult 
 
   return {
     filled: [...filledLabels],
+    writes,
     skipped: [...skipped.values()],
     pageFields,
   };
+}
+
+/** Scan each frame locally. Frame IDs and URLs remain worker-owned and are
+ * returned only to the caller, never to the panel or a stored field map. */
+export async function scanUnmappedControlsAcrossFrames(
+  tabId: number,
+  scanId: string,
+  activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null }>,
+): Promise<AiScanAcrossFrames> {
+  const frames = await listTabFrames(tabId);
+  const scanned = await Promise.all(frames.map(async (frame): Promise<FramedAiScan | null> => {
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "SCAN_UNMAPPED_CONTROLS",
+        scanId,
+        activeMaps,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      if (!raw?.ok || !Array.isArray(raw.data)) return null;
+      return {
+        frameId: frame.frameId,
+        url: frame.url,
+        controls: raw.data as ControlSummary[],
+      };
+    } catch {
+      return null;
+    }
+  }));
+  const live = scanned.filter((item): item is FramedAiScan => item != null);
+  if (live.length === 0) throw new Error("Could not scan the enrollment form");
+
+  const occurrences = new Map<string, number>();
+  for (const frame of live) {
+    for (const control of frame.controls) {
+      occurrences.set(control.selector, (occurrences.get(control.selector) ?? 0) + 1);
+    }
+  }
+  const ambiguousSelectors = [...occurrences]
+    .filter(([, count]) => count > 1)
+    .map(([selector]) => selector);
+  const ambiguous = new Set(ambiguousSelectors);
+  for (const frame of live) {
+    frame.controls = frame.controls.filter((control) => !ambiguous.has(control.selector));
+  }
+  return {
+    frames: live,
+    controls: live.flatMap((frame) => frame.controls),
+    ambiguousSelectors,
+  };
+}
+
+export async function clearAiScanAcrossFrames(
+  tabId: number,
+  scanId: string,
+  frameIds: number[],
+): Promise<void> {
+  await Promise.all(frameIds.map((frameId) => sendToFrame(tabId, frameId, {
+    type: "CLEAR_AI_SCAN",
+    scanId,
+  }).catch(() => undefined)));
+}
+
+export async function clearAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<number> {
+  const responses = await sendToAllFrames(tabId, { type: "CLEAR_AI_FILL", fillSessionId });
+  return responses.reduce((count, response) =>
+    response.ok && typeof response.data === "number" ? count + response.data : count,
+  0);
+}
+
+export async function acceptAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "ACCEPT_AI_FILL", fillSessionId });
+}
+
+/** Release value-bearing undo snapshots after the successful submission touch. */
+export async function finalizeAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "FINALIZE_AI_FILL", fillSessionId });
+}
+
+/** Target AI instructions only to the frame that produced each selector. */
+export async function applyAiFillAcrossBoundFrames(
+  tabId: number,
+  scanId: string,
+  fillSessionId: string,
+  frames: FramedAiScan[],
+  instructions: FillInstruction[],
+): Promise<FillPageResult> {
+  const liveFrames = await listTabFrames(tabId);
+  const results: FillPageResult[] = [];
+  for (const frame of frames) {
+    const stillLive = liveFrames.some((current) =>
+      current.frameId === frame.frameId && current.url === frame.url,
+    );
+    const bound = new Set(frame.controls.map((control) => control.selector));
+    const forFrame = instructions.filter((instruction) => bound.has(instruction.selector));
+    if (forFrame.length === 0) continue;
+    if (!stillLive) {
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed after scan",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+      continue;
+    }
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "APPLY_AI_FILL",
+        scanId,
+        fillSessionId,
+        instructions: forFrame,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      if (raw?.ok && raw.data) {
+        const result = raw.data as FillPageResult;
+        // The transient frame binding lets learning preserve each iframe's
+        // actual page scope without persisting an ephemeral frame id.
+        results.push({
+          ...result,
+          writes: result.writes?.map((write) => ({ ...write, pageUrl: frame.url })),
+        });
+      } else {
+        results.push({
+          filled: [],
+          writes: [],
+          skipped: forFrame.map((instruction) => ({
+            label: instruction.selector,
+            reason: "AI target could not be applied",
+            kind: "skipped",
+          })),
+          pageFields: 0,
+        });
+      }
+    } catch {
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed before apply",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+    }
+  }
+  return mergeFillPageResults(results);
 }
 
 /** Sum MATCH_SELECTOR reports; valid if any frame parsed the selector. */
