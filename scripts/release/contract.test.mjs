@@ -96,6 +96,24 @@ describe("manifest and asset boundaries", () => {
     expect(base.name).toBe("Minted Panel Workbench");
   });
 
+  it("appends one verified candidate origin only to a staging manifest", () => {
+    const candidateOrigin = "https://mintedpanel-staging-candidate.vercel.app";
+    const manifest = releaseManifest(base, "staging", base.version, { candidateOrigin });
+    expect(manifest.host_permissions).toEqual([
+      ...targetFor("staging").origins.map((origin) => `${origin}/*`),
+      `${candidateOrigin}/*`,
+      "https://vmznysvietfaddakkegt.supabase.co/*",
+    ]);
+    expect(manifest.externally_connectable.matches).toEqual([
+      ...targetFor("staging").origins.map((origin) => `${origin}/*`),
+      `${candidateOrigin}/*`,
+    ]);
+    expect(() => validateManifest(manifest, "staging", base.version, { candidateOrigin })).not.toThrow();
+    expect(() => releaseManifest(base, "production", base.version, { candidateOrigin })).toThrow(
+      "CANDIDATE_TARGET",
+    );
+  });
+
   it("rejects broad permissions, foreign senders and version drift", () => {
     const manifest = releaseManifest(base, "staging", base.version);
     manifest.externally_connectable.matches.push("https://www.mintedpanel.com/*");
@@ -111,6 +129,19 @@ describe("manifest and asset boundaries", () => {
       "MANIFEST_PERMISSIONS",
     );
     expect(() => releaseManifest(base, "staging", "9.9.9")).toThrow("PACKAGE_VERSION");
+  });
+
+  it("rejects candidate origins with a path, query, credentials or stable target", () => {
+    for (const candidateOrigin of [
+      "https://candidate.example.invalid/form",
+      "https://candidate.example.invalid?x=1",
+      "https://user:pass@candidate.example.invalid",
+      "https://staging.mintedpanel.com",
+      "https://mintedpanel.vercel.app",
+    ])
+      expect(() => releaseManifest(base, "staging", base.version, { candidateOrigin })).toThrow(
+        "CANDIDATE_ORIGIN",
+      );
   });
 
   it("rejects wrong-target URLs and embedded credentials without echoing contents", () => {
@@ -173,6 +204,17 @@ describe("restricted production Store prerequisite check", () => {
   });
   it("accepts a complete synthetic candidate and exact observed private destination", () =>
     expect(validateStoreDestination(storeFixture())).toEqual(accepted));
+  it("never treats a candidate-only staging package as Store-qualified", () => {
+    const value = storeFixture();
+    value.stagingRecord.candidate = {
+      origin: "https://mintedpanel-staging-candidate.vercel.app",
+    };
+    expect(validateStoreDestination(value)).toEqual({
+      ok: false,
+      localPrerequisitesSatisfied: false,
+      code: "CANDIDATE_NOT_STORE_QUALIFIED",
+    });
+  });
   it("keeps immutable packaging records distinct from later supplied test evidence", () => {
     const value = storeFixture();
     expect(value.record.userManualResult).toBe("PENDING");
