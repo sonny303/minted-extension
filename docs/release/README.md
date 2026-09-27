@@ -51,6 +51,49 @@ dirty. This permits local testing, but the Store check rejects that package.
 Commit/review and rebuild clean before a production extension release. PM owns
 PR merges; these commands do not merge or push anything.
 
+## Reviewed staging candidate origin (local testing only)
+
+When the stable staging aliases are blocked by hosting protection, an owner may
+prepare a staging-only package for one exact Vercel Preview deployment. The
+builder performs authenticated, read-only Vercel API checks using `VERCEL_TOKEN`
+from the process environment. It verifies the deployment is `READY`, belongs to
+project `prj_1t7NkRJMkjTuFXEBEP4GjfN4B6Ch` and team
+`team_230fpJ9MgCj9ssW3LiIckfyA`, matches the supplied panel SHA and the
+`sonny303/mintedpanel` `staging` source, and is attached to the supplied origin.
+It also records a provider configuration digest derived from project and
+environment metadata without copying environment values.
+
+```sh
+VERCEL_TOKEN='provided-by-the-owner-session' npm run build:staging -- \
+  --config staging-public.local \
+  --candidate-origin https://mintedpanel-staging-candidate.vercel.app \
+  --candidate-deployment-id dpl_REVIEWED_CANDIDATE \
+  --candidate-panel-sha PANEL_COMMIT_SHA
+```
+
+The candidate origin must be one canonical HTTPS origin with no path, query,
+fragment, port or user information. The provider readback, candidate origin,
+deployment ID, panel SHA, fixed project/team IDs, deployment release digest,
+source tree SHA, positive source file count and observed project configuration
+digest are retained in `provenance.json`. The observed project configuration is
+read at verification time; deployment-time configuration binding and receipt
+binding remain **UNVERIFIED**, and candidate `releaseAdmission` remains
+**BLOCKED**. The package keeps both stable staging origins and
+adds the candidate origin to the generated API base, host permissions and
+external handoff allowlist. Production builds reject all candidate inputs, and
+Store prerequisite checks reject candidate provenance.
+
+Load the generated package from the same absolute unpacked path used for the
+staging installation, reload that extension after rebuilding, then reload test
+tabs so content scripts are replaced. Record the actual Chrome extension ID and
+compare it with the web sender/CORS configuration during the later owner-managed
+cutover. Candidate packaging and provider readback do not establish a native
+browser PASS, hosted runtime PASS, or Store qualification. Keep the manual
+record pending or blocked until the exact installation, reload, ID comparison,
+authenticated staging account, tenant/role, handoff, fill/human-submit, and
+sign-out/reload scenarios are actually run; do not claim native PASS from this
+build.
+
 ## What is ready to test
 
 Package compilation and static environment checks can pass independently of

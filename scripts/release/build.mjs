@@ -23,8 +23,16 @@ import {
   sha256,
   canonicalDigest,
 } from "./contract.mjs";
+import {
+  createStagingCandidateVerifier,
+  validateCandidateInput,
+  validateCandidateProvenance,
+} from "./candidate.mjs";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const repositoryRoot = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 const allowedFile =
   /^(?:manifest\.json|sidepanel\.html|background\.js|content\.js|icons\/icon(?:16|32|48|128)\.png|fonts\/[a-zA-Z0-9_-]+\.woff2|fonts\/README\.md|assets\/[a-zA-Z0-9_-]+\.(?:js|css|woff2))$/;
 const fail = (code) => {
@@ -60,10 +68,14 @@ async function sourceSnapshot() {
     "vite.content.config.ts",
   ];
   for (const path of ["src", "public", "scripts/release"])
-    for (const name of await filesUnder(join(repositoryRoot, path))) names.push(`${path}/${name}`);
+    for (const name of await filesUnder(join(repositoryRoot, path)))
+      names.push(`${path}/${name}`);
   const files = [];
   for (const path of names.sort())
-    files.push({ path, sha256: sha256(await readFile(join(repositoryRoot, path))) });
+    files.push({
+      path,
+      sha256: sha256(await readFile(join(repositoryRoot, path))),
+    });
   return {
     sha: git("rev-parse", "HEAD"),
     tree: git("rev-parse", "HEAD^{tree}"),
@@ -72,15 +84,28 @@ async function sourceSnapshot() {
   };
 }
 
-export async function inspectBundle(directory, target, config, version) {
+export async function inspectBundle(
+  directory,
+  target,
+  config,
+  version,
+  options = {},
+) {
   const names = await filesUnder(directory);
-  if (!names.length || names.some((name) => !allowedFile.test(name))) fail("PACKAGE_FILE_SET");
-  for (const name of ["manifest.json", "sidepanel.html", "background.js", "content.js"])
+  if (!names.length || names.some((name) => !allowedFile.test(name)))
+    fail("PACKAGE_FILE_SET");
+  for (const name of [
+    "manifest.json",
+    "sidepanel.html",
+    "background.js",
+    "content.js",
+  ])
     if (!names.includes(name)) fail("PACKAGE_INCOMPLETE");
   validateManifest(
     JSON.parse(await readFile(join(directory, "manifest.json"), "utf8")),
     target,
     version,
+    options,
   );
   const files = [];
   const textParts = [];
@@ -116,13 +141,43 @@ export async function inspectBundle(directory, target, config, version) {
 export async function buildExtension({
   target,
   configuration,
+  candidate,
+  candidateVerifier,
   allowDirty = false,
   outputRoot = join(repositoryRoot, "release-artifacts"),
 }) {
   const profile = targetFor(target);
-  const config = validatePublicConfiguration(target, configuration);
+  let verifiedCandidate = null;
+  if (candidate !== undefined) {
+    if (target !== "staging") fail("CANDIDATE_TARGET");
+    const input = validateCandidateInput(candidate);
+    if (!candidateVerifier || typeof candidateVerifier.verify !== "function")
+      fail("CANDIDATE_PROVIDER_REQUIRED");
+    verifiedCandidate = await candidateVerifier.verify(input);
+    validateCandidateProvenance(verifiedCandidate);
+    if (
+      verifiedCandidate.origin !== input.origin ||
+      verifiedCandidate.deploymentId !== input.deploymentId
+    )
+      fail("CANDIDATE_PROVENANCE");
+  }
+  const effectiveConfiguration = verifiedCandidate
+    ? { ...configuration, VITE_API_BASE_URL: verifiedCandidate.origin }
+    : configuration;
+  const config = validatePublicConfiguration(
+    target,
+    effectiveConfiguration,
+    Date.now(),
+    {
+      apiOrigin: verifiedCandidate?.origin,
+    },
+  );
   const source = await sourceSnapshot();
   if (source.dirty && !allowDirty) fail("DIRTY_SOURCE");
+  const candidateOrigin = verifiedCandidate?.origin;
+  const handoffOrigins = candidateOrigin
+    ? [...profile.origins, candidateOrigin]
+    : profile.origins;
   await mkdir(outputRoot, { recursive: true });
   if ((await lstat(outputRoot)).isSymbolicLink()) fail("OUTPUT_SYMLINK");
   const lockPath = join(outputRoot, `.${target}.lock`);
@@ -137,7 +192,9 @@ export async function buildExtension({
   const previous = join(outputRoot, `.previous-${target}-${randomUUID()}`);
   let savedPrevious = false;
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    await lock.writeFile(
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+    );
     temporary = await mkdtemp(join(outputRoot, `.building-${target}-`));
     const outDir = join(temporary, "extension");
     const common = {
@@ -161,7 +218,7 @@ export async function buildExtension({
             JSON.stringify(value),
           ]),
         ),
-        __MINTED_RELEASE_HANDOFF_ORIGINS__: JSON.stringify(profile.origins),
+        __MINTED_RELEASE_HANDOFF_ORIGINS__: JSON.stringify(handoffOrigins),
       },
     };
     await build({
@@ -174,13 +231,19 @@ export async function buildExtension({
       configFile: join(repositoryRoot, "vite.content.config.ts"),
       build: { outDir, emptyOutDir: false, sourcemap: false },
     });
-    const pkg = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8"));
-    const base = JSON.parse(await readFile(join(repositoryRoot, "public/manifest.json"), "utf8"));
+    const pkg = JSON.parse(
+      await readFile(join(repositoryRoot, "package.json"), "utf8"),
+    );
+    const base = JSON.parse(
+      await readFile(join(repositoryRoot, "public/manifest.json"), "utf8"),
+    );
     await writeFile(
       join(outDir, "manifest.json"),
-      `${JSON.stringify(releaseManifest(base, target, pkg.version), null, 2)}\n`,
+      `${JSON.stringify(releaseManifest(base, target, pkg.version, { candidateOrigin }), null, 2)}\n`,
     );
-    const files = await inspectBundle(outDir, target, config, pkg.version);
+    const files = await inspectBundle(outDir, target, config, pkg.version, {
+      candidateOrigin,
+    });
     const archive = join(temporary, "extension.zip");
     execFileSync("zip", ["-X", "-q", archive, "-@"], {
       cwd: outDir,
@@ -192,15 +255,16 @@ export async function buildExtension({
     const record = {
       schemaVersion: 1,
       target,
-      distribution: target === "staging" ? "local-unpacked" : "restricted-store-candidate",
+      distribution:
+        target === "staging" ? "local-unpacked" : "restricted-store-candidate",
       repository: "sonny303/minted-extension",
       source,
       version: pkg.version,
       builtAt: new Date().toISOString(),
       nodeVersion: process.version,
       configurationDigest: canonicalDigest(config),
-      apiOrigin: profile.api,
-      webOrigins: profile.origins,
+      apiOrigin: config.VITE_API_BASE_URL,
+      webOrigins: handoffOrigins,
       supabaseRef: profile.ref,
       publicKeyDigest: sha256(config.VITE_SUPABASE_ANON_KEY),
       files,
@@ -211,11 +275,41 @@ export async function buildExtension({
       storeDestination: null,
       verificationType: "packaging-only",
       publicKeyValidation: "STRUCTURAL_ONLY",
-      hostedApiResult: target === "staging" ? "BLOCKED_DEPLOYMENT_PROTECTION" : "UNVERIFIED",
+      hostedApiResult:
+        target === "staging" ? "BLOCKED_DEPLOYMENT_PROTECTION" : "UNVERIFIED",
+      ...(verifiedCandidate
+        ? {
+            candidate: {
+              origin: verifiedCandidate.origin,
+              deploymentId: verifiedCandidate.deploymentId,
+              panelSha: verifiedCandidate.panelSha,
+              projectId: verifiedCandidate.projectId,
+              teamId: verifiedCandidate.teamId,
+              provider: verifiedCandidate.provider,
+              verification: verifiedCandidate.verification,
+              verifiedAt: verifiedCandidate.verifiedAt,
+              mintedReleaseDigest: verifiedCandidate.mintedReleaseDigest,
+              mintedSourceTreeSha: verifiedCandidate.mintedSourceTreeSha,
+              mintedSourceFileCount: verifiedCandidate.mintedSourceFileCount,
+              observedProjectConfigurationDigest:
+                verifiedCandidate.observedProjectConfigurationDigest,
+              deploymentConfigurationBinding:
+                verifiedCandidate.deploymentConfigurationBinding,
+              receiptBinding: verifiedCandidate.receiptBinding,
+              releaseAdmission: verifiedCandidate.releaseAdmission,
+              candidateOnly: true,
+            },
+          }
+        : {}),
+      ...(verifiedCandidate ? { releaseAdmission: "BLOCKED" } : {}),
     };
-    await writeFile(join(temporary, "provenance.json"), `${JSON.stringify(record, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(
+      join(temporary, "provenance.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      {
+        mode: 0o600,
+      },
+    );
     try {
       const stat = await lstat(destination);
       if (!stat.isDirectory() || stat.isSymbolicLink()) fail("OUTPUT_SYMLINK");
@@ -259,10 +353,19 @@ export async function verifyPackage(directory, record, expectedTarget) {
     typeof record.version !== "string"
   )
     fail("ARTIFACT_MISMATCH");
+  if (record.candidate !== undefined) {
+    validateCandidateProvenance(record.candidate);
+    if (record.apiOrigin !== record.candidate.origin) fail("ARTIFACT_MISMATCH");
+  }
   const extension = join(directory, "extension");
   const names = await filesUnder(extension);
   if (names.some((name) => !allowedFile.test(name))) fail("ARTIFACT_MISMATCH");
-  for (const name of ["manifest.json", "sidepanel.html", "background.js", "content.js"])
+  for (const name of [
+    "manifest.json",
+    "sidepanel.html",
+    "background.js",
+    "content.js",
+  ])
     if (!names.includes(name)) fail("ARTIFACT_MISMATCH");
   const files = [];
   for (const path of names) {
@@ -273,7 +376,10 @@ export async function verifyPackage(directory, record, expectedTarget) {
     await readLocalJson(join(extension, "manifest.json")),
     expectedTarget,
     record.version,
+    { candidateOrigin: record.candidate?.origin },
   );
+  if (record.candidate !== undefined)
+    validateCandidateProvenance(record.candidate);
   const archive = join(directory, "extension.zip");
   const archiveStat = await lstat(archive);
   if (
@@ -288,17 +394,31 @@ export async function verifyPackage(directory, record, expectedTarget) {
 
 export async function readLocalJson(path) {
   const stat = await lstat(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576) fail("INPUT_FILE");
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1048576)
+    fail("INPUT_FILE");
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+) {
   try {
     const args = process.argv.slice(2);
     const options = {};
     for (let index = 0; index < args.length; index++) {
       const key = args[index];
-      if (!["--target", "--config", "--allow-dirty"].includes(key) || Object.hasOwn(options, key))
+      if (
+        ![
+          "--target",
+          "--config",
+          "--allow-dirty",
+          "--candidate-origin",
+          "--candidate-deployment-id",
+          "--candidate-panel-sha",
+        ].includes(key) ||
+        Object.hasOwn(options, key)
+      )
         fail("ARGUMENTS");
       if (key === "--allow-dirty") options[key] = true;
       else {
@@ -308,15 +428,42 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       }
     }
     if (!options["--target"] || !options["--config"]) fail("ARGUMENTS");
+    const candidateFlags = [
+      options["--candidate-origin"],
+      options["--candidate-deployment-id"],
+      options["--candidate-panel-sha"],
+    ];
+    if (
+      candidateFlags.some((value) => value !== undefined) &&
+      candidateFlags.some((value) => value === undefined)
+    )
+      fail("CANDIDATE_INPUT");
+    const candidate = candidateFlags.every((value) => value !== undefined)
+      ? {
+          origin: options["--candidate-origin"],
+          deploymentId: options["--candidate-deployment-id"],
+          panelSha: options["--candidate-panel-sha"],
+        }
+      : undefined;
+    if (candidate && options["--target"] !== "staging")
+      fail("CANDIDATE_TARGET");
     const result = await buildExtension({
       target: options["--target"],
       configuration: await readLocalJson(options["--config"]),
+      ...(candidate
+        ? {
+            candidate,
+            candidateVerifier: createStagingCandidateVerifier({
+              credential: process.env.VERCEL_TOKEN,
+            }),
+          }
+        : {}),
       allowDirty: options["--allow-dirty"] === true,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     const known =
-      /^(?:TARGET_REQUIRED|INVALID_CLOCK|PUBLIC_CONFIGURATION|CONFIGURATION_TARGET|PUBLIC_ANON_KEY|DIRTY_SOURCE|BUILD_LOCKED|SOURCE_CHANGED_DURING_BUILD|PACKAGE_VERSION|MANIFEST_IDENTITY|MANIFEST_TARGET|MANIFEST_PERMISSIONS|BUNDLE_WRONG_TARGET|BUNDLE_CREDENTIAL|PACKAGE_FILE_SET|PACKAGE_INCOMPLETE|RUNTIME_CONFIGURATION|HANDOFF_CONFIGURATION|SYMLINK_INPUT|NONREGULAR_INPUT|OUTPUT_SYMLINK|INPUT_FILE|ARGUMENTS)$/;
+      /^(?:TARGET_REQUIRED|INVALID_CLOCK|PUBLIC_CONFIGURATION|CONFIGURATION_TARGET|PUBLIC_ANON_KEY|DIRTY_SOURCE|BUILD_LOCKED|SOURCE_CHANGED_DURING_BUILD|PACKAGE_VERSION|MANIFEST_IDENTITY|MANIFEST_TARGET|MANIFEST_PERMISSIONS|BUNDLE_WRONG_TARGET|BUNDLE_CREDENTIAL|PACKAGE_FILE_SET|PACKAGE_INCOMPLETE|RUNTIME_CONFIGURATION|HANDOFF_CONFIGURATION|SYMLINK_INPUT|NONREGULAR_INPUT|OUTPUT_SYMLINK|INPUT_FILE|ARGUMENTS|CANDIDATE_[A-Z0-9_]+)$/;
     process.stdout.write(
       `${JSON.stringify({ ok: false, code: known.test(error.message) ? error.message : "BUILD_FAILED" })}\n`,
     );
