@@ -10,6 +10,7 @@ import type {
   SearchResults,
 } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
+import type { AiLearningSummary } from "../shared/fill";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import {
   AuthRequiredError,
@@ -35,6 +36,7 @@ import {
   listSharedFieldMaps,
   listSharedPortals,
   postSubmissionTouch,
+  postBatchLearnPortalFieldMaps,
   proveSharedPortal,
   putViewPrefs,
   searchCases,
@@ -47,11 +49,25 @@ import {
 } from "../shared/structuredTouch";
 import { readActiveOrgId, writeActiveOrgId } from "./orgState";
 import { readPanelMode, writePanelMode } from "./mode";
-import { coveragePortal, fillPortal, sandboxFillPortal } from "./fill";
+import {
+  acceptActiveAiReview,
+  canonicalLearningPageUrl,
+  clearAiReviewInTab,
+  coveragePortal,
+  fillPortal,
+  invalidateActiveAiReviews,
+  invalidatePendingAiScans,
+  prepareAiFillPortal,
+  readActiveAiReview,
+  removeActiveAiReview,
+  sandboxFillPortal,
+  type AcceptedAiFillReceipt,
+} from "./fill";
 import { fillMockPortal } from "./mockFill";
 import { ensureContentScript } from "./inject";
 import {
   clearFormAcrossFrames,
+  finalizeAiFillAcrossFrames,
   matchSelectorAcrossFrames,
   pickElementAcrossFrames,
   scanFieldsAcrossFrames,
@@ -111,11 +127,125 @@ const FILL_REPORT_PREFIX = "minted.fillReport.";
 // server-side from this identity (single-org v0), so an identity change is
 // also the org change; a future org picker's selection joins this check.
 const WORKBENCH_OWNER_KEY = "minted.workbenchOwner";
+export const AI_ACCEPTED_RECEIPT_KEY = "minted.aiAcceptedReceipt";
+export const AI_SELECTION_REVISION_KEY = "minted.aiSelectionRevision";
+let fillSelectionRevision = 0;
+let activeTabRevision = 0;
+const tabNavigationRevision = new Map<number, number>();
+let aiReceiptMutationTail: Promise<void> = Promise.resolve();
+const aiLearningControllers = new Map<string, AbortController>();
+
+async function advanceAiSelectionRevision(): Promise<number> {
+  let nextRevision = 0;
+  const operation = async (): Promise<number> => {
+    const entry = await chrome.storage.session.get(AI_SELECTION_REVISION_KEY);
+    const previous = entry[AI_SELECTION_REVISION_KEY];
+    nextRevision = Number.isSafeInteger(previous) && typeof previous === "number" ? previous + 1 : 1;
+    await chrome.storage.session.set({
+      [AI_SELECTION_REVISION_KEY]: nextRevision,
+      [AI_ACCEPTED_RECEIPT_KEY]: null,
+    });
+    return nextRevision;
+  };
+  const mutation = aiReceiptMutationTail.then(operation, operation);
+  aiReceiptMutationTail = mutation.then(() => undefined, () => undefined);
+  return mutation;
+}
+
+function abortAiLearning(): void {
+  for (const controller of aiLearningControllers.values()) controller.abort();
+  aiLearningControllers.clear();
+}
+
+function noteFillNavigation(tabId: number): void {
+  tabNavigationRevision.set(tabId, (tabNavigationRevision.get(tabId) ?? 0) + 1);
+  void invalidatePendingAiScans(tabId);
+  void invalidateActiveAiReviews(tabId);
+  // A navigation cancels pending/unaccepted work. An already accepted,
+  // value-free receipt survives the portal's submit redirect for Step6.
+}
+
+chrome.tabs?.onActivated?.addListener(() => {
+  activeTabRevision += 1;
+  void invalidatePendingAiScans();
+  void invalidateActiveAiReviews();
+});
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
+  if (changeInfo.url != null) noteFillNavigation(tabId);
+});
+chrome.webNavigation?.onCommitted?.addListener((details) => {
+  if (details.frameId === 0) noteFillNavigation(details.tabId);
+});
 
 async function readSessionString(key: string): Promise<string | null> {
   const entry = await chrome.storage.session.get(key);
   const value = entry[key];
   return typeof value === "string" ? value : null;
+}
+
+async function readAiSelectionRevision(): Promise<number> {
+  const entry = await chrome.storage.session.get(AI_SELECTION_REVISION_KEY);
+  const value = entry[AI_SELECTION_REVISION_KEY];
+  return Number.isSafeInteger(value) && typeof value === "number" ? value : 0;
+}
+
+function isAiLearningSummary(value: unknown): value is AiLearningSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const summary = value as Record<string, unknown>;
+  return ["accepted", "pending", "learned", "failed", "revoked"].includes(String(summary.state)) &&
+    [summary.confirmedSavedCount, summary.insertedCount, summary.preservedCount].every((count) =>
+      Number.isSafeInteger(count) && typeof count === "number" && count >= 0,
+    ) && (summary.reason == null || ["request_failed", "context_changed", "missing_page_scope"].includes(String(summary.reason)));
+}
+
+function hasExactKeys(value: object, expected: string[]): boolean {
+  return Object.keys(value).sort().join(",") === [...expected].sort().join(",");
+}
+
+function isAcceptedAiFillReceipt(value: unknown): value is AcceptedAiFillReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const receipt = value as AcceptedAiFillReceipt;
+  const receiptKeys = [
+    "tabId", "fillSessionId", "providerId", "caseId", "portalKey", "state",
+    "facilityId", "orgId", "actorId", "selectionRevision", "touchRecorded",
+    "learning", "mappings",
+  ];
+  return Number.isSafeInteger(receipt.tabId) && typeof receipt.tabId === "number" &&
+    hasExactKeys(value, receiptKeys) &&
+    typeof receipt.fillSessionId === "string" && typeof receipt.providerId === "string" &&
+    typeof receipt.caseId === "string" && typeof receipt.portalKey === "string" &&
+    typeof receipt.state === "string" &&
+    (receipt.facilityId == null || typeof receipt.facilityId === "string") &&
+    (receipt.orgId == null || typeof receipt.orgId === "string") &&
+    typeof receipt.actorId === "string" && Number.isSafeInteger(receipt.selectionRevision) &&
+    typeof receipt.selectionRevision === "number" && typeof receipt.touchRecorded === "boolean" &&
+    isAiLearningSummary(receipt.learning) && Array.isArray(receipt.mappings) &&
+    receipt.mappings.length > 0 && receipt.mappings.length <= 32 &&
+    new Set(receipt.mappings.map((mapping) => mapping?.selector)).size === receipt.mappings.length &&
+    receipt.mappings.every((mapping) => mapping != null && hasExactKeys(mapping, [
+      "selector", "token", "confidence", "fieldType", "pageUrl",
+    ]) && typeof mapping.selector === "string" && mapping.selector.length > 0 &&
+      typeof mapping.token === "string" && Number.isFinite(mapping.confidence) &&
+      mapping.confidence >= 0.85 && mapping.confidence <= 1 &&
+      ["text", "select", "radio", "checkbox", "date"].includes(mapping.fieldType) &&
+      (mapping.pageUrl == null || canonicalLearningPageUrl(mapping.pageUrl) === mapping.pageUrl));
+}
+
+async function readAcceptedAiFillReceipt(): Promise<AcceptedAiFillReceipt | null> {
+  const entry = await chrome.storage.session.get(AI_ACCEPTED_RECEIPT_KEY);
+  const value = entry[AI_ACCEPTED_RECEIPT_KEY];
+  return isAcceptedAiFillReceipt(value) ? value : null;
+}
+
+async function writeAcceptedAiFillReceipt(receipt: AcceptedAiFillReceipt | null): Promise<boolean> {
+  const operation = async (): Promise<boolean> => {
+    if (receipt != null && (await readAiSelectionRevision()) !== receipt.selectionRevision) return false;
+    await chrome.storage.session.set({ [AI_ACCEPTED_RECEIPT_KEY]: receipt });
+    return true;
+  };
+  const mutation = aiReceiptMutationTail.then(operation, operation);
+  aiReceiptMutationTail = mutation.then(() => undefined, () => undefined);
+  return mutation;
 }
 
 async function writeSessionString(
@@ -141,7 +271,8 @@ async function clearOrgSelections(): Promise<void> {
       key.startsWith(SELECTED_CASE_PREFIX) ||
       key.startsWith(SELECTED_FACILITY_PREFIX) ||
       key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
-      key.startsWith(FILL_REPORT_PREFIX),
+      key.startsWith(FILL_REPORT_PREFIX) ||
+      key === AI_ACCEPTED_RECEIPT_KEY,
   );
   if (keys.length) await chrome.storage.session.remove(keys);
 }
@@ -157,9 +288,72 @@ async function clearOrgScopedState(
 // Runs on sign-out and when a different identity signs in. Deliberately not
 // the GoTrue session key — auth storage is owned by auth.ts.
 async function clearWorkbenchState(): Promise<void> {
+  await beginAiFillAttempt();
   await clearOrgScopedState();
   await writeActiveOrgId(null);
   await chrome.storage.session.remove(WORKBENCH_OWNER_KEY);
+}
+
+async function beginAiFillAttempt(): Promise<void> {
+  const priorReceipt = await readAcceptedAiFillReceipt().catch(() => null);
+  fillSelectionRevision += 1;
+  abortAiLearning();
+  await advanceAiSelectionRevision();
+  await invalidatePendingAiScans();
+  await invalidateActiveAiReviews();
+  if (priorReceipt && !priorReceipt.touchRecorded) {
+    await finalizeAiFillAcrossFrames(priorReceipt.tabId, priorReceipt.fillSessionId).catch(() => undefined);
+  }
+}
+
+async function createAiFillGuard(request: {
+  tabId: number;
+  providerId: string;
+  caseId: string;
+  facilityId: string | null;
+}) {
+  const revision = fillSelectionRevision;
+  const activeRevision = activeTabRevision;
+  const navigationRevision = tabNavigationRevision.get(request.tabId) ?? 0;
+  const [orgId, selectionRevision] = await Promise.all([
+    readActiveOrgId(),
+    readAiSelectionRevision(),
+  ]);
+  const firstTab = await chrome.tabs.get(request.tabId);
+  const tabUrl = typeof firstTab.url === "string" ? firstTab.url : "";
+  if (!tabUrl) throw new Error("The active portal tab has no readable URL.");
+  const validate = async (): Promise<void> => {
+    if (
+      revision !== fillSelectionRevision ||
+      activeRevision !== activeTabRevision ||
+      navigationRevision !== (tabNavigationRevision.get(request.tabId) ?? 0)
+    ) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+    const [providerId, caseId, facilityId, currentOrg, currentTab, activeTabs, currentRevision] = await Promise.all([
+      readSessionString(SELECTED_PROVIDER_KEY),
+      readSessionString(SELECTED_CASE_PREFIX + request.providerId),
+      readSessionString(SELECTED_FACILITY_PREFIX + request.providerId),
+      readActiveOrgId(),
+      chrome.tabs.get(request.tabId),
+      chrome.tabs.query({ active: true, currentWindow: true }),
+      readAiSelectionRevision(),
+    ]);
+    if (
+      providerId !== request.providerId ||
+      caseId !== request.caseId ||
+      facilityId !== request.facilityId ||
+      currentOrg !== orgId ||
+      currentRevision !== selectionRevision ||
+      currentTab.url !== tabUrl ||
+      activeTabs[0]?.id !== request.tabId
+    ) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+    await assertFillMatchesActiveCase(request);
+  };
+  await validate();
+  return { orgId, revision, selectionRevision, tabUrl, validate };
 }
 
 // S5.2 — the capture session lives in chrome.storage.session (dies with the
@@ -234,7 +428,294 @@ async function readFillReport(
     .map(([, value]) => value)
     .filter(isFillReportRecord)
     .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
-  return records[0] ?? null;
+  const record = records[0] ?? null;
+  if (!record?.summary.aiReview) return record;
+  let receipt = await readAcceptedAiFillReceipt();
+  if (receipt?.fillSessionId === record.summary.fillSessionId) {
+    // If the worker stopped while a batch was pending, the accepted receipt
+    // and successful touch are durable but no request is still running. Make
+    // the retry action visible; the server's selector key makes a replay safe.
+    if (receipt.touchRecorded && receipt.learning.state === "pending" &&
+      !aiLearningControllers.has(receipt.fillSessionId)) {
+      const failed: AiLearningSummary = {
+        state: "failed",
+        confirmedSavedCount: receipt.learning.confirmedSavedCount,
+        insertedCount: receipt.learning.insertedCount,
+        preservedCount: receipt.learning.preservedCount,
+        reason: "request_failed",
+      };
+      const recovered = { ...receipt, learning: failed };
+      if (await writeAcceptedAiFillReceipt(recovered)) receipt = recovered;
+    }
+    return {
+      ...record,
+      submitted: record.submitted || receipt.touchRecorded,
+      summary: {
+        ...record.summary,
+        aiReview: { ...record.summary.aiReview, accepted: true, learning: receipt.learning },
+      },
+    };
+  }
+  if (!record.summary.aiReview.accepted) return record;
+  // The accepted receipt is invalidated by any context switch/refill/sign-out.
+  // Keep completed learning history in the report, but don't show stale pending
+  // consent as usable after its receipt has been removed.
+  if (record.summary.aiReview.learning?.state === "learned") return record;
+  return {
+    ...record,
+    summary: {
+      ...record.summary,
+      aiReview: {
+        ...record.summary.aiReview,
+        learning: {
+          state: "revoked",
+          confirmedSavedCount: 0,
+          insertedCount: 0,
+          preservedCount: 0,
+          reason: "context_changed",
+        },
+      },
+    },
+  };
+}
+
+async function acceptedReceiptMatchesCurrentContext(
+  receipt: AcceptedAiFillReceipt,
+  expected?: { caseId: string; providerId: string; portalKey: string; fillSessionId: string },
+): Promise<boolean> {
+  const [actorId, ownerId, orgId, providerId, caseId, facilityId, selectionRevision] = await Promise.all([
+    currentUserId(),
+    readSessionString(WORKBENCH_OWNER_KEY),
+    readActiveOrgId(),
+    readSessionString(SELECTED_PROVIDER_KEY),
+    readSessionString(SELECTED_CASE_PREFIX + receipt.providerId),
+    readSessionString(SELECTED_FACILITY_PREFIX + receipt.providerId),
+    readAiSelectionRevision(),
+  ]);
+  return actorId === receipt.actorId && ownerId === receipt.actorId &&
+    orgId === receipt.orgId && providerId === receipt.providerId &&
+    caseId === receipt.caseId && facilityId === receipt.facilityId &&
+    selectionRevision === receipt.selectionRevision &&
+    (expected == null || (expected.caseId === receipt.caseId &&
+      expected.providerId === receipt.providerId && expected.portalKey === receipt.portalKey &&
+      expected.fillSessionId === receipt.fillSessionId));
+}
+
+async function updateAiLearningReport(
+  receipt: AcceptedAiFillReceipt,
+  learning: AiLearningSummary,
+  submitted?: boolean,
+): Promise<void> {
+  const key = fillReportKey(receipt.providerId, receipt.portalKey);
+  const entry = await chrome.storage.session.get(key);
+  const record = entry[key];
+  if (!isFillReportRecord(record) || record.caseId !== receipt.caseId ||
+    record.summary.fillSessionId !== receipt.fillSessionId || record.summary.aiReview == null) return;
+  await chrome.storage.session.set({
+    [key]: {
+      ...record,
+      ...(submitted == null ? {} : { submitted }),
+      summary: {
+        ...record.summary,
+        aiReview: { ...record.summary.aiReview, learning },
+      },
+    },
+  });
+}
+
+async function hasAcceptedSuccessfulFillReport(receipt: AcceptedAiFillReceipt): Promise<boolean> {
+  const entry = await chrome.storage.session.get(fillReportKey(receipt.providerId, receipt.portalKey));
+  const record = entry[fillReportKey(receipt.providerId, receipt.portalKey)];
+  const review = isFillReportRecord(record) && record.caseId === receipt.caseId &&
+    record.summary.fillSessionId === receipt.fillSessionId ? record.summary.aiReview : null;
+  if (!isFillReportRecord(record) || record.summary.state !== receipt.state || record.summary.eventRecorded !== true ||
+    review?.accepted !== true || review.cleared === true || review.writes.length === 0) return false;
+  const normalized = (mappings: AcceptedAiFillReceipt["mappings"]) => mappings
+    .map(({ selector, token, confidence, fieldType, pageUrl }) =>
+      `${selector}\u0000${token}\u0000${confidence}\u0000${fieldType}\u0000${pageUrl ?? ""}`)
+    .sort();
+  return JSON.stringify(normalized(review.writes)) === JSON.stringify(normalized(receipt.mappings));
+}
+
+function aiLearningBatches(receipt: AcceptedAiFillReceipt): {
+  batches: Array<{ pageUrl: string; mappings: AcceptedAiFillReceipt["mappings"] }>;
+  missingPageScope: number;
+} {
+  const grouped = new Map<string, AcceptedAiFillReceipt["mappings"]>();
+  let missingPageScope = 0;
+  for (const mapping of receipt.mappings) {
+    const pageUrl = mapping.pageUrl;
+    if (!pageUrl || canonicalLearningPageUrl(pageUrl) !== pageUrl) {
+      missingPageScope += 1;
+      continue;
+    }
+    const rows = grouped.get(pageUrl) ?? [];
+    rows.push(mapping);
+    grouped.set(pageUrl, rows);
+  }
+  return {
+    batches: [...grouped].map(([pageUrl, mappings]) => ({ pageUrl, mappings })),
+    missingPageScope,
+  };
+}
+
+async function runAcceptedAiLearning(
+  receipt: AcceptedAiFillReceipt,
+): Promise<AiLearningSummary> {
+  if (!(await hasAcceptedSuccessfulFillReport(receipt))) {
+    const revoked: AiLearningSummary = {
+      state: "revoked", confirmedSavedCount: 0, insertedCount: 0,
+      preservedCount: 0, reason: "context_changed",
+    };
+    await writeAcceptedAiFillReceipt(null);
+    await updateAiLearningReport(receipt, revoked).catch(() => undefined);
+    return revoked;
+  }
+  if (!receipt.touchRecorded || !(await acceptedReceiptMatchesCurrentContext(receipt))) {
+    return {
+      state: "revoked",
+      confirmedSavedCount: 0,
+      insertedCount: 0,
+      preservedCount: 0,
+      reason: "context_changed",
+    };
+  }
+  const current = await readAcceptedAiFillReceipt();
+  if (current?.fillSessionId !== receipt.fillSessionId || current.selectionRevision !== receipt.selectionRevision) {
+    return { ...receipt.learning, state: "revoked", reason: "context_changed" };
+  }
+  const { batches, missingPageScope } = aiLearningBatches(receipt);
+  if (batches.length === 0) {
+    const failed: AiLearningSummary = {
+      state: "failed", confirmedSavedCount: 0, insertedCount: 0,
+      preservedCount: 0, reason: "missing_page_scope",
+    };
+    const next = { ...receipt, learning: failed };
+    if (!(await writeAcceptedAiFillReceipt(next))) {
+      return { state: "revoked", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "context_changed" };
+    }
+    await updateAiLearningReport(next, failed);
+    return failed;
+  }
+
+  const controller = new AbortController();
+  aiLearningControllers.set(receipt.fillSessionId, controller);
+  const pending: AiLearningSummary = {
+    state: "pending", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0,
+  };
+  let working = { ...receipt, learning: pending };
+  if (!(await writeAcceptedAiFillReceipt(working))) {
+    aiLearningControllers.delete(receipt.fillSessionId);
+    return { state: "revoked", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "context_changed" };
+  }
+  await updateAiLearningReport(working, pending);
+  let confirmedSavedCount = 0;
+  let insertedCount = 0;
+  let preservedCount = 0;
+  try {
+    for (const batch of batches) {
+      const latestReceipt = await readAcceptedAiFillReceipt();
+      if (controller.signal.aborted || latestReceipt?.fillSessionId !== working.fillSessionId ||
+        latestReceipt.selectionRevision !== working.selectionRevision ||
+        !(await acceptedReceiptMatchesCurrentContext(working))) {
+        throw new Error("context_changed");
+      }
+      const body = {
+        case_id: working.caseId,
+        provider_id: working.providerId,
+        fill_session_id: working.fillSessionId,
+        portal_key: working.portalKey,
+        page_url: batch.pageUrl,
+        mappings: batch.mappings.map(({ selector, token, confidence, fieldType }) => ({
+          selector, token, confidence, field_type: fieldType,
+        })),
+      };
+      const result = await postBatchLearnPortalFieldMaps(body, {
+        signal: controller.signal,
+        expectedOrgId: working.orgId,
+      });
+      confirmedSavedCount += result.confirmed_saved_count;
+      insertedCount += result.inserted_count;
+      preservedCount += result.preserved_count;
+      if (controller.signal.aborted || !(await acceptedReceiptMatchesCurrentContext(working))) {
+        throw new Error("context_changed");
+      }
+    }
+    const learned: AiLearningSummary = {
+      state: missingPageScope > 0 ? "failed" : "learned",
+      confirmedSavedCount,
+      insertedCount,
+      preservedCount,
+      ...(missingPageScope > 0 ? { reason: "missing_page_scope" as const } : {}),
+    };
+    working = { ...working, learning: learned };
+    if (!(await writeAcceptedAiFillReceipt(working))) {
+      return { ...learned, state: "revoked", reason: "context_changed" };
+    }
+    await updateAiLearningReport(working, learned);
+    return learned;
+  } catch (error) {
+    const latest = await readAcceptedAiFillReceipt();
+    if (controller.signal.aborted || latest?.fillSessionId !== receipt.fillSessionId ||
+      latest.selectionRevision !== receipt.selectionRevision || error instanceof Error && error.message === "context_changed") {
+      return {
+        state: "revoked", confirmedSavedCount, insertedCount, preservedCount,
+        reason: "context_changed",
+      };
+    }
+    const failed: AiLearningSummary = {
+      state: "failed", confirmedSavedCount, insertedCount, preservedCount,
+      reason: "request_failed",
+    };
+    working = { ...working, learning: failed };
+    if (!(await writeAcceptedAiFillReceipt(working))) {
+      return { ...failed, state: "revoked", reason: "context_changed" };
+    }
+    await updateAiLearningReport(working, failed);
+    return failed;
+  } finally {
+    if (aiLearningControllers.get(receipt.fillSessionId) === controller) {
+      aiLearningControllers.delete(receipt.fillSessionId);
+    }
+  }
+}
+
+async function retryAcceptedAiLearning(fillSessionId: string): Promise<AiLearningSummary> {
+  const receipt = await readAcceptedAiFillReceipt();
+  if (!receipt || receipt.fillSessionId !== fillSessionId || !receipt.touchRecorded) {
+    throw new Error("There is no logged accepted AI receipt to retry.");
+  }
+  if (receipt.learning.state === "learned") return receipt.learning;
+  if (!(await acceptedReceiptMatchesCurrentContext(receipt))) {
+    await writeAcceptedAiFillReceipt(null);
+    const revoked: AiLearningSummary = {
+      state: "revoked", confirmedSavedCount: 0, insertedCount: 0,
+      preservedCount: 0, reason: "context_changed",
+    };
+    await updateAiLearningReport(receipt, revoked);
+    return revoked;
+  }
+  try {
+    return await runAcceptedAiLearning(receipt);
+  } catch {
+    const latest = await readAcceptedAiFillReceipt().catch(() => null);
+    if (!latest || latest.fillSessionId !== fillSessionId) {
+      return {
+        state: "revoked", confirmedSavedCount: 0, insertedCount: 0,
+        preservedCount: 0, reason: "context_changed",
+      };
+    }
+    const failed: AiLearningSummary = {
+      state: "failed", confirmedSavedCount: latest.learning.confirmedSavedCount,
+      insertedCount: latest.learning.insertedCount,
+      preservedCount: latest.learning.preservedCount, reason: "request_failed",
+    };
+    const next = { ...latest, learning: failed };
+    if (await writeAcceptedAiFillReceipt(next)) {
+      await updateAiLearningReport(next, failed).catch(() => undefined);
+    }
+    return failed;
+  }
 }
 
 async function resolveMockTelemetryOrgId(): Promise<string> {
@@ -305,13 +786,17 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // or fill reports. Re-asserting the same org (or staying in single-org
       // mode, null -> null) clears nothing.
       const previous = await readActiveOrgId();
-      if (previous !== request.orgId) await clearOrgScopedState(request.orgId);
+      if (previous !== request.orgId) {
+        await beginAiFillAttempt();
+        await clearOrgScopedState(request.orgId);
+      }
       await writeActiveOrgId(request.orgId);
       return null;
     }
     case "SET_ACTIVE_ORG_FOR_HANDOFF":
       return mutateCurrentHandoff(request.receiptKey, async (record) => {
         if (record.orgId !== request.orgId) return false;
+        await beginAiFillAttempt();
         await clearOrgSelections();
         await writeActiveOrgId(request.orgId);
         return true;
@@ -372,6 +857,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "ENTER_ACTIVE_CASE":
       // TE-17: an in-panel selection enters the SAME active-case state as a
       // handoff — same record, same 60-minute/tab-close expiry.
+      await beginAiFillAttempt();
       await enterActiveCase({
         caseId: request.caseId,
         providerId: request.providerId,
@@ -379,10 +865,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       });
       return null;
     case "CLEAR_ACTIVE_CASE":
+      await beginAiFillAttempt();
       await clearActiveCase();
       return null;
-    case "CLEAR_ACTIVE_CASE_IF_CURRENT":
-      return clearActiveCaseIfCurrent(request.receiptKey);
+    case "CLEAR_ACTIVE_CASE_IF_CURRENT": {
+      const cleared = await clearActiveCaseIfCurrent(request.receiptKey);
+      if (cleared) await beginAiFillAttempt();
+      return cleared;
+    }
     case "COMMIT_HANDOFF_SELECTION":
       return commitForCurrentHandoff(
         request.receiptKey,
@@ -392,6 +882,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           facilityId: request.facilityId,
         },
         async () => {
+          await beginAiFillAttempt();
           // One storage operation keeps the three selection identities aligned.
           // A null facility reads back as no selection, matching removal semantics.
           await chrome.storage.session.set({
@@ -792,11 +1283,17 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "GET_SELECTED_PROVIDER":
       return readSessionString(SELECTED_PROVIDER_KEY);
     case "SET_SELECTED_PROVIDER":
+      if ((await readSessionString(SELECTED_PROVIDER_KEY)) !== request.providerId) {
+        await beginAiFillAttempt();
+      }
       await writeSessionString(SELECTED_PROVIDER_KEY, request.providerId);
       return null;
     case "GET_SELECTED_CASE":
       return readSessionString(SELECTED_CASE_PREFIX + request.providerId);
     case "SET_SELECTED_CASE":
+      if ((await readSessionString(SELECTED_CASE_PREFIX + request.providerId)) !== request.caseId) {
+        await beginAiFillAttempt();
+      }
       await writeSessionString(
         SELECTED_CASE_PREFIX + request.providerId,
         request.caseId,
@@ -805,6 +1302,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "GET_SELECTED_FACILITY":
       return readSessionString(SELECTED_FACILITY_PREFIX + request.providerId);
     case "SET_SELECTED_FACILITY":
+      if ((await readSessionString(SELECTED_FACILITY_PREFIX + request.providerId)) !== request.facilityId) {
+        await beginAiFillAttempt();
+      }
       await writeSessionString(
         SELECTED_FACILITY_PREFIX + request.providerId,
         request.facilityId,
@@ -827,7 +1327,28 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       });
     case "GET_FILL_REPORT":
       return readFillReport(request.providerId);
+    case "PREPARE_AI_FILL": {
+      await beginAiFillAttempt();
+      await assertFillMatchesActiveCase({
+        providerId: request.providerId,
+        caseId: request.caseId,
+        facilityId: request.facilityId,
+      });
+      await ensureContentScript(request.tabId);
+      const guard = await createAiFillGuard(request);
+      return prepareAiFillPortal({
+        tabId: request.tabId,
+        providerId: request.providerId,
+        caseId: request.caseId,
+        portalKey: request.portalKey,
+        state: request.state,
+        facilityId: request.facilityId,
+      }, guard);
+    }
     case "FILL": {
+      // A fill without a prepared AI scan is the compatible static-only path.
+      // Starting any refill invalidates older review state and accepted receipts.
+      if (!request.aiScanId) await beginAiFillAttempt();
       // The worker is the final authority: an expired context cannot fill,
       // and a handoff must match the exact receipt-pinned applied selection.
       await assertFillMatchesActiveCase({
@@ -839,6 +1360,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // before fillPortal's pre-flight PING, so fill reaches any DB-registered
       // portal, not just the statically-matched one.
       await ensureContentScript(request.tabId);
+      const orgId = await readActiveOrgId();
+      const attemptRevision = fillSelectionRevision;
       const summary = await fillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
@@ -846,15 +1369,26 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         portalKey: request.portalKey,
         state: request.state,
         facilityId: request.facilityId,
+      }, {
+        scanId: request.aiScanId,
+        candidates: request.aiMatches,
+        aiStatus: request.aiStatus,
+        orgId,
       });
+      // Context invalidation can race the awaited content apply or fill-event
+      // request. A canceled operation may return a static-only summary, but it
+      // must never replace the newer selection's persisted review/report.
+      if (attemptRevision !== fillSelectionRevision) return summary;
       // The fill is this case's binding moment for an in-panel selection
       // (TE-17): the portal tab it ran in becomes the bound tab, and the
       // activity resets the idle clock.
       await bindFillTab(request.caseId, request.tabId);
+      if (attemptRevision !== fillSelectionRevision) return summary;
       // Persist the review state so reopening the panel restores it. A
       // storage failure must not un-report a successful fill.
       try {
         const record: FillReportRecord = {
+          tabId: request.tabId,
           providerId: request.providerId,
           portalKey: request.portalKey,
           caseId: request.caseId,
@@ -869,6 +1403,115 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         // best-effort — the fill itself succeeded
       }
       return summary;
+    }
+    case "ACCEPT_AI_FILL": {
+      const active = readActiveAiReview(request.fillSessionId);
+      if (!active || active.request.tabId !== request.tabId) {
+        throw new Error("These AI suggestions are no longer available to accept.");
+      }
+      await active.guard.validate();
+      const reportKey = fillReportKey(active.request.providerId, active.request.portalKey);
+      const stored = await chrome.storage.session.get(reportKey);
+      const record = stored[reportKey];
+      if (
+        !isFillReportRecord(record) ||
+        record.caseId !== active.request.caseId ||
+        record.summary.fillSessionId !== request.fillSessionId ||
+        record.summary.aiReview?.fillSessionId !== request.fillSessionId ||
+        !record.summary.eventRecorded
+      ) {
+        throw new Error("This AI fill is not available for acceptance.");
+      }
+      const actorId = await currentUserId();
+      const ownerId = await readSessionString(WORKBENCH_OWNER_KEY);
+      const selectionRevision = await readAiSelectionRevision();
+      if (!actorId || ownerId !== actorId || selectionRevision !== active.guard.selectionRevision) {
+        throw new Error("The work context changed before these suggestions could be accepted.");
+      }
+      await active.guard.validate();
+      const receipt: AcceptedAiFillReceipt = {
+        tabId: active.request.tabId,
+        fillSessionId: request.fillSessionId,
+        providerId: active.request.providerId,
+        caseId: active.request.caseId,
+        portalKey: active.request.portalKey,
+        state: active.request.state,
+        facilityId: active.request.facilityId,
+        orgId: active.guard.orgId,
+        actorId,
+        selectionRevision,
+        touchRecorded: false,
+        learning: {
+          state: "accepted", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0,
+        },
+        mappings: active.review.writes,
+      };
+      if (!(await writeAcceptedAiFillReceipt(receipt))) {
+        throw new Error("The work context changed before these suggestions could be accepted.");
+      }
+      const accepted = await acceptActiveAiReview(request.fillSessionId, request.tabId);
+      if (!accepted) {
+        await writeAcceptedAiFillReceipt(null);
+        throw new Error("The page changed before these AI suggestions could be accepted.");
+      }
+      const nextRecord: FillReportRecord = {
+        ...record,
+        summary: {
+          ...record.summary,
+          aiReview: { ...record.summary.aiReview!, accepted: true, learning: receipt.learning },
+        },
+      };
+      await chrome.storage.session.set({ [reportKey]: nextRecord }).catch(() => undefined);
+      return true;
+    }
+    case "CLEAR_AI_FILL": {
+      const receipt = await readAcceptedAiFillReceipt();
+      if (receipt?.fillSessionId === request.fillSessionId &&
+        (receipt.touchRecorded || receipt.learning.state === "learned")) {
+        throw new Error("These suggestions are already attached to a logged submission.");
+      }
+      const all = await chrome.storage.session.get(null);
+      for (const [key, value] of Object.entries(all)) {
+        if (!key.startsWith(FILL_REPORT_PREFIX) || !isFillReportRecord(value)) continue;
+        const review = value.summary.aiReview;
+        if (review?.fillSessionId !== request.fillSessionId) continue;
+        if (value.submitted || review.learning?.state === "learned") {
+          throw new Error("These suggestions are already attached to a logged submission.");
+        }
+      }
+      aiLearningControllers.get(request.fillSessionId)?.abort();
+      aiLearningControllers.delete(request.fillSessionId);
+      if (receipt?.fillSessionId === request.fillSessionId) await writeAcceptedAiFillReceipt(null);
+      const tabId = request.tabId ?? (receipt?.fillSessionId === request.fillSessionId ? receipt.tabId : null);
+      const cleared = tabId == null ? 0 : await clearAiReviewInTab(tabId, request.fillSessionId);
+      removeActiveAiReview(request.fillSessionId);
+      for (const [key, value] of Object.entries(all)) {
+        if (!key.startsWith(FILL_REPORT_PREFIX) || !isFillReportRecord(value)) continue;
+        const review = value.summary.aiReview;
+        if (review?.fillSessionId !== request.fillSessionId) continue;
+        const aiSelectors = new Set(review.writes.map((write) => write.selector));
+        const summary = {
+          ...value.summary,
+          filled: value.summary.staticFilled ?? Math.max(0, value.summary.filled - (value.summary.aiFilled ?? 0)),
+          aiFilled: 0,
+          writtenSelectors: (value.summary.writtenSelectors ?? []).filter((selector) => !aiSelectors.has(selector)),
+          aiReview: {
+            ...review,
+            status: "no-matches" as const,
+            writes: [],
+            accepted: false,
+            cleared: true,
+            learning: {
+              state: "revoked" as const,
+              confirmedSavedCount: 0,
+              insertedCount: 0,
+              preservedCount: 0,
+            },
+          },
+        };
+        await chrome.storage.session.set({ [key]: { ...value, summary } });
+      }
+      return cleared;
     }
     case "MARK_SUBMITTED": {
       // One idempotency id per (case, fill session), remembered for the
@@ -901,23 +1544,95 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       );
       // Logging the submission is user activity on the case — reset the
       // active-case idle clock.
-      await touchActiveCaseActivity();
-      // Remember the submission on the stored report so a restored panel
-      // shows "Logged to the case." instead of offering the button again.
+      await touchActiveCaseActivity().catch(() => undefined);
+      // Read the session-local tab identity now, but persist submitted=true
+      // only after the touch-bound receipt has been written. If the worker
+      // stops between the durable server touch and that write, the panel can
+      // replay MARK_SUBMITTED with the same idempotency key to recover safely.
+      let reportTabId: number | null = null;
       try {
         const key = fillReportKey(request.providerId, request.portalKey);
         const entry = await chrome.storage.session.get(key);
         const record = entry[key];
         if (isFillReportRecord(record) && record.caseId === request.caseId) {
-          await chrome.storage.session.set({
-            [key]: { ...record, submitted: true },
-          });
+          if (Number.isSafeInteger(record.tabId) && typeof record.tabId === "number") reportTabId = record.tabId;
         }
       } catch {
         // best-effort — the touch itself was logged
       }
-      return { touch, statusBump };
+      const receipt = await readAcceptedAiFillReceipt().catch(() => null);
+      const matchingReceipt = receipt != null && receipt.fillSessionId === request.fillSessionId &&
+        receipt.providerId === request.providerId && receipt.caseId === request.caseId &&
+        receipt.portalKey === request.portalKey
+        ? receipt
+        : null;
+      const tabId = matchingReceipt?.tabId ?? reportTabId;
+      if (request.fillSessionId && tabId != null) {
+        await finalizeAiFillAcrossFrames(tabId, request.fillSessionId).catch(() => undefined);
+      }
+
+      let learning: AiLearningSummary | null = null;
+      if (matchingReceipt) {
+        try {
+          if (!(await acceptedReceiptMatchesCurrentContext(matchingReceipt, {
+            caseId: request.caseId,
+            providerId: request.providerId,
+            portalKey: request.portalKey,
+            fillSessionId: request.fillSessionId ?? "",
+          }))) {
+            await writeAcceptedAiFillReceipt(null);
+            learning = {
+              state: "revoked", confirmedSavedCount: 0, insertedCount: 0,
+              preservedCount: 0, reason: "context_changed",
+            };
+            await updateAiLearningReport(matchingReceipt, learning);
+          } else if (matchingReceipt.learning.state === "learned") {
+            learning = matchingReceipt.learning;
+          } else {
+            const touchedReceipt: AcceptedAiFillReceipt = {
+              ...matchingReceipt,
+              touchRecorded: true,
+              learning: { ...matchingReceipt.learning, state: "pending" },
+            };
+            if (!(await writeAcceptedAiFillReceipt(touchedReceipt))) {
+              throw new Error("The work context changed before learning could start.");
+            }
+            learning = await runAcceptedAiLearning(touchedReceipt);
+          }
+        } catch {
+          // The touch is already durable. Keep the error in the learning
+          // status only; it must never turn the successful touch into failure.
+          learning = {
+            state: "failed",
+            confirmedSavedCount: matchingReceipt.learning.confirmedSavedCount,
+            insertedCount: matchingReceipt.learning.insertedCount,
+            preservedCount: matchingReceipt.learning.preservedCount,
+            reason: "request_failed",
+          };
+        }
+      }
+      // The touch is durable at this point. Store its display state even when
+      // learning failed; this write never affects the already-successful touch.
+      try {
+        const key = fillReportKey(request.providerId, request.portalKey);
+        const entry = await chrome.storage.session.get(key);
+        const record = entry[key];
+        if (isFillReportRecord(record) && record.caseId === request.caseId) {
+          const summary = learning && record.summary.aiReview
+            ? {
+                ...record.summary,
+                aiReview: { ...record.summary.aiReview, learning },
+              }
+            : record.summary;
+          await chrome.storage.session.set({ [key]: { ...record, submitted: true, summary } });
+        }
+      } catch {
+        // A session-storage failure does not undo the durable touch.
+      }
+      return { touch, statusBump, learning };
     }
+    case "RETRY_AI_LEARNING":
+      return retryAcceptedAiLearning(request.fillSessionId);
   }
 }
 

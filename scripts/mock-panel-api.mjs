@@ -502,10 +502,13 @@ export async function createMockPanelApi(options = {}) {
     ],
     touches: new Map(), // idempotency_id -> stored touch row
     fillSessions: new Map(),
+    learnedMaps: new Map(),
+    learningRequests: [],
     viewPrefs: new Map(), // userId -> fields[]
     // Failure injection: >0 makes the next N touch POSTs fail 500 (the
     // preserved-values retry path, F4.3.4).
     failTouches: 0,
+    failLearnings: 0,
     // Request log so tests can assert what was sent.
     requests: [],
     completedSteps: new Set(),
@@ -879,6 +882,9 @@ export async function createMockPanelApi(options = {}) {
         outcome: body.kind === "structured_touch" ? (body.outcome ?? null) : "submitted",
         notes: body.note ?? null,
         source: "extension",
+        ...(body.kind === "portal_submission"
+          ? { portalKey: body.portal_key, fillSessionId: body.fill_session_id ?? null }
+          : {}),
       };
       state.touches.set(body.idempotency_id, touch);
       // S4.4: the opt-in bump's outcome rides META, never the touch. The mock
@@ -972,6 +978,87 @@ export async function createMockPanelApi(options = {}) {
         map.controlOptions = incomingOptions;
       }
       return envelope(res, created ? 201 : 200, { map });
+    }
+
+    // --- /api/portal-field-maps/batch-learn ---
+    if (/^\/api\/portal-field-maps\/batch-learn\/?$/.test(url.pathname)) {
+      if (method !== "POST") return envelope(res, 405, null, "Method not allowed");
+      const body = await readBody(req);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return envelope(res, 422, null, "Request body must be a JSON object");
+      }
+      const keys = Object.keys(body).sort().join(",");
+      if (keys !== "case_id,fill_session_id,mappings,page_url,portal_key,provider_id") {
+        return envelope(res, 422, null, "Invalid learning receipt shape");
+      }
+      const safeUrl = typeof body.page_url === "string" ? new URL(body.page_url) : null;
+      if (!safeUrl || !["http:", "https:"].includes(safeUrl.protocol) || safeUrl.search || safeUrl.hash ||
+        safeUrl.username || safeUrl.password || safeUrl.origin + safeUrl.pathname !== body.page_url) {
+        return envelope(res, 422, null, "page_url must be a safe origin and path");
+      }
+      if (!Array.isArray(body.mappings) || body.mappings.length < 1 || body.mappings.length > 32) {
+        return envelope(res, 422, null, "mappings must contain 1 to 32 entries");
+      }
+      const touch = [...state.touches.values()].find((row) => row.caseId === body.case_id &&
+        row.portalKey === body.portal_key && row.fillSessionId === body.fill_session_id);
+      const session = state.fillSessions.get(body.fill_session_id);
+      const caseRow = CASES.find((row) => row.id === body.case_id && row.providerId === body.provider_id);
+      if (!touch || !session || session.caseId !== body.case_id || session.providerId !== body.provider_id ||
+        session.portalKey !== body.portal_key || !caseRow || session.fieldsFilled < 1) {
+        return envelope(res, 404, null, "Successful submission evidence not found");
+      }
+      const allowedTokens = new Set(QUICK_CARD_CATALOG.map((field) => field.key));
+      const selectors = new Set();
+      for (const mapping of body.mappings) {
+        if (!mapping || typeof mapping !== "object" || Array.isArray(mapping) ||
+          Object.keys(mapping).sort().join(",") !== "confidence,field_type,selector,token" ||
+          typeof mapping.selector !== "string" || mapping.selector.length < 1 || mapping.selector.length > 512 ||
+          typeof mapping.token !== "string" || !allowedTokens.has(mapping.token) || /(^|[._])ssn/i.test(mapping.token) ||
+          !Number.isFinite(mapping.confidence) || mapping.confidence < 0.85 || mapping.confidence > 1 ||
+          !["text", "select", "radio", "checkbox", "date"].includes(mapping.field_type) ||
+          selectors.has(mapping.selector)) {
+          return envelope(res, 422, null, "Invalid mapping entry");
+        }
+        selectors.add(mapping.selector);
+      }
+      state.learningRequests.push({ body, orgId: req.headers["x-org-id"] ?? null });
+      if (state.failLearnings > 0) {
+        state.failLearnings -= 1;
+        return envelope(res, 500, null, "Synthetic learning failure");
+      }
+      let inserted_count = 0;
+      let confirmed_saved_count = 0;
+      let preserved_count = 0;
+      const results = [];
+      for (const mapping of body.mappings) {
+        const key = `${body.portal_key}:${mapping.selector}`;
+        const existing = state.learnedMaps.get(key) ?? state.fieldMaps.find((row) =>
+          row.portalKey === body.portal_key && row.selector === mapping.selector);
+        if (existing) {
+          if (existing.status === "approved" && existing.token === mapping.token) {
+            confirmed_saved_count += 1;
+            results.push({ selector: mapping.selector, token: mapping.token, outcome: "already_present" });
+          } else {
+            preserved_count += 1;
+            results.push({ selector: mapping.selector, token: mapping.token, outcome: "preserved" });
+          }
+          continue;
+        }
+        const learned = fieldMapRow(`fm-learned-${state.learnedMaps.size + 1}`, body.portal_key,
+          mapping.selector, mapping.token, {
+            orgId: req.headers["x-org-id"] ?? FIXTURES.PRIMARY_ORG,
+            fieldType: mapping.field_type,
+            learnedVia: "nano",
+            confidenceScore: mapping.confidence,
+            autoPromotedAt: new Date().toISOString(),
+          });
+        state.learnedMaps.set(key, learned);
+        state.fieldMaps.push(learned);
+        inserted_count += 1;
+        confirmed_saved_count += 1;
+        results.push({ selector: mapping.selector, token: mapping.token, outcome: "inserted" });
+      }
+      return envelope(res, 200, { inserted_count, confirmed_saved_count, preserved_count, results });
     }
 
     // --- /api/portal-field-maps ---

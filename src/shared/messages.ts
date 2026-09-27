@@ -23,6 +23,9 @@ import type {
   FillSummary,
   MockDryRunSummary,
   SandboxFillSummary,
+  AiFillPreparation,
+  AiFillCandidate,
+  AiLearningSummary,
 } from "./fill";
 import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
@@ -239,7 +242,21 @@ export type BgRequest =
       // The resolved location (user pick or sole facility); null only when
       // the provider has no facilities.
       facilityId: string | null;
+      aiScanId?: string;
+      aiMatches?: AiFillCandidate[];
+      aiStatus?: "unavailable" | "no-matches" | "error";
     }
+  | {
+      type: "PREPARE_AI_FILL";
+      tabId: number;
+      providerId: string;
+      caseId: string;
+      portalKey: string;
+      state: string;
+      facilityId: string | null;
+    }
+  | { type: "ACCEPT_AI_FILL"; tabId: number; fillSessionId: string }
+  | { type: "CLEAR_AI_FILL"; tabId: number | null; fillSessionId: string }
   // Read-only coverage sensor (Epic 3a): resolve the same profile + field maps
   // a fill would fetch for this selection and return "M of N + gaps" WITHOUT
   // touching the page or logging anything. Carries the fill selection's data
@@ -255,6 +272,7 @@ export type BgRequest =
   // The provider's most recent persisted fill report, or null. The panel
   // uses it to restore the review state when it reopens.
   | { type: "GET_FILL_REPORT"; providerId: string }
+  | { type: "RETRY_AI_LEARNING"; fillSessionId: string }
   // Pressed by the human AFTER they submit the portal form themselves — the
   // extension never touches the portal's submit button. fillSessionId is the
   // fill attempt's idempotency id when the fill event was recorded, else null.
@@ -387,9 +405,17 @@ export interface BgResponseMap {
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
+  PREPARE_AI_FILL: AiFillPreparation;
+  ACCEPT_AI_FILL: boolean;
+  CLEAR_AI_FILL: number;
   // S4.4: the touch PLUS the opt-in bump's outcome. A skipped bump is not a
   // failed touch — the panel reports both.
-  MARK_SUBMITTED: { touch: SubmissionTouch; statusBump: StatusBumpMeta | null };
+  MARK_SUBMITTED: {
+    touch: SubmissionTouch;
+    statusBump: StatusBumpMeta | null;
+    learning: AiLearningSummary | null;
+  };
+  RETRY_AI_LEARNING: AiLearningSummary;
 }
 
 // Typed wrapper so panel call sites get the right response type per request.

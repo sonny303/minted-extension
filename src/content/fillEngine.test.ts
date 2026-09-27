@@ -34,6 +34,7 @@ function instr(
     fieldType: over.fieldType ?? "text",
     value: over.value ?? "Ada",
     pageStep: over.pageStep ?? null,
+    ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
   };
 }
 
@@ -136,6 +137,31 @@ describe("applyFill", () => {
         kind: OTHER_PAGE_KIND,
       },
     ]);
+  });
+
+  it("applies a Nano-learned mapping only on its canonical origin and path", () => {
+    document.body.innerHTML = '<input id="field" type="text" />';
+    const scoped = instr({
+      label: "First name",
+      selector: "#field",
+      value: "Ada",
+      pageUrlScope: "https://portal.example/provider",
+    });
+
+    const samePage = applyFillOnPage([scoped], "https://portal.example/provider?case=private#step");
+    expect(samePage.writes).toEqual([{ selector: "#field", kind: "static" }]);
+    expect((document.querySelector("#field") as HTMLInputElement).value).toBe("Ada");
+
+    document.body.innerHTML = '<input id="field" type="text" />';
+    const differentPath = applyFillOnPage([scoped], "https://portal.example/billing");
+    expect(differentPath.writes).toEqual([]);
+    expect(differentPath.skipped[0]?.kind).toBe("other_page");
+    expect((document.querySelector("#field") as HTMLInputElement).value).toBe("");
+
+    document.body.innerHTML = '<input id="field" type="text" />';
+    const differentOrigin = applyFillOnPage([scoped], "https://other.example/provider");
+    expect(differentOrigin.writes).toEqual([]);
+    expect((document.querySelector("#field") as HTMLInputElement).value).toBe("");
   });
 
   it("keeps ordinary not-found when page identity is ambiguous", () => {
@@ -414,6 +440,33 @@ describe("applyFill", () => {
     expect((document.getElementById("cb") as HTMLInputElement).checked).toBe(
       true,
     );
+  });
+
+  it("does not record or decorate controlled static fields that reject the target", () => {
+    document.body.innerHTML = `
+      <input id="name" type="text" />
+      <select id="state"><option value="">Choose</option><option value="CO">Colorado</option><option value="NY">New York</option></select>
+      <input id="agree" type="checkbox" />
+    `;
+    const name = document.querySelector<HTMLInputElement>("#name")!;
+    const state = document.querySelector<HTMLSelectElement>("#state")!;
+    const agree = document.querySelector<HTMLInputElement>("#agree")!;
+    name.addEventListener("input", () => { name.value = ""; });
+    state.addEventListener("change", () => { state.value = "NY"; });
+    agree.addEventListener("click", () => { agree.checked = false; });
+
+    const result = applyFill([
+      instr({ label: "Name", selector: "#name", value: "Ada" }),
+      instr({ label: "State", selector: "#state", fieldType: "select", value: "Colorado" }),
+      instr({ label: "Agreement", selector: "#agree", fieldType: "checkbox", value: "yes" }),
+    ]);
+
+    expect(result.writes).toEqual([]);
+    expect(result.filled).toEqual([]);
+    expect(result.skipped).toHaveLength(3);
+    expect(name.classList.contains("mp-fill-static")).toBe(false);
+    expect(state.classList.contains("mp-fill-static")).toBe(false);
+    expect(agree.classList.contains("mp-fill-static")).toBe(false);
   });
 
   it("TS-162 — names the control and a bounded option sample when a dropdown misses", () => {

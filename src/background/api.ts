@@ -7,6 +7,8 @@ import { API_BASE_URL } from "../shared/config";
 import type {
   ApiEnvelope,
   ApiMeta,
+  BatchLearnPortalFieldMapsRequest,
+  BatchLearnPortalFieldMapsResponse,
   CaseContext,
   CaseListItem,
   CaseSearchRow,
@@ -38,7 +40,12 @@ export class ApiError extends Error {
   }
 }
 
-async function requestOnce(path: string, token: string, init?: RequestInit): Promise<Response> {
+async function requestOnce(
+  path: string,
+  token: string,
+  init?: RequestInit,
+  expectedContext?: { orgId: string | null; mode: "case" },
+): Promise<Response> {
   // Stored only when a multi-org user has picked; absent = no header sent.
   const orgId = await readActiveOrgId();
   // E6.9 F6.9.8: the org header is decided by MODE, not by a path literal.
@@ -48,6 +55,9 @@ async function requestOnce(path: string, token: string, init?: RequestInit): Pro
   // Match the pathname precisely (ignore any query string).
   const pathname = path.split("?")[0] ?? path;
   const mode = await readPanelMode();
+  if (expectedContext && (orgId !== expectedContext.orgId || mode !== expectedContext.mode)) {
+    throw new ApiError(409, "The active work context changed before learning could be saved.");
+  }
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -65,9 +75,10 @@ async function requestOnce(path: string, token: string, init?: RequestInit): Pro
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
+  expectedContext?: { orgId: string | null; mode: "case" },
 ): Promise<{ data: T; meta: ApiMeta | null }> {
   let token = await getAccessToken();
-  let response = await requestOnce(path, token, init);
+  let response = await requestOnce(path, token, init, expectedContext);
   if (response.status === 401) {
     // forceRefresh() throws AuthRequiredError when the refresh token itself is
     // dead. If the refresh SUCCEEDS but the server still 401s the retry, the
@@ -75,7 +86,7 @@ export async function apiFetch<T>(
     // sign-in-required path (AuthRequiredError), not a generic ApiError, per
     // the contract in this function's header comment.
     token = await forceRefresh();
-    response = await requestOnce(path, token, init);
+    response = await requestOnce(path, token, init, expectedContext);
     if (response.status === 401) throw new AuthRequiredError();
   }
 
@@ -397,12 +408,70 @@ export interface FillEventBody {
   fieldsSkipped: unknown;
 }
 
-export async function postFillEvent(body: FillEventBody): Promise<void> {
+export async function postFillEvent(
+  body: FillEventBody,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
   await apiFetch("/api/fill-events", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
+}
+
+/** Persist only a value-free receipt after the successful portal touch. The
+ * worker owns auth and derives org/actor from its session; the request itself
+ * carries no profile values, frame IDs, or identity fields. */
+export async function postBatchLearnPortalFieldMaps(
+  body: BatchLearnPortalFieldMapsRequest,
+  options: { signal?: AbortSignal; expectedOrgId: string | null },
+): Promise<BatchLearnPortalFieldMapsResponse> {
+  const { data } = await apiFetch<BatchLearnPortalFieldMapsResponse>(
+    "/api/portal-field-maps/batch-learn",
+    {
+      method: "POST",
+      signal: options.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    { orgId: options.expectedOrgId, mode: "case" },
+  );
+  const validCount = (value: unknown): value is number =>
+    Number.isInteger(value) && typeof value === "number" && value >= 0;
+  if (
+    data == null ||
+    !validCount(data.inserted_count) ||
+    !validCount(data.confirmed_saved_count) ||
+    !validCount(data.preserved_count) ||
+    !Array.isArray(data.results) ||
+    data.results.length > body.mappings.length ||
+    data.confirmed_saved_count > body.mappings.length ||
+    data.inserted_count > data.confirmed_saved_count ||
+    data.preserved_count > body.mappings.length
+  ) {
+    throw new ApiError(502, "Minted Panel returned an invalid learning receipt.");
+  }
+  const outcomeCounts = { inserted: 0, already_present: 0, preserved: 0 };
+  const expected = new Map(body.mappings.map((mapping) => [mapping.selector, mapping.token]));
+  const received = new Set<string>();
+  for (const result of data.results) {
+    if (!result || typeof result !== "object" ||
+      !["inserted", "already_present", "preserved"].includes(result.outcome) ||
+      typeof result.selector !== "string" || expected.get(result.selector) !== result.token ||
+      received.has(result.selector)) {
+      throw new ApiError(502, "Minted Panel returned an invalid learning receipt.");
+    }
+    received.add(result.selector);
+    outcomeCounts[result.outcome] += 1;
+  }
+  if (data.results.length !== body.mappings.length ||
+    outcomeCounts.inserted !== data.inserted_count ||
+    outcomeCounts.inserted + outcomeCounts.already_present !== data.confirmed_saved_count ||
+    outcomeCounts.preserved !== data.preserved_count) {
+    throw new ApiError(502, "Minted Panel returned an invalid learning receipt.");
+  }
+  return data;
 }
 
 // POST /api/cases/:id/touches — both touch kinds ride the same append-only

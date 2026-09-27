@@ -10,10 +10,24 @@ import type { FillInstruction, FillPageResult, ReportedField } from "../shared/f
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import type { SelectorMatchReport } from "../shared/selectorMatch";
 import type { PickOutcome } from "../content/elementPicker";
+import type { ControlSummary } from "../shared/nanoAi";
+import { pageScopeMatches } from "../shared/pageScope";
 
 export interface TabFrame {
   frameId: number;
   url: string;
+}
+
+export interface FramedAiScan {
+  frameId: number;
+  url: string;
+  controls: ControlSummary[];
+}
+
+export interface AiScanAcrossFrames {
+  frames: FramedAiScan[];
+  controls: ControlSummary[];
+  ambiguousSelectors: string[];
 }
 
 /** Frames in the tab, or `[{ frameId: 0 }]` when webNavigation is unavailable. */
@@ -109,12 +123,14 @@ function reportKey(field: ReportedField): string {
  */
 export function mergeFillPageResults(results: FillPageResult[]): FillPageResult {
   const filledLabels = new Set<string>();
+  const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped = new Map<string, ReportedField>();
   let pageFields = 0;
 
   for (const result of results) {
     pageFields += result.pageFields;
     for (const label of result.filled) filledLabels.add(label);
+    writes.push(...(result.writes ?? []));
   }
 
   for (const result of results) {
@@ -138,9 +154,220 @@ export function mergeFillPageResults(results: FillPageResult[]): FillPageResult 
 
   return {
     filled: [...filledLabels],
+    writes,
     skipped: [...skipped.values()],
     pageFields,
   };
+}
+
+/** Scan each frame locally. Frame IDs and URLs remain worker-owned and are
+ * returned only to the caller, never to the panel or a stored field map. */
+export async function scanUnmappedControlsAcrossFrames(
+  tabId: number,
+  scanId: string,
+  activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null; pageUrlScope?: string }>,
+): Promise<AiScanAcrossFrames> {
+  const frames = await listTabFrames(tabId);
+  const scanned = await Promise.all(frames.map(async (frame): Promise<FramedAiScan | null> => {
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "SCAN_UNMAPPED_CONTROLS",
+        scanId,
+        activeMaps: activeMaps.filter((map) => pageScopeMatches(map.pageUrlScope, frame.url)),
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      if (!raw?.ok || !Array.isArray(raw.data)) return null;
+      return {
+        frameId: frame.frameId,
+        url: frame.url,
+        controls: raw.data as ControlSummary[],
+      };
+    } catch {
+      return null;
+    }
+  }));
+  const live = scanned.filter((item): item is FramedAiScan => item != null);
+  if (live.length === 0) throw new Error("Could not scan the enrollment form");
+
+  const occurrences = new Map<string, number>();
+  for (const frame of live) {
+    for (const control of frame.controls) {
+      occurrences.set(control.selector, (occurrences.get(control.selector) ?? 0) + 1);
+    }
+  }
+  const ambiguousSelectors = [...occurrences]
+    .filter(([, count]) => count > 1)
+    .map(([selector]) => selector);
+  const ambiguous = new Set(ambiguousSelectors);
+  for (const frame of live) {
+    frame.controls = frame.controls.filter((control) => !ambiguous.has(control.selector));
+  }
+  return {
+    frames: live,
+    controls: live.flatMap((frame) => frame.controls),
+    ambiguousSelectors,
+  };
+}
+
+export async function clearAiScanAcrossFrames(
+  tabId: number,
+  scanId: string,
+  frameIds: number[],
+): Promise<void> {
+  await Promise.all(frameIds.map((frameId) => sendToFrame(tabId, frameId, {
+    type: "CLEAR_AI_SCAN",
+    scanId,
+  }).catch(() => undefined)));
+}
+
+export async function clearAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+  frameIds?: number[],
+): Promise<number> {
+  const responses = frameIds == null
+    ? await sendToAllFrames(tabId, { type: "CLEAR_AI_FILL", fillSessionId })
+    : await Promise.all(frameIds.map(async (frameId): Promise<FrameResponse> => {
+        try {
+          const raw = (await sendToFrame(tabId, frameId, {
+            type: "CLEAR_AI_FILL",
+            fillSessionId,
+          })) as { ok?: boolean; data?: unknown } | undefined;
+          return raw?.ok
+            ? { frameId, ok: true, data: raw.data }
+            : { frameId, ok: false };
+        } catch {
+          return { frameId, ok: false };
+        }
+      }));
+  return responses.reduce((count, response) =>
+    response.ok && typeof response.data === "number" ? count + response.data : count,
+  0);
+}
+
+export interface AiFillApplyLifecycle {
+  isCancelled: () => boolean;
+  validate: () => Promise<void>;
+  onDispatch?: (frameId: number) => void;
+}
+
+export async function acceptAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "ACCEPT_AI_FILL", fillSessionId });
+}
+
+/** Release value-bearing undo snapshots after the successful submission touch. */
+export async function finalizeAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "FINALIZE_AI_FILL", fillSessionId });
+}
+
+/** Target AI instructions only to the frame that produced each selector. */
+export async function applyAiFillAcrossBoundFrames(
+  tabId: number,
+  scanId: string,
+  fillSessionId: string,
+  frames: FramedAiScan[],
+  instructions: FillInstruction[],
+  lifecycle?: AiFillApplyLifecycle,
+): Promise<FillPageResult> {
+  const assertCurrent = async (): Promise<void> => {
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+    await lifecycle?.validate();
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+  };
+  await assertCurrent();
+  const results: FillPageResult[] = [];
+  for (const frame of frames) {
+    await assertCurrent();
+    const liveFrames = await listTabFrames(tabId);
+    await assertCurrent();
+    const stillLive = liveFrames.some((current) =>
+      current.frameId === frame.frameId && current.url === frame.url,
+    );
+    const bound = new Set(frame.controls.map((control) => control.selector));
+    const forFrame = instructions.filter((instruction) => bound.has(instruction.selector));
+    if (forFrame.length === 0) continue;
+    if (!stillLive) {
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed after scan",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+      continue;
+    }
+    await assertCurrent();
+    lifecycle?.onDispatch?.(frame.frameId);
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "APPLY_AI_FILL",
+        scanId,
+        fillSessionId,
+        instructions: forFrame,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      try {
+        await assertCurrent();
+      } catch (error) {
+        // Invalidation may race a content reply. Clear this frame after the
+        // reply as well as during cancellation so late writes cannot survive.
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw error;
+      }
+      if (raw?.ok && raw.data) {
+        const result = raw.data as FillPageResult;
+        // The transient frame binding lets learning preserve each iframe's
+        // actual page scope without persisting an ephemeral frame id.
+        results.push({
+          ...result,
+          writes: result.writes?.map((write) => ({ ...write, pageUrl: frame.url })),
+        });
+      } else {
+        results.push({
+          filled: [],
+          writes: [],
+          skipped: forFrame.map((instruction) => ({
+            label: instruction.selector,
+            reason: "AI target could not be applied",
+            kind: "skipped",
+          })),
+          pageFields: 0,
+        });
+      }
+    } catch {
+      if (lifecycle) {
+        try {
+          await assertCurrent();
+        } catch (error) {
+          await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+          throw error;
+        }
+      }
+      if (lifecycle?.isCancelled()) {
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw new Error("AI fill operation was cancelled");
+      }
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed before apply",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+    }
+  }
+  await assertCurrent();
+  return mergeFillPageResults(results);
 }
 
 /** Sum MATCH_SELECTOR reports; valid if any frame parsed the selector. */
@@ -168,15 +395,29 @@ export function mergeSelectorReports(reports: SelectorMatchReport[]): SelectorMa
   };
 }
 
-/** APPLY_FILL across frames: every frame gets the full plan; merge outcomes. */
+/** APPLY_FILL across frames: each frame gets only in-scope values. Empty plans
+ * still reach content.js so every reachable frame contributes its page count. */
 export async function applyFillAcrossFrames(
   tabId: number,
   instructions: FillInstruction[],
 ): Promise<FillPageResult> {
-  const responses = await sendToAllFrames(tabId, {
-    type: "APPLY_FILL",
-    instructions,
-  });
+  const frames = await listTabFrames(tabId);
+  const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+    const scoped = instructions.filter((instruction) =>
+      pageScopeMatches(instruction.pageUrlScope, frame.url),
+    );
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "APPLY_FILL",
+        instructions: scoped,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      return raw?.ok
+        ? { frameId: frame.frameId, ok: true, data: raw.data }
+        : { frameId: frame.frameId, ok: false };
+    } catch {
+      return { frameId: frame.frameId, ok: false };
+    }
+  }));
   const pageResults: FillPageResult[] = [];
   for (const response of responses) {
     if (!response.ok || !response.data) continue;

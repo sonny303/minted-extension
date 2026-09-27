@@ -37,6 +37,8 @@ export interface PortalFieldMap {
   orgId: string | null;
   portalKey: string;
   urlPattern: string | null;
+  /** Additive provenance; absent on pre-migration server responses. */
+  learnedVia?: "manual" | "nano" | null;
   pageStep: string | null;
   mapType: FillMode;
   selector: string;
@@ -59,6 +61,37 @@ export interface PortalFieldMap {
   controlOptions?: { value: string; label: string }[] | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** POST /api/portal-field-maps/batch-learn — a value-free receipt of accepted
+ * AI suggestions, submitted only after the human logs a successful portal
+ * submission. No organization, actor, form label, current value, frame id, or
+ * profile value is part of this wire contract. */
+export interface BatchLearnPortalFieldMapsRequest {
+  case_id: string;
+  provider_id: string;
+  fill_session_id: string;
+  portal_key: string;
+  page_url: string;
+  mappings: Array<{
+    selector: string;
+    token: string;
+    confidence: number;
+    field_type: Exclude<PortalFieldType, "file">;
+  }>;
+}
+
+export interface BatchLearnPortalFieldMapsResponse {
+  inserted_count: number;
+  /** Inserted rows plus exact approved maps already persisted on replay. */
+  confirmed_saved_count: number;
+  /** Existing proposed, retired, manual, or token-conflicting maps preserved. */
+  preserved_count: number;
+  results: Array<{
+    selector: string;
+    token: string;
+    outcome: "inserted" | "already_present" | "preserved";
+  }>;
 }
 
 // GET /api/providers/:id/profile?state=XX — every catalog token resolved to a
