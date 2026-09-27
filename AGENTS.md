@@ -8,7 +8,7 @@ Binding rules and architectural orientation for AI coding agents working on the 
 
 Minted Panel Workbench (`sonny303/minted-extension`) is a Manifest V3 Chrome extension that autofills payer-portal enrollment forms with Minted Panel provider data, and logs fills and submissions back to the case activity ledger.
 
-- **Current Version**: `v0.1.1` (Chrome Web Store unlisted release, Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`).
+- **Current Version**: `v0.1.2` (Chrome Web Store unlisted release, Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`).
 - **Server Counterpart**: `sonny303/mintedpanel` (`scratch/mintedpanel`). Contract shapes in `src/shared/apiTypes.ts` must stay in lockstep with the panel's `/api` routes.
 
 ---
