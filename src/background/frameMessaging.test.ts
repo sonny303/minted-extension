@@ -403,7 +403,7 @@ describe("Nano learned page scopes", () => {
   });
 
   it("sends learned static values only to the matching frame", async () => {
-    const sendMessage = vi.fn().mockImplementation((_tabId: number, message: { type: string; instructions?: any[] }, options: { frameId: number }) => {
+    const sendMessage = vi.fn().mockImplementation((_tabId: number, message: { type: string; instructions?: Array<{ mapId: string; selector: string }> }, options: { frameId: number }) => {
       if (message.type === "PROBE_FILL") {
         return {
           ok: true,
@@ -418,7 +418,7 @@ describe("Nano learned page scopes", () => {
         };
       }
       if (message.type === "APPLY_FILL") {
-        const writes = (message.instructions ?? []).map((instruction: FillInstruction) => ({
+        const writes = (message.instructions ?? []).map((instruction) => ({
           selector: instruction.selector,
           kind: "static" as const,
         }));
