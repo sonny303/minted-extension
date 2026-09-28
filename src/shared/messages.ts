@@ -236,12 +236,13 @@ export type BgRequest =
       type: "FILL";
       tabId: number;
       providerId: string;
-      caseId: string;
+      caseId?: string | null;
       portalKey: string;
       state: string;
       // The resolved location (user pick or sole facility); null only when
       // the provider has no facilities.
       facilityId: string | null;
+      groupId?: string | null;
       aiScanId?: string;
       aiMatches?: AiFillCandidate[];
       aiStatus?: "unavailable" | "no-matches" | "error";
@@ -250,10 +251,11 @@ export type BgRequest =
       type: "PREPARE_AI_FILL";
       tabId: number;
       providerId: string;
-      caseId: string;
+      caseId?: string | null;
       portalKey: string;
       state: string;
       facilityId: string | null;
+      groupId?: string | null;
     }
   | { type: "ACCEPT_AI_FILL"; tabId: number; fillSessionId: string }
   | { type: "CLEAR_AI_FILL"; tabId: number | null; fillSessionId: string }
@@ -264,10 +266,11 @@ export type BgRequest =
   | {
       type: "GET_FILL_COVERAGE";
       providerId: string;
-      caseId: string;
+      caseId?: string | null;
       portalKey: string;
       state: string;
       facilityId: string | null;
+      groupId?: string | null;
     }
   // The provider's most recent persisted fill report, or null. The panel
   // uses it to restore the review state when it reopens.

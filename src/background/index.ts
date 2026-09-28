@@ -309,7 +309,7 @@ async function beginAiFillAttempt(): Promise<void> {
 async function createAiFillGuard(request: {
   tabId: number;
   providerId: string;
-  caseId: string;
+  caseId?: string | null;
   facilityId: string | null;
 }) {
   const revision = fillSelectionRevision;
@@ -341,7 +341,7 @@ async function createAiFillGuard(request: {
     ]);
     if (
       providerId !== request.providerId ||
-      caseId !== request.caseId ||
+      (caseId || null) !== (request.caseId || null) ||
       facilityId !== request.facilityId ||
       currentOrg !== orgId ||
       currentRevision !== selectionRevision ||
@@ -613,6 +613,10 @@ async function runAcceptedAiLearning(
   let insertedCount = 0;
   let preservedCount = 0;
   try {
+    if (!working.caseId) {
+      return { state: "revoked", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "context_changed" };
+    }
+    const caseId = working.caseId;
     for (const batch of batches) {
       const latestReceipt = await readAcceptedAiFillReceipt();
       if (controller.signal.aborted || latestReceipt?.fillSessionId !== working.fillSessionId ||
@@ -621,7 +625,7 @@ async function runAcceptedAiLearning(
         throw new Error("context_changed");
       }
       const body = {
-        case_id: working.caseId,
+        case_id: caseId,
         provider_id: working.providerId,
         fill_session_id: working.fillSessionId,
         portal_key: working.portalKey,
@@ -1324,6 +1328,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         portalKey: request.portalKey,
         state: request.state,
         facilityId: request.facilityId,
+        groupId: request.groupId,
+        caseId: request.caseId,
       });
     case "GET_FILL_REPORT":
       return readFillReport(request.providerId);
@@ -1343,6 +1349,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         portalKey: request.portalKey,
         state: request.state,
         facilityId: request.facilityId,
+        groupId: request.groupId,
       }, guard);
     }
     case "FILL": {
@@ -1369,6 +1376,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         portalKey: request.portalKey,
         state: request.state,
         facilityId: request.facilityId,
+        groupId: request.groupId,
       }, {
         scanId: request.aiScanId,
         candidates: request.aiMatches,
@@ -1382,7 +1390,9 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // The fill is this case's binding moment for an in-panel selection
       // (TE-17): the portal tab it ran in becomes the bound tab, and the
       // activity resets the idle clock.
-      await bindFillTab(request.caseId, request.tabId);
+      if (request.caseId) {
+        await bindFillTab(request.caseId, request.tabId);
+      }
       if (attemptRevision !== fillSelectionRevision) return summary;
       // Persist the review state so reopening the panel restores it. A
       // storage failure must not un-report a successful fill.
@@ -1391,7 +1401,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           tabId: request.tabId,
           providerId: request.providerId,
           portalKey: request.portalKey,
-          caseId: request.caseId,
+          caseId: request.caseId ?? null,
           summary,
           completedAt: new Date().toISOString(),
           submitted: false,

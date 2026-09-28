@@ -1134,6 +1134,19 @@ describe("S4.1 — the fill report is a snapshot", () => {
     expect(restore).not.toContain("GET_FILL_COVERAGE");
     expect(restore).not.toContain("refreshCoverage(");
   });
+
+  it("restores ad hoc (case-free) fill report when no case is selected", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const restore = source.slice(
+      source.indexOf("async function restoreFillReport"),
+      source.indexOf("function renderFacilityAddress"),
+    );
+    // Does not exit immediately on null selectedCase, checks ad hoc matching
+    expect(restore).not.toMatch(/if\s*\(\s*selectedCase\s*==\s*null\s*\)\s*return;/);
+    expect(restore).toContain("isAdHoc");
+    expect(restore).toContain("record.caseId != null");
+  });
 });
 
 describe("S3.3 — the pickup queue is server-ranked", () => {

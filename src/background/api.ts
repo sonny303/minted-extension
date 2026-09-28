@@ -383,11 +383,13 @@ export async function getPortalFieldMaps(portalKey: string): Promise<PortalField
 // provider has several. Meta is returned so callers can read that flag.
 export async function getProviderProfile(
   providerId: string,
-  options: { state?: string; facilityId?: string | null } = {},
+  options: { state?: string; facilityId?: string | null; groupId?: string | null; caseId?: string | null } = {},
 ): Promise<{ profile: ProviderProfileResponse; meta: ApiMeta | null }> {
   const params = new URLSearchParams();
   if (options.state) params.set("state", options.state);
   if (options.facilityId) params.set("facilityId", options.facilityId);
+  if (options.groupId) params.set("groupId", options.groupId);
+  if (options.caseId) params.set("caseId", options.caseId);
   const qs = params.toString();
   const query = qs ? `?${qs}` : "";
   const { data, meta } = await apiFetch<ProviderProfileResponse>(
@@ -398,7 +400,7 @@ export async function getProviderProfile(
 
 export interface FillEventBody {
   id: string;
-  caseId: string;
+  caseId?: string | null;
   providerId: string;
   portalKey: string;
   fillMode: "web";

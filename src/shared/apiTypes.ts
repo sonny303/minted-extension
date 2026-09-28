@@ -229,6 +229,7 @@ export interface CaseListItem {
   // degrades gracefully against a server that predates this field (treated as
   // no tasks). The extension matches the page's portal_key against these.
   portalTasks?: CasePortalTask[];
+  groupId?: string | null;
 }
 
 // GET /api/cases/:id/context — the selected case's reference number(s) and most
@@ -500,4 +501,16 @@ export interface ProviderListItem {
    * is exactly what makes it safe to fill with repeatedly. */
   isTestProvider?: boolean;
   updatedAt: string;
+}
+
+export interface FillEventBody {
+  id: string;
+  caseId?: string | null;
+  providerId: string;
+  portalKey: string;
+  fillMode: "web";
+  startedAt: string;
+  completedAt: string;
+  fieldsFilled: number;
+  fieldsSkipped: unknown;
 }

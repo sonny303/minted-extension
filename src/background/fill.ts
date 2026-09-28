@@ -208,6 +208,8 @@ export interface CoverageRequest {
   portalKey: string;
   state: string;
   facilityId: string | null;
+  groupId?: string | null;
+  caseId?: string | null;
 }
 
 // Resolve the SAME field maps + profile the fill flow fetches and compute
@@ -220,6 +222,8 @@ export async function coveragePortal(request: CoverageRequest): Promise<FillCove
     getProviderProfile(request.providerId, {
       state: request.state,
       facilityId: request.facilityId,
+      groupId: request.groupId,
+      caseId: request.caseId,
     }),
   ]);
   return computeCoverage(maps, profile);
@@ -228,13 +232,14 @@ export async function coveragePortal(request: CoverageRequest): Promise<FillCove
 export interface FillRequest {
   tabId: number;
   providerId: string;
-  caseId: string;
+  caseId?: string | null;
   portalKey: string;
   state: string;
   // The resolved location: the user's pick, or the provider's sole facility.
   // null when the provider has no facilities — facility.* tokens then come
   // back unresolved with a reason, which is correct, not an error.
   facilityId: string | null;
+  groupId?: string | null;
 }
 
 export interface AiFillGuard {
@@ -270,10 +275,11 @@ export interface AcceptedAiFillReceipt {
   tabId: number;
   fillSessionId: string;
   providerId: string;
-  caseId: string;
+  caseId?: string | null;
   portalKey: string;
   state: string;
   facilityId: string | null;
+  groupId?: string | null;
   orgId: string | null;
   actorId: string;
   selectionRevision: number;
@@ -352,8 +358,15 @@ function controlLooksSensitive(control: ControlSummary): boolean {
 }
 
 function sameFillRequest(a: FillRequest, b: FillRequest): boolean {
-  return a.tabId === b.tabId && a.providerId === b.providerId && a.caseId === b.caseId &&
-    a.portalKey === b.portalKey && a.state === b.state && a.facilityId === b.facilityId;
+  return (
+    a.tabId === b.tabId &&
+    a.providerId === b.providerId &&
+    (a.caseId || null) === (b.caseId || null) &&
+    a.portalKey === b.portalKey &&
+    a.state === b.state &&
+    a.facilityId === b.facilityId &&
+    (a.groupId || null) === (b.groupId || null)
+  );
 }
 
 function isExactCandidate(value: unknown): value is AiFillCandidate {
@@ -373,7 +386,12 @@ export async function prepareAiFillPortal(
 ): Promise<import("../shared/fill").AiFillPreparation> {
   const [maps, { profile }, viewPrefs] = await Promise.all([
     getPortalFieldMaps(request.portalKey),
-    getProviderProfile(request.providerId, { state: request.state, facilityId: request.facilityId }),
+    getProviderProfile(request.providerId, {
+      state: request.state,
+      facilityId: request.facilityId,
+      groupId: request.groupId,
+      caseId: request.caseId,
+    }),
     getViewPrefs().catch(() => null),
   ]);
   await guard.validate();
@@ -563,6 +581,8 @@ export async function fillPortal(
           getProviderProfile(request.providerId, {
             state: request.state,
             facilityId: request.facilityId,
+            groupId: request.groupId,
+            caseId: request.caseId,
           }),
         ]);
         return { maps, profile };
@@ -711,7 +731,7 @@ export async function fillPortal(
     await assertPreparedCurrent();
     await postFillEvent({
       id: fillSessionId,
-      caseId: request.caseId,
+      caseId: request.caseId ?? null,
       providerId: request.providerId,
       portalKey: request.portalKey,
       fillMode: "web",
