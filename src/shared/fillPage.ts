@@ -4,8 +4,8 @@
 // every approved map on every wizard page. Off-page misses then used the
 // same reason the panel calls drift. This module is the fill-side matcher:
 // exact URL-tail ↔ an existing exact page bucket. No selector-overlap scoring
-// and no "Page N" guessing — when identity is ambiguous, callers keep today's
-// not-found behavior.
+// and no "Page N" guessing — when identity is ambiguous, callers withhold
+// every step-bound write as page_unknown.
 //
 // Kind/reason strings are pinned to match panel `src/lib/formDrift.ts`
 // (DYN-PAGE-00). The extension Fix-it strip keys on reason alone, so the
@@ -19,6 +19,8 @@ export const OTHER_PAGE_KIND = "other_page";
 
 /** Distinct from "field not found on this page" — Fix-it keys on reason alone. */
 export const OTHER_PAGE_REASON = "field belongs to another page";
+export const PAGE_UNKNOWN_KIND = "page_unknown";
+export const PAGE_UNKNOWN_REASON = "current wizard page could not be confirmed";
 
 /** Capture's sequence fallback (`Page 1`, `Page 2`, …) — never a fill identity. */
 const SEQUENCE_PAGE_RE = /^Page \d+$/i;
@@ -38,7 +40,8 @@ export function isExactFillPageIdentity(pageStep: string | null | undefined): bo
 
 /** Match the open URL to an existing exact page bucket. Returns null when the
  * URL has no tail, the tail is not among trained exact pages, or every trained
- * page is ambiguous — callers must then preserve ordinary not-found. */
+ * page is ambiguous — callers must withhold step-bound writes rather than
+ * turn uncertainty into drift. */
 export function resolveFillPage(
   pageUrl: string | null | undefined,
   pageSteps: readonly (string | null | undefined)[],
@@ -57,7 +60,8 @@ export function resolveFillPage(
 
 /** An instruction belongs on another exact page when we know the current page
  * AND the instruction names a different exact page. Null / Page N / matching
- * current page → attempt as today. */
+ * current page are not classified as other_page; nonempty unknown identities
+ * are separately withheld by the fill engine. */
 export function isOtherPageInstruction(
   instruction: Pick<FillInstruction, "pageStep">,
   currentPage: string | null,
@@ -75,5 +79,16 @@ export function otherPageReport(
     reason: OTHER_PAGE_REASON,
     mapId: instruction.mapId,
     kind: OTHER_PAGE_KIND,
+  };
+}
+
+export function pageUnknownReport(
+  instruction: Pick<FillInstruction, "label" | "mapId">,
+): ReportedField {
+  return {
+    label: instruction.label,
+    reason: PAGE_UNKNOWN_REASON,
+    mapId: instruction.mapId,
+    kind: PAGE_UNKNOWN_KIND,
   };
 }

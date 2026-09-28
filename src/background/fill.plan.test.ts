@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
+import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 
 vi.stubGlobal("chrome", {
   storage: {
@@ -11,7 +12,7 @@ vi.stubGlobal("chrome", {
   },
 });
 
-const { applyTransform, computeCoverage, planFill } = await import("./fill");
+const { applyTransform, computeCoverage, planFill, sanitizeLegacyFields } = await import("./fill");
 
 function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "selector">): PortalFieldMap {
   return {
@@ -149,7 +150,7 @@ describe("planFill", () => {
     expect(plan.manual).toEqual([
       {
         label: "DOB",
-        reason: "confirm with license",
+        reason: "prefilled - review and complete manually",
         mapId: "d",
         kind: "review",
       },
@@ -169,5 +170,20 @@ describe("computeCoverage", () => {
     expect(coverage.available).toBe(1);
     expect(coverage.total).toBe(2);
     expect(coverage.gaps).toHaveLength(1);
+  });
+});
+
+describe("legacy fill-event projection", () => {
+  it("preserves qualified drift and keeps unknown context in the old no-evidence bucket", () => {
+    const projected = sanitizeLegacyFields([
+      { label: "NPI", reason: FIELD_NOT_FOUND_REASON, mapId: "map-id", kind: "skipped" },
+      { label: "Tax ID", reason: "typed value was XYZ", mapId: "map-id-2", kind: "page_unknown" },
+      { label: "State", reason: 'dropdown has no option for "CO"', mapId: "map-id-3", kind: "skipped" },
+    ]);
+    expect(projected[0]).toEqual({ label: "NPI", reason: FIELD_NOT_FOUND_REASON, mapId: "map-id", kind: "skipped" });
+    expect(projected[1]).toEqual({ label: "Tax ID", reason: "current wizard page could not be confirmed", mapId: "map-id-2", kind: "hidden" });
+    expect(projected[2]?.reason).toBe("field option mismatch; review options on the portal");
+    expect(JSON.stringify(projected)).not.toContain("XYZ");
+    expect(JSON.stringify(projected)).not.toContain("CO");
   });
 });

@@ -6,12 +6,16 @@
 import type {
   FillInstruction,
   FillPageResult,
+  FillProbeInstruction,
+  FillProbeResult,
   ReportedField,
   ReportedFieldKind,
 } from "../shared/fill";
+import type { FillEventV2FieldOutcome, FillEventV2Outcome, FillEventV2ReasonCode } from "../shared/fillEventV2";
 import {
   isOtherPageInstruction,
   otherPageReport,
+  pageUnknownReport,
   resolveFillPage,
 } from "../shared/fillPage";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
@@ -35,6 +39,58 @@ function normalize(text: string): string {
 }
 
 export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+interface ProbedTarget {
+  mapId: string;
+  pageStep: string | null;
+  pageUrl: string | null;
+  target: Fillable;
+  radioNodes: HTMLInputElement[] | null;
+  mutationVersion: number;
+  expiresAt: number;
+}
+
+// DOM references stay only in this content-script frame's short-lived memory.
+// The opaque probe key binds APPLY_FILL to the exact node observed by probe.
+const probedTargets = new Map<string, ProbedTarget>();
+let probeMutationObserver: MutationObserver | null = null;
+let probeMutationVersion = 0;
+
+function ensureProbeMutationObserver(): boolean {
+  if (probeMutationObserver) return true;
+  if (typeof MutationObserver === "undefined" || !document.documentElement) return false;
+  probeMutationObserver = new MutationObserver((records) => {
+    if (records.length > 0) probeMutationVersion += 1;
+  });
+  probeMutationObserver.observe(document.documentElement, {
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  return true;
+}
+
+function currentProbeMutationVersion(): number {
+  const records = probeMutationObserver?.takeRecords() ?? [];
+  if (records.length > 0) probeMutationVersion += 1;
+  return probeMutationVersion;
+}
+
+function stopProbeMutationObserverIfUnused(): void {
+  if (probedTargets.size > 0) return;
+  probeMutationObserver?.disconnect();
+  probeMutationObserver = null;
+  probeMutationVersion = 0;
+}
+
+function pruneProbedTargets(): void {
+  const now = Date.now();
+  for (const [key, value] of probedTargets) {
+    if (value.expiresAt <= now) probedTargets.delete(key);
+  }
+  stopProbeMutationObserverIfUnused();
+}
 
 function asFillable(el: Element | null): Fillable | null {
   return el instanceof HTMLInputElement ||
@@ -69,12 +125,17 @@ export const LABEL_SELECTOR_PREFIX = "label:";
 // parse `label:…` at all — so every library field stored that way tested as
 // "matches nothing" and read as drift on a page where it fills perfectly.
 export function byLabel(text: string): Fillable | null {
+  return byLabelAll(text)[0] ?? null;
+}
+
+function byLabelAll(text: string): Fillable[] {
   const want = normalize(text);
+  const controls = new Set<Fillable>();
   for (const label of querySelectorAllDeep("label")) {
     if (!(label instanceof HTMLLabelElement)) continue;
     if (normalize(label.textContent ?? "") !== want) continue;
     const control = controlForLabel(label);
-    if (control) return control;
+    if (control) controls.add(control);
   }
   // Host-attribute labels (no <label> element in the light DOM).
   for (const host of querySelectorAllDeep("[label], [aria-label]")) {
@@ -84,31 +145,67 @@ export function byLabel(text: string): Fillable | null {
       "";
     if (normalize(hostText) !== want) continue;
     const root: ParentNode = host.shadowRoot ?? host;
-    const control = asFillable(querySelectorDeep(FILLABLE, root));
-    if (control) return control;
+    for (const node of querySelectorAllDeep(FILLABLE, root)) {
+      const control = asFillable(node);
+      if (control) controls.add(control);
+    }
   }
-  return null;
+  return [...controls];
 }
 
-function bySelector(selector: string): Fillable | null {
-  try {
-    return asFillable(querySelectorDeep(selector));
-  } catch {
-    return null; // invalid CSS selector — treated as not found
-  }
-}
+type TargetResolution =
+  | { status: "unique"; target: Fillable }
+  | { status: "missing" }
+  | { status: "hidden" }
+  | { status: "ambiguous" }
+  | { status: "unsupported" };
 
-function resolveTarget(instruction: FillInstruction): Fillable | null {
+function resolveTarget(instruction: FillInstruction): TargetResolution {
+  let sawHidden = false;
+  let sawUnsupported = false;
   for (const selector of [
     instruction.selector,
     ...instruction.selectorFallbacks,
   ]) {
-    const target = selector.startsWith("label:")
-      ? byLabel(selector.slice("label:".length))
-      : bySelector(selector);
-    if (target) return target;
+    let matches: Element[];
+    if (selector.startsWith(LABEL_SELECTOR_PREFIX)) {
+      matches = byLabelAll(selector.slice(LABEL_SELECTOR_PREFIX.length));
+    } else {
+      try {
+        matches = querySelectorAllDeep(selector);
+      } catch {
+        continue;
+      }
+    }
+    const fillable = matches.map(asFillable).filter((item): item is Fillable => item !== null);
+    if (fillable.length === 0) {
+      if (matches.length > 0) sawUnsupported = true;
+      continue;
+    }
+    let visible = fillable.filter((control) => !isHiddenControl(control));
+    if (visible.length === 0 && instruction.fieldType === "radio" && fillable.every((item) => item instanceof HTMLInputElement && item.type === "radio")) {
+      const firstRadio = fillable[0] as HTMLInputElement | undefined;
+      if (firstRadio) {
+        const group = firstRadio.name
+          ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(firstRadio.name)}"]`, firstRadio.form ?? document)
+              .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
+          : [firstRadio];
+        const groupVisible = group.filter((radio) => !isHiddenControl(radio));
+        if (groupVisible.length > 0 && sameRadioGroup(groupVisible)) visible = [firstRadio];
+      }
+    }
+    if (visible.length === 0) {
+      sawHidden = true;
+      continue;
+    }
+    if (visible.length === 1) return { status: "unique", target: visible[0] as Fillable };
+    if (instruction.fieldType === "radio" && sameRadioGroup(visible)) return { status: "unique", target: visible[0] as Fillable };
+    // Multiple visible targets are ambiguous. Never let query order choose.
+    return { status: "ambiguous" };
   }
-  return null;
+  if (sawHidden) return { status: "hidden" };
+  if (sawUnsupported) return { status: "unsupported" };
+  return { status: "missing" };
 }
 
 // Set an input's value through the prototype setter so framework-controlled
@@ -183,8 +280,21 @@ function labelTextOf(input: HTMLInputElement): string {
 }
 
 type ApplyOutcome =
-  | { ok: true; changed: boolean; target: Fillable; expectedValue: string | boolean }
-  | { ok: false; reason: string; kind?: ReportedFieldKind; target?: Fillable };
+  | {
+      ok: true;
+      attempted: boolean;
+      changed: boolean;
+      target: Fillable;
+      expectedValue: string | boolean;
+    }
+  | {
+      ok: false;
+      reason: string;
+      kind?: ReportedFieldKind;
+      outcome?: FillEventV2Outcome;
+      reasonCode?: FillEventV2ReasonCode;
+      target?: Fillable;
+    };
 
 /** DYN-PAGE-02 — the control resolved but sits in an inactive panel, so the
  * fill declines to write it. Never drift: the selector was found. */
@@ -192,33 +302,19 @@ const HIDDEN_OUTCOME: ApplyOutcome = {
   ok: false,
   reason: HIDDEN_REASON,
   kind: HIDDEN_KIND,
+  outcome: "hidden",
+  reasonCode: "field_hidden",
 };
 
 const TRUTHY = new Set(["true", "yes", "y", "1", "x", "on", "checked"]);
 
-/** Sample size for skip-reason lines (E6.10 F6.10.6 / OQ-3). */
-const OPTION_SAMPLE_SIZE = 3;
-
-function optionValuesSample(values: readonly string[]): string {
-  const nonempty = values.filter((v) => v !== "");
-  if (nonempty.length === 0) return "";
-  const shown = nonempty.slice(0, OPTION_SAMPLE_SIZE);
-  const extra = nonempty.length - shown.length;
-  const body = shown.join(", ");
-  return extra > 0 ? `${body}; ${extra} more` : body;
+function vocabularyMismatchReason(kind: "dropdown" | "radio"): string {
+  // A report may be persisted in the side-panel session and sent to legacy
+  // telemetry. Never include the attempted value or a sample of live options.
+  return `${kind}: no option matches the mapped value`;
 }
 
-function vocabularyMismatchReason(
-  kind: "dropdown" | "radio",
-  attempted: string,
-  optionValues: readonly string[],
-): string {
-  const sample = optionValuesSample(optionValues);
-  const base = `${kind}: no option matches "${attempted}"`;
-  return sample ? `${base} (${sample})` : base;
-}
-
-function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
+function applyRadio(el: HTMLInputElement, value: string, markAttempted: () => void): ApplyOutcome {
   const want = normalize(value);
   const group = el.name
     ? querySelectorAllDeep(
@@ -233,11 +329,9 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   if (!match) {
     return {
       ok: false,
-      reason: vocabularyMismatchReason(
-        "radio",
-        value,
-        group.map((radio) => radio.value),
-      ),
+      reason: vocabularyMismatchReason("radio"),
+      outcome: "option_mismatch",
+      reasonCode: "option_missing",
     };
   }
   if (match.matches(":disabled")) {
@@ -248,22 +342,28 @@ function applyRadio(el: HTMLInputElement, value: string): ApplyOutcome {
   // clicked — need not be the one the selector resolved to.
   if (isHiddenControl(match)) return HIDDEN_OUTCOME;
   const changed = !match.checked;
-  if (changed) match.click();
+  if (changed) {
+    markAttempted();
+    match.click();
+  }
   if (!match.checked) return { ok: false, reason: "field did not retain the requested value", target: match };
-  return { ok: true, changed, target: match, expectedValue: true };
+  return { ok: true, attempted: changed, changed, target: match, expectedValue: true };
 }
 
-function applyCheckbox(el: HTMLInputElement, value: string): ApplyOutcome {
+function applyCheckbox(el: HTMLInputElement, value: string, markAttempted: () => void): ApplyOutcome {
   const wantChecked = TRUTHY.has(normalize(value));
   const changed = el.checked !== wantChecked;
-  if (changed) el.click();
+  if (changed) {
+    markAttempted();
+    el.click();
+  }
   if (el.checked !== wantChecked) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  return { ok: true, changed, target: el, expectedValue: wantChecked };
+  return { ok: true, attempted: changed, changed, target: el, expectedValue: wantChecked };
 }
 
-function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
+function applySelect(el: HTMLSelectElement, value: string, markAttempted: () => void): ApplyOutcome {
   const options = Array.from(el.options);
   const match =
     options.find((option) => option.value === value) ??
@@ -272,25 +372,24 @@ function applySelect(el: HTMLSelectElement, value: string): ApplyOutcome {
   if (!match) {
     return {
       ok: false,
-      reason: vocabularyMismatchReason(
-        "dropdown",
-        value,
-        options.map((option) => option.value),
-      ),
+      reason: vocabularyMismatchReason("dropdown"),
+      outcome: "option_mismatch",
+      reasonCode: "option_missing",
     };
   }
   const changed = el.value !== match.value;
   if (changed) {
+    markAttempted();
     el.value = match.value;
     fireChanged(el);
   }
   if (el.value !== match.value) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  return { ok: true, changed, target: el, expectedValue: match.value };
+  return { ok: true, attempted: changed, changed, target: el, expectedValue: match.value };
 }
 
-function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
+function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
   const isRadio = el instanceof HTMLInputElement && el.type === "radio";
   // DYN-PAGE-02 — never mutate a control the coordinator cannot see. A wizard
   // that keeps every step in the DOM and hides the inactive ones would
@@ -299,26 +398,27 @@ function applyValue(el: Fillable, instruction: FillInstruction): ApplyOutcome {
   // group member is actually about to be clicked.
   if (!isRadio && isHiddenControl(el)) return HIDDEN_OUTCOME;
   if (el instanceof HTMLSelectElement)
-    return applySelect(el, instruction.value);
+    return applySelect(el, instruction.value, markAttempted);
   if (isRadio) {
-    return applyRadio(el as HTMLInputElement, instruction.value);
+    return applyRadio(el as HTMLInputElement, instruction.value, markAttempted);
   }
   if (el instanceof HTMLInputElement && el.type === "checkbox") {
-    return applyCheckbox(el, instruction.value);
+    return applyCheckbox(el, instruction.value, markAttempted);
   }
   if (el instanceof HTMLInputElement && el.type === "file") {
     // Belt and braces: the background never plans file fields.
     return { ok: false, reason: "file inputs cannot be filled" };
   }
   if (el instanceof HTMLInputElement && (el.disabled || el.readOnly)) {
-    return { ok: false, reason: "field is disabled or read-only" };
+    return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
   }
   const changed = el.value !== instruction.value;
+  markAttempted();
   setNativeValue(el, instruction.value);
   if (el.value !== instruction.value) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  return { ok: true, changed, target: el, expectedValue: instruction.value };
+  return { ok: true, attempted: true, changed, target: el, expectedValue: instruction.value };
 }
 
 function installFillStyle(el: Element): void {
@@ -392,7 +492,7 @@ export function applyAiValue(
     value,
     pageStep: null,
     kind: "ai",
-  });
+  }, () => void 0);
   if (!outcome.ok) {
     if (outcome.target) {
       const currentValue: string | boolean =
@@ -437,10 +537,146 @@ function countPageFields(): number {
   return querySelectorAllDeep(FILLABLE).length;
 }
 
-export function applyFill(instructions: FillInstruction[]): FillPageResult {
+function sameRadioGroup(elements: Fillable[]): boolean {
+  if (elements.length === 0) return false;
+  if (!elements.every((element) => element instanceof HTMLInputElement && element.type === "radio")) return false;
+  if (elements.length === 1) return true;
+  const first = elements[0] as HTMLInputElement;
+  return first.name.length > 0 && elements.every((element) =>
+    element instanceof HTMLInputElement && element.form === first.form && element.name === first.name,
+  );
+}
+
+function radioGroupNodes(element: Fillable): HTMLInputElement[] | null {
+  if (!(element instanceof HTMLInputElement) || element.type !== "radio") return null;
+  const group = element.name
+    ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(element.name)}"]`, element.form ?? document)
+        .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
+    : [element];
+  return sameRadioGroup(group) ? group : null;
+}
+
+function sameNodeList(left: HTMLInputElement[] | null, right: HTMLInputElement[] | null): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.length === right.length && left.every((node, index) => node === right[index]);
+}
+
+/**
+ * A bounded DOM-stability check used only before classifying a selector miss.
+ * It waits for the page to finish loading and for a short mutation-quiet
+ * window, so delayed wizard panels are searched before a miss is recorded.
+ */
+async function waitForPageSettled(quietMs = 120, maxWaitMs = 700): Promise<boolean> {
+  if (document.readyState !== "complete" || typeof MutationObserver === "undefined" || !document.documentElement) {
+    return false;
+  }
+  let lastMutation = Date.now();
+  const observer = new MutationObserver(() => { lastMutation = Date.now(); });
+  observer.observe(document.documentElement, {
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  const startedAt = Date.now();
+  const hasVisibleBusyState = (): boolean => {
+    for (const element of querySelectorAllDeep('[aria-busy="true"], [data-loading="true"], [role="progressbar"]')) {
+      if (!isHiddenControl(element)) return true;
+    }
+    return false;
+  };
+  try {
+    while (Date.now() - startedAt < maxWaitMs) {
+      if (Date.now() - lastMutation >= quietMs && !hasVisibleBusyState()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return Date.now() - lastMutation >= quietMs && !hasVisibleBusyState();
+  } finally {
+    observer.disconnect();
+  }
+}
+
+/** Shape-only probe used to route each map to at most one accessible frame. */
+export async function probeFillOnPage(instructions: FillProbeInstruction[]): Promise<FillProbeResult[]> {
+  const pageSettled = await waitForPageSettled();
+  pruneProbedTargets();
+  const mutationWatchAvailable = ensureProbeMutationObserver();
+  const pageUrl = typeof location !== "undefined" ? location.href : null;
+  const currentPage = resolveFillPage(
+    pageUrl,
+    instructions.map((instruction) => instruction.pageStep),
+  );
+  const pageFields = countPageFields();
+  const results: FillProbeResult[] = instructions.map((instruction) => {
+    probedTargets.delete(instruction.probeKey);
+    if (isOtherPageInstruction(instruction, currentPage)) {
+      return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+    }
+    if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+      return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+    }
+
+    let invalid = false;
+    for (const selector of [instruction.selector, ...instruction.selectorFallbacks]) {
+      let matches: Element[];
+      if (selector.startsWith(LABEL_SELECTOR_PREFIX)) {
+        matches = byLabelAll(selector.slice(LABEL_SELECTOR_PREFIX.length));
+      } else {
+        try {
+          matches = querySelectorAllDeep(selector);
+        } catch {
+          invalid = true;
+          continue;
+        }
+      }
+      const fillable = matches.map(asFillable).filter((item): item is Fillable => item !== null);
+      if (fillable.length === 0) {
+        if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields };
+        continue;
+      }
+      let visible = fillable.filter((control) => !isHiddenControl(control));
+      let radioGroup = instruction.fieldType === "radio" && sameRadioGroup(visible);
+      if (visible.length === 0 && instruction.fieldType === "radio" && fillable.every((item) => item instanceof HTMLInputElement && item.type === "radio")) {
+        const firstRadio = fillable[0] as HTMLInputElement | undefined;
+        if (firstRadio) {
+          const group = firstRadio.name
+            ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(firstRadio.name)}"]`, firstRadio.form ?? document)
+                .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
+            : [firstRadio];
+          const groupVisible = group.filter((radio) => !isHiddenControl(radio));
+          if (groupVisible.length > 0 && sameRadioGroup(groupVisible)) {
+            visible = [firstRadio];
+            radioGroup = true;
+          }
+        }
+      }
+      if (visible.length === 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "hidden", pageSettled, radioGroup: false, pageFields };
+      const targetStatus = visible.length === 1 || radioGroup ? "unique" : "ambiguous";
+      if (targetStatus === "unique" && visible[0] && mutationWatchAvailable) {
+        probedTargets.set(instruction.probeKey, {
+          mapId: instruction.mapId,
+          pageStep: instruction.pageStep,
+          pageUrl,
+          target: visible[0],
+          radioNodes: radioGroup ? radioGroupNodes(visible[0]) : null,
+          mutationVersion: currentProbeMutationVersion(),
+          expiresAt: Date.now() + 30_000,
+        });
+      }
+      return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus, pageSettled, radioGroup, pageFields };
+    }
+    return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields };
+  });
+  stopProbeMutationObserverIfUnused();
+  return results;
+}
+
+export function applyFill(instructions: FillInstruction[], strictRevalidation = false): FillPageResult {
   return applyFillOnPage(
     instructions,
     typeof location !== "undefined" ? location.href : null,
+    strictRevalidation,
   );
 }
 
@@ -449,20 +685,49 @@ export function applyFill(instructions: FillInstruction[]): FillPageResult {
 export function applyFillOnPage(
   instructions: FillInstruction[],
   pageUrl: string | null,
+  strictRevalidation = false,
 ): FillPageResult {
   const filled: string[] = [];
+  const attemptedLabels: string[] = [];
   const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped: ReportedField[] = [];
-  // Exact URL-tail identity only. Ambiguous / missing → null → every
-  // instruction is attempted and unresolved selectors stay ordinary drift.
+  const fieldOutcomes: FillEventV2FieldOutcome[] = [];
+  const recordOutcome = (
+    instruction: FillInstruction,
+    attempted: boolean,
+    outcome: FillEventV2Outcome,
+    reasonCode: FillEventV2ReasonCode | null,
+  ): void => {
+    const identity = instruction.telemetry;
+    if (!identity) return;
+    fieldOutcomes.push({
+      mapId: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instruction.mapId)
+        ? instruction.mapId
+        : null,
+      targetKey: identity.targetKey,
+      frameKey: identity.frameKey,
+      stepKey: identity.stepKey,
+      attempted,
+      outcome,
+      reasonCode,
+    });
+  };
+  // Exact URL-tail identity only. Ambiguous / missing → null; all nonempty
+  // step-bound instructions are withheld as page_unknown below.
   const currentPage = resolveFillPage(
     pageUrl,
     instructions.map((i) => i.pageStep),
   );
   for (const instruction of instructions) {
+    let writeAttempted = false;
+    const mutationVersion = currentProbeMutationVersion();
+    const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
+    if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
+    stopProbeMutationObserverIfUnused();
     try {
       if (isOtherPageInstruction(instruction, currentPage)) {
         skipped.push(otherPageReport(instruction));
+        recordOutcome(instruction, false, "other_page", "other_page");
         continue;
       }
       if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
@@ -472,21 +737,68 @@ export function applyFillOnPage(
           mapId: instruction.mapId,
           kind: "other_page",
         });
+        recordOutcome(instruction, false, "other_page", "other_page");
         continue;
       }
-      const target = resolveTarget(instruction);
-      if (!target) {
+      if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+        skipped.push(pageUnknownReport(instruction));
+        recordOutcome(instruction, false, "page_unknown", "page_unknown");
+        continue;
+      }
+      const resolution = resolveTarget(instruction);
+      if (resolution.status === "missing") {
+        if (!strictRevalidation) {
+          skipped.push({ label: instruction.label, reason: FIELD_NOT_FOUND_REASON, mapId: instruction.mapId, kind: "skipped" });
+          continue;
+        }
+        // A target disappearing between the shape probe and this immediate
+        // write-time check is a context change, never a qualified drift miss.
         skipped.push({
           label: instruction.label,
-          reason: FIELD_NOT_FOUND_REASON,
+          reason: "form changed during fill; review this field on the portal",
           mapId: instruction.mapId,
-          kind: "skipped",
+          kind: "unverified",
         });
+        recordOutcome(instruction, false, "unverified", "context_changed");
         continue;
       }
-      const outcome = applyValue(target, instruction);
+      if (resolution.status === "hidden") {
+        skipped.push({ label: instruction.label, reason: HIDDEN_REASON, mapId: instruction.mapId, kind: HIDDEN_KIND });
+        recordOutcome(instruction, false, "hidden", "field_hidden");
+        continue;
+      }
+      if (resolution.status === "ambiguous") {
+        skipped.push({ label: instruction.label, reason: "multiple visible controls match this mapping", mapId: instruction.mapId, kind: "no_mapping" });
+        recordOutcome(instruction, false, "needs_mapping", "ambiguous_target");
+        continue;
+      }
+      if (resolution.status === "unsupported") {
+        skipped.push({ label: instruction.label, reason: "mapping does not resolve to a fillable control", mapId: instruction.mapId, kind: "unverified" });
+        recordOutcome(instruction, false, "unsupported", "unsupported_control");
+        continue;
+      }
+      if (strictRevalidation && (
+        !probedTarget ||
+        probedTarget.mapId !== instruction.mapId ||
+        probedTarget.pageStep !== instruction.pageStep ||
+        probedTarget.pageUrl !== pageUrl ||
+        probedTarget.target !== resolution.target ||
+        probedTarget.mutationVersion !== mutationVersion ||
+        !sameNodeList(probedTarget.radioNodes, radioGroupNodes(resolution.target))
+      )) {
+        skipped.push({
+          label: instruction.label,
+          reason: "form changed during fill; review this field on the portal",
+          mapId: instruction.mapId,
+          kind: "unverified",
+        });
+        recordOutcome(instruction, false, "unverified", "context_changed");
+        continue;
+      }
+      const outcome = applyValue(resolution.target, instruction, () => { writeAttempted = true; });
       if (outcome.ok) {
         filled.push(instruction.label);
+        if (outcome.attempted) attemptedLabels.push(instruction.label);
         if (outcome.changed) {
           const kind = instruction.kind ?? "static";
           decorateFill(outcome.target, kind, instruction.token);
@@ -497,6 +809,22 @@ export function applyFillOnPage(
             ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
           });
         }
+        // R1 knows the setter accepted the write, not that the portal retained
+        // it. Semantic readback arrives in R3.
+        if (!outcome.attempted) {
+          skipped.push({
+            label: instruction.label,
+            reason: "field could not be verified; review it on the portal",
+            mapId: instruction.mapId,
+            kind: "unverified",
+          });
+        }
+        recordOutcome(
+          instruction,
+          outcome.attempted,
+          "unverified",
+          "readback_unavailable",
+        );
       } else {
         skipped.push({
           label: instruction.label,
@@ -506,14 +834,25 @@ export function applyFillOnPage(
           // "skipped" the panel would have defaulted them to anyway.
           kind: outcome.kind ?? "skipped",
         });
+        if (outcome.outcome && outcome.reasonCode) {
+          recordOutcome(instruction, false, outcome.outcome, outcome.reasonCode);
+        }
       }
-    } catch (error) {
+    } catch {
       skipped.push({
         label: instruction.label,
-        reason: `error applying value: ${error instanceof Error ? error.message : String(error)}`,
+        // Exception text can contain provider data or a form value; keep only
+        // a fixed safe reason in both session storage and legacy telemetry.
+        reason: "field could not be applied; review it on the portal",
         mapId: instruction.mapId,
+        kind: "unverified",
       });
+      if (writeAttempted) {
+        filled.push(instruction.label);
+        attemptedLabels.push(instruction.label);
+      }
+      recordOutcome(instruction, writeAttempted, "unverified", "context_changed");
     }
   }
-  return { filled, writes, skipped, pageFields: countPageFields() };
+  return { filled, attemptedLabels, writes, skipped, pageFields: countPageFields(), fieldOutcomes };
 }

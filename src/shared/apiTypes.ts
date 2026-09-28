@@ -15,6 +15,8 @@ export interface ApiMeta {
   needs_facility?: boolean;
   // GET /api/portals: true when the registry returned zero rows.
   registry_empty?: boolean;
+  /** Present only when fill-event V2 storage is available on this API route. */
+  fill_event_schema_version?: number;
 }
 
 export interface ApiEnvelope<T> {

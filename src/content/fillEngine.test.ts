@@ -2,12 +2,13 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyFill, applyFillOnPage, clearPortalForm } from "./fillEngine";
+import { applyFill, applyFillOnPage, clearPortalForm, probeFillOnPage } from "./fillEngine";
 import { describeSelectorMatches } from "./elementPicker";
 import type { FillInstruction } from "../shared/fill";
-import { OTHER_PAGE_KIND, OTHER_PAGE_REASON } from "../shared/fillPage";
+import { OTHER_PAGE_KIND, OTHER_PAGE_REASON, PAGE_UNKNOWN_KIND, PAGE_UNKNOWN_REASON } from "../shared/fillPage";
 import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
+import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
 
 // jsdom does not provide CSS.escape; applyRadio uses it to scope a NAMED radio
 // group. Same shim the captureScan and elementPicker suites already carry —
@@ -34,6 +35,8 @@ function instr(
     fieldType: over.fieldType ?? "text",
     value: over.value ?? "Ada",
     pageStep: over.pageStep ?? null,
+    ...(over.probeKey ? { probeKey: over.probeKey } : {}),
+    ...(over.telemetry ? { telemetry: over.telemetry } : {}),
     ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
   };
 }
@@ -164,7 +167,7 @@ describe("applyFill", () => {
     expect((document.querySelector("#field") as HTMLInputElement).value).toBe("");
   });
 
-  it("keeps ordinary not-found when page identity is ambiguous", () => {
+  it("withholds all nonempty step-bound maps when page identity is ambiguous", () => {
     document.body.innerHTML = `<input id="npi" type="text" />`;
     const result = applyFillOnPage(
       [
@@ -184,15 +187,53 @@ describe("applyFill", () => {
       ],
       "https://payer.example/enroll/unknown-step",
     );
-    expect(result.filled).toEqual(["NPI"]);
+    expect(result.filled).toEqual([]);
     expect(result.skipped).toEqual([
       {
+        label: "NPI",
+        reason: PAGE_UNKNOWN_REASON,
+        mapId: "m1",
+        kind: PAGE_UNKNOWN_KIND,
+      },
+      {
         label: "TIN",
-        reason: FIELD_NOT_FOUND_REASON,
+        reason: PAGE_UNKNOWN_REASON,
         mapId: "m-tin",
-        kind: "skipped",
+        kind: PAGE_UNKNOWN_KIND,
       },
     ]);
+    expect((document.getElementById("npi") as HTMLInputElement).value).toBe("");
+  });
+
+  it("withholds sequence-bound maps when page identity is unknown", () => {
+    document.body.innerHTML = `<input id="legacy" type="text" />`;
+    const result = applyFillOnPage(
+      [instr({ label: "Legacy", selector: "#legacy", pageStep: "Page 2" })],
+      "https://payer.example/enroll/unknown-step",
+    );
+    expect(result.filled).toEqual([]);
+    expect((document.getElementById("legacy") as HTMLInputElement).value).toBe("");
+    expect(result.skipped[0]?.kind).toBe(PAGE_UNKNOWN_KIND);
+  });
+
+  it("revalidates one visible target immediately before writing", () => {
+    document.body.innerHTML = `<div style="display:none"><input id="same" /></div><input id="same" />`;
+    const result = applyFill([
+      instr({ label: "Field", selector: "#same", value: "safe" }),
+    ]);
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("#same"));
+    expect(result.filled).toEqual(["Field"]);
+    expect(inputs.map((input) => input.value)).toEqual(["", "safe"]);
+  });
+
+  it("declines a newly ambiguous target instead of relying on query order", () => {
+    document.body.innerHTML = `<input id="same" /><input id="same" />`;
+    const result = applyFill([
+      instr({ label: "Field", selector: "#same", value: "unsafe" }),
+    ]);
+    expect(result.filled).toEqual([]);
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>("#same")).map((input) => input.value)).toEqual(["", ""]);
+    expect(result.skipped[0]?.kind).toBe("no_mapping");
   });
 
   it("does not classify Page N maps as other_page even on a known URL page", () => {
@@ -442,6 +483,22 @@ describe("applyFill", () => {
     );
   });
 
+  it("shows an already-selected choice as not checked, not verified", () => {
+    document.body.innerHTML = `<input id="agree" type="checkbox" checked />`;
+    const result = applyFill([
+      instr({ label: "Agree", selector: "#agree", fieldType: "checkbox", value: "yes" }),
+    ]);
+    expect(result.filled).toEqual(["Agree"]);
+    expect(result.attemptedLabels).toEqual([]);
+    expect(result.skipped).toEqual([{
+      label: "Agree",
+      reason: "field could not be verified; review it on the portal",
+      mapId: "m1",
+      kind: "unverified",
+    }]);
+    expect(result.fieldOutcomes).toEqual([]);
+  });
+
   it("does not record or decorate controlled static fields that reject the target", () => {
     document.body.innerHTML = `
       <input id="name" type="text" />
@@ -469,7 +526,7 @@ describe("applyFill", () => {
     expect(agree.classList.contains("mp-fill-static")).toBe(false);
   });
 
-  it("TS-162 — names the control and a bounded option sample when a dropdown misses", () => {
+  it("reports an option mismatch without persisting the attempted or available values", () => {
     document.body.innerHTML = `
       <select id="st">
         <option value="">Select</option>
@@ -497,9 +554,9 @@ describe("applyFill", () => {
       }),
     ]);
     expect(result.filled).toEqual(["State"]);
-    expect(miss.skipped[0]?.reason).toBe(
-      'dropdown: no option matches "Colorado" (KS, MO, NE; 1 more)',
-    );
+    expect(miss.skipped[0]?.reason).toBe("dropdown: no option matches the mapped value");
+    expect(miss.skipped[0]?.reason).not.toContain("Colorado");
+    expect(miss.skipped[0]?.reason).not.toContain("KS");
     expect(miss.skipped[0]?.reason).not.toBe("field not found on this page");
   });
 
@@ -533,6 +590,115 @@ describe("applyFill", () => {
     `;
     const result = applyFill([]);
     expect(result.pageFields).toBe(3);
+  });
+});
+
+describe("probe-to-apply binding", () => {
+  it("does not write to a replacement node with the same selector after probing", async () => {
+    document.body.innerHTML = `<input id="target" />`;
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "Field",
+      selector: "#target",
+      value: "synthetic",
+      probeKey,
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    const probe = await probeFillOnPage([{
+      mapId: instruction.mapId,
+      probeKey,
+      selector: instruction.selector,
+      selectorFallbacks: [],
+      fieldType: "text",
+      pageStep: null,
+    }]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+
+    const oldTarget = document.querySelector<HTMLInputElement>("#target")!;
+    const replacement = document.createElement("input");
+    replacement.id = "target";
+    oldTarget.replaceWith(replacement);
+    const applied = applyFillOnPage([instruction], window.location.href, true);
+
+    expect(replacement.value).toBe("");
+    expect(applied.skipped[0]?.kind).toBe("unverified");
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({
+      attempted: false,
+      outcome: "unverified",
+      reasonCode: "context_changed",
+    });
+  });
+
+  it("rejects a replaced intended radio option even when the first group member remains", async () => {
+    document.body.innerHTML = `
+      <input id="first" type="radio" name="state" value="KS" />
+      <input id="intended" type="radio" name="state" value="CO" />
+    `;
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "State",
+      selector: 'input[type="radio"][name="state"]',
+      fieldType: "radio",
+      value: "CO",
+      probeKey,
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    const probe = await probeFillOnPage([{
+      mapId: instruction.mapId,
+      probeKey,
+      selector: instruction.selector,
+      selectorFallbacks: [],
+      fieldType: "radio",
+      pageStep: null,
+    }]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+
+    const intended = document.querySelector<HTMLInputElement>("#intended")!;
+    const replacement = document.createElement("input");
+    replacement.id = "intended";
+    replacement.type = "radio";
+    replacement.name = "state";
+    replacement.value = "CO";
+    intended.replaceWith(replacement);
+    const applied = applyFillOnPage([instruction], window.location.href, true);
+
+    expect(document.querySelector<HTMLInputElement>("#first")!.checked).toBe(false);
+    expect(replacement.checked).toBe(false);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({
+      attempted: false,
+      outcome: "unverified",
+      reasonCode: "context_changed",
+    });
+  });
+
+  it("waits for a delayed panel before declaring a unique target", async () => {
+    document.body.innerHTML = "";
+    const probeKey = createFillEventV2OpaqueKey("t");
+    setTimeout(() => {
+      document.body.innerHTML = `<input id="late-panel" />`;
+    }, 40);
+    const probe = await probeFillOnPage([{
+      mapId: "m1",
+      probeKey,
+      selector: "#late-panel",
+      selectorFallbacks: [],
+      fieldType: "text",
+      pageStep: null,
+    }]);
+    expect(probe[0]).toMatchObject({ targetStatus: "unique", pageSettled: true });
+  });
+
+  it("does not report a page settled while a visible loading marker remains", async () => {
+    document.body.innerHTML = `<div aria-busy="true"></div>`;
+    const probe = await probeFillOnPage([{
+      mapId: "m1",
+      probeKey: createFillEventV2OpaqueKey("t"),
+      selector: "#not-yet-rendered",
+      selectorFallbacks: [],
+      fieldType: "text",
+      pageStep: null,
+    }]);
+    expect(probe[0]).toMatchObject({ targetStatus: "missing", pageSettled: false });
   });
 });
 

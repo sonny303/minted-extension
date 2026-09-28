@@ -26,6 +26,7 @@ import type {
 import {
   ApiError,
   getPortalFieldMaps,
+  getPortalFieldMapsWithMeta,
   getProviderProfile,
   getViewPrefs,
   postFillEvent,
@@ -43,6 +44,13 @@ import {
   type FramedAiScan,
   type AiFillApplyLifecycle,
 } from "./frameMessaging";
+import {
+  buildFillEventV2Metadata,
+  createFillEventV2OpaqueKey,
+  FILL_EVENT_V2_LIMIT_ERROR,
+  type FillEventV2FieldOutcome,
+  type FillEventV2Metadata,
+} from "../shared/fillEventV2";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -88,6 +96,83 @@ function humanLabel(map: PortalFieldMap): string {
   return map.selector.startsWith("label:") ? map.selector.slice("label:".length) : map.selector;
 }
 
+function safeLegacyReason(field: ReportedField): string {
+  if (field.kind === "skipped" && field.reason === "field not found on this page") {
+    return "field not found on this page";
+  }
+  switch (field.kind) {
+    case "other_page": return "field belongs to another page";
+    case "page_unknown": return "current wizard page could not be confirmed";
+    case "hidden": return "field is hidden on this page";
+    case "no_mapping": return "mapping needs review";
+    case "no_value": return "required provider value is unavailable";
+    case "manual":
+    case "file":
+    case "review": return "manual review is required";
+    case "unverified": return "field could not be verified; review it on the portal";
+    default:
+      return /option|dropdown|radio/i.test(field.reason)
+        ? "field option mismatch; review options on the portal"
+        : "field not filled; review it on the portal";
+  }
+}
+
+export function sanitizeLegacyFields(fields: ReportedField[]): ReportedField[] {
+  return fields.map((field) => {
+    const qualifiedMiss = field.kind === "skipped" && field.reason === "field not found on this page";
+    const oldReaderNoEvidence = field.kind === "page_unknown" || field.kind === "unverified";
+    return {
+      ...field,
+      // Old Panel releases only know these recognized no-evidence kinds. Keep
+      // local reports truthful, but project unknown/context states into the
+      // legacy hidden bucket so they cannot become inferred drift/success.
+      kind: oldReaderNoEvidence || (field.kind == null && !qualifiedMiss) ? "hidden" : field.kind,
+      reason: safeLegacyReason(field),
+    };
+  });
+}
+
+export function createV2Outcomes(
+  pageResult: FillPageResult,
+  manual: ReportedField[],
+  instructions: FillInstruction[],
+): FillEventV2FieldOutcome[] {
+  const outcomes: FillEventV2FieldOutcome[] = [...(pageResult.fieldOutcomes ?? [])];
+  const instructionMaps = new Set(instructions.map((instruction) => instruction.mapId));
+  for (const field of manual) {
+    if (field.mapId && instructionMaps.has(field.mapId)) continue;
+    const kind = field.kind;
+    const outcome = kind === "no_value" ? "needs_value" : kind === "no_mapping" ? "needs_mapping" : "manual";
+    const reasonCode = kind === "no_value" ? "missing_value" : kind === "no_mapping" ? "mapping_required" : "manual_required";
+    const validMapId = field.mapId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(field.mapId)
+      ? field.mapId
+      : null;
+    outcomes.push({
+      mapId: validMapId,
+      targetKey: createFillEventV2OpaqueKey("t"),
+      frameKey: null,
+      stepKey: null,
+      attempted: false,
+      outcome,
+      reasonCode,
+    });
+  }
+  return outcomes;
+}
+
+export function buildV2Outcomes(
+  pageResult: FillPageResult,
+  manual: ReportedField[],
+  instructions: FillInstruction[],
+): FillEventV2Metadata {
+  return buildFillEventV2Metadata(createV2Outcomes(pageResult, manual, instructions));
+}
+
+function isNotChecked(field: ReportedField): boolean {
+  return field.kind === "other_page" || field.kind === "page_unknown" ||
+    field.kind === "hidden" || field.kind === "unverified";
+}
+
 export interface FillPlan {
   staticFills: FillInstruction[];
   aiFills: FillInstruction[];
@@ -96,9 +181,6 @@ export interface FillPlan {
 
 export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
-  const unresolvedReasons = new Map<string, string>(
-    profile.unresolved.map((u) => [u.token, u.reason]),
-  );
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
@@ -120,7 +202,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     if (map.source === "manual") {
       manual.push({
         label,
-        reason: map.notes ?? "not tracked in Minted Panel - enter manually",
+        reason: "not tracked in Minted Panel - enter manually",
         mapId: map.id,
         kind: "manual",
       });
@@ -147,11 +229,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       // user.name resolves from the caller's auth metadata (the server notes
       // the empty in meta.notes, not in unresolved) — tell the user where to
       // fix it rather than the generic no-value line.
-      const reason =
-        map.token === "user.name"
-          ? "Your name isn't set. Add it in Minted Panel under Settings so forms can list you as the preparer."
-          : ((map.token != null ? unresolvedReasons.get(map.token) : null) ??
-            "no value in Minted Panel");
+      const reason = "no value in Minted Panel";
       // A DATA gap: mapped, but the value is missing on the provider/case —
       // routes to the provider record, not the mapping flow (F4.3.3).
       manual.push({ label, reason, mapId: map.id, kind: "no_value" });
@@ -172,7 +250,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     if (map.source === "manual_partial") {
       manual.push({
         label,
-        reason: map.notes ?? "prefilled - review and complete manually",
+        reason: "prefilled - review and complete manually",
         mapId: map.id,
         kind: "review",
       });
@@ -261,6 +339,7 @@ interface PreparedAiFill {
   tokenCatalog: string[];
   unprocessedControls: number;
   createdAt: number;
+  fillEventV2?: boolean;
   operation?: AiFillOperation;
 }
 
@@ -378,14 +457,30 @@ function isExactCandidate(value: unknown): value is AiFillCandidate {
     typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence);
 }
 
+async function fetchPortalMaps(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
+  try {
+    if (typeof getPortalFieldMapsWithMeta === "function") {
+      const res = await getPortalFieldMapsWithMeta(portalKey);
+      if (res && Array.isArray(res.maps)) return res;
+    }
+  } catch {
+    // fall back to getPortalFieldMaps
+  }
+  if (typeof getPortalFieldMaps === "function") {
+    const maps = await getPortalFieldMaps(portalKey);
+    return { maps: maps ?? [], fillEventV2: false };
+  }
+  return { maps: [], fillEventV2: false };
+}
+
 /** Prepare a value-free local-model prompt and retain the value-bearing fill
  * source only in this worker's memory until the final request arrives. */
 export async function prepareAiFillPortal(
   request: FillRequest,
   guard: AiFillGuard,
 ): Promise<import("../shared/fill").AiFillPreparation> {
-  const [maps, { profile }, viewPrefs] = await Promise.all([
-    getPortalFieldMaps(request.portalKey),
+  const [{ maps, fillEventV2 }, { profile }, viewPrefs] = await Promise.all([
+    fetchPortalMaps(request.portalKey),
     getProviderProfile(request.providerId, {
       state: request.state,
       facilityId: request.facilityId,
@@ -439,6 +534,7 @@ export async function prepareAiFillPortal(
     tokenCatalog: [...safeTokens],
     unprocessedControls,
     createdAt: Date.now(),
+    fillEventV2: fillEventV2 ?? false,
   };
   preparedAiFills.set(scanId, prepared);
   while (preparedAiFills.size > 4) {
@@ -575,10 +671,10 @@ export async function fillPortal(
   }
 
   const resolvedData = prepared
-    ? { maps: prepared.maps, profile: prepared.profile }
+    ? { maps: prepared.maps, profile: prepared.profile, fillEventV2: prepared.fillEventV2 ?? false }
     : await (async () => {
-        const [maps, { profile }] = await Promise.all([
-          getPortalFieldMaps(request.portalKey),
+        const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
+          fetchPortalMaps(request.portalKey),
           getProviderProfile(request.providerId, {
             state: request.state,
             facilityId: request.facilityId,
@@ -586,9 +682,10 @@ export async function fillPortal(
             caseId: request.caseId,
           }),
         ]);
-        return { maps, profile };
+        return { maps, profile, fillEventV2 };
       })();
   const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+  const fillEventV2 = resolvedData.fillEventV2;
 
   const assertPreparedCurrent = async (): Promise<void> => {
     await options.validate?.();
@@ -663,7 +760,11 @@ export async function fillPortal(
   let pageResultStatic: FillPageResult;
   try {
     await assertPreparedCurrent();
-    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills, assertPreparedCurrent);
+    const validateWithV2 = Object.assign(assertPreparedCurrent, {
+      captureV2: true,
+      validate: assertPreparedCurrent,
+    });
+    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills, validateWithV2);
     await assertPreparedCurrent();
   } catch (error) {
     if (prepared && operation) {
@@ -724,12 +825,28 @@ export async function fillPortal(
   });
   let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
+  const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
+  const localAttempted = localOutcomes.filter((field) => field.attempted).length;
+  const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
+  const localRejected = localOutcomes.filter((field) => field.outcome === "write_rejected").length;
+  let telemetry: FillEventV2Metadata | null = null;
+  let telemetryValidationError: string | null = null;
+  if (fillEventV2) {
+    try {
+      telemetry = buildFillEventV2Metadata(localOutcomes);
+    } catch (error) {
+      telemetryValidationError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
+        ? FILL_EVENT_V2_LIMIT_ERROR
+        : "Fill telemetry validation failed; telemetry was not recorded.";
+    }
+  }
 
   // Log the attempt. A logging failure must not un-report a successful fill,
   // so it degrades to a warning in the summary instead of throwing.
   let eventRecorded = true;
   let eventError: string | null = null;
   try {
+    if (telemetryValidationError) throw new Error(telemetryValidationError);
     await assertPreparedCurrent();
     await postFillEvent({
       id: fillSessionId,
@@ -739,14 +856,15 @@ export async function fillPortal(
       fillMode: "web",
       startedAt,
       completedAt,
-      fieldsFilled: pageResult.writes?.length ?? pageResult.filled.length,
+      fieldsFilled: telemetry?.fieldsVerified ?? (pageResult.writes?.length ?? pageResult.filled.length),
       // Preserve producer kinds (other_page). Content not-found historically
       // omitted kind — default those to "skipped" so the panel drift predicate
       // still matches. Never blanket-overwrite every skip to "skipped".
-      fieldsSkipped: [
+      fieldsSkipped: telemetry ? [] : sanitizeLegacyFields([
         ...pageResult.skipped.map((f) => ({ ...f, kind: f.kind ?? "skipped" })),
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
-      ],
+      ]),
+      ...(telemetry ? { v2: telemetry } : {}),
     }, { signal: operation?.abortController.signal });
   } catch (error) {
     eventRecorded = false;
@@ -756,9 +874,10 @@ export async function fillPortal(
     if (error instanceof ApiError && error.status === 403) {
       eventError =
         "Fill applied, but it couldn't be logged: your account is read-only in this organization. Ask an admin to upgrade your role.";
+    } else if (error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR) {
+      eventError = FILL_EVENT_V2_LIMIT_ERROR;
     } else {
-      const detail = error instanceof Error ? error.message : "unknown error";
-      eventError = `Fill applied, but it couldn't be logged to Minted Panel: ${detail}. Retry from the case record.`;
+      eventError = "Fill applied, but telemetry could not be recorded to Minted Panel. Retry from the case record.";
     }
   }
 
@@ -774,6 +893,9 @@ export async function fillPortal(
       pageResult = combinePageResult();
     }
   }
+
+  const notChecked = pageResult.skipped.filter(isNotChecked);
+  const skipped = pageResult.skipped.filter((field) => !isNotChecked(field));
 
   const staticFilled = pageResult.writes?.filter((write) => write.kind === "static").length ?? pageResult.filled.length;
   const aiFilled = pageResult.writes?.filter((write) => write.kind === "ai").length ?? 0;
@@ -818,7 +940,7 @@ export async function fillPortal(
   const summary: FillSummary = {
     filled: staticFilled + aiFilled,
     filledLabels: pageResult.filled,
-    skipped: pageResult.skipped,
+    skipped,
     manual,
     eventRecorded,
     eventError,
@@ -826,6 +948,13 @@ export async function fillPortal(
     // touches route validates fill_session_id and 404s an unknown id.
     fillSessionId: eventRecorded ? fillSessionId : null,
     pageFields: pageResult.pageFields,
+    fieldsAttempted: localAttempted,
+    fieldsVerified: localVerified,
+    fieldsRejected: localRejected,
+    attemptedLabels: pageResult.attemptedLabels ?? [],
+    notChecked,
+    fieldOutcomes: localOutcomes,
+    ...(telemetry ? { schemaVersion: 2 as const, telemetry } : {}),
     staticFilled,
     aiFilled,
     writtenSelectors: [...new Set((pageResult.writes ?? []).map((write) => write.selector))],
@@ -870,8 +999,8 @@ export async function sandboxFillPortal(
 ): Promise<SandboxFillSummary> {
   const startedAt = new Date().toISOString();
   const fillSessionId = crypto.randomUUID();
-  const [maps, { profile }] = await Promise.all([
-    getPortalFieldMaps(request.portalKey),
+  const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
+    fetchPortalMaps(request.portalKey),
     getProviderProfile(request.providerId, {
       state: request.state ?? undefined,
       facilityId: request.facilityId,
@@ -905,7 +1034,7 @@ export async function sandboxFillPortal(
 
   let pageResult: FillPageResult;
   try {
-    pageResult = await applyFillAcrossFrames(request.tabId, staticFills);
+    pageResult = await applyFillAcrossFrames(request.tabId, staticFills, { captureV2: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
@@ -917,6 +1046,21 @@ export async function sandboxFillPortal(
     );
   }
   const completedAt = new Date().toISOString();
+  const localOutcomes = createV2Outcomes(pageResult, manual, staticFills);
+  const localAttempted = localOutcomes.filter((field) => field.attempted).length;
+  const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
+  const localRejected = localOutcomes.filter((field) => field.outcome === "write_rejected").length;
+  let telemetry: FillEventV2Metadata | null = null;
+  let telemetryValidationError: string | null = null;
+  if (fillEventV2) {
+    try {
+      telemetry = buildFillEventV2Metadata(localOutcomes);
+    } catch (error) {
+      telemetryValidationError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
+        ? FILL_EVENT_V2_LIMIT_ERROR
+        : "Fill telemetry validation failed; telemetry was not recorded.";
+    }
+  }
 
   // The machine log rides /api/shared-test-fills: is_test, NO case and NO
   // provider. That is what makes 5.2 true by construction rather than by
@@ -925,22 +1069,25 @@ export async function sandboxFillPortal(
   let logError: string | null = null;
   let recordedId: string | null = null;
   try {
+    if (telemetryValidationError) throw new Error(telemetryValidationError);
     recordedId = await postSharedTestFill({
       id: fillSessionId,
       portalKey: request.portalKey,
-      fieldsFilled: pageResult.filled.length,
-      fieldsSkipped: [
+      fieldsFilled: telemetry?.fieldsVerified ?? pageResult.filled.length,
+      fieldsSkipped: telemetry ? [] : sanitizeLegacyFields([
         ...pageResult.skipped,
         ...manual.map((f): ReportedField => ({ ...f, kind: "manual" })),
-      ],
+      ]),
       startedAt,
       completedAt,
       orgId: request.orgId,
+      ...(telemetry ? { v2: telemetry } : {}),
     });
   } catch (error) {
     // A logging failure must not un-report a fill that really happened.
-    const detail = error instanceof Error ? error.message : "unknown error";
-    logError = `Sandbox fill applied, but the test log could not be written: ${detail}`;
+    logError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
+      ? FILL_EVENT_V2_LIMIT_ERROR
+      : "Sandbox fill applied, but telemetry could not be recorded.";
   }
 
   // The selectors we actually wrote — the exact set "Clear portal form"
@@ -951,13 +1098,20 @@ export async function sandboxFillPortal(
     .map((i) => i.selector);
 
   return {
-    filled: pageResult.filled.length,
-    filledLabels: pageResult.filled,
-    skipped: pageResult.skipped,
+    filled: localVerified,
+    filledLabels: [],
+    skipped: pageResult.skipped.filter((field) => !isNotChecked(field)),
     manual,
     pageFields: pageResult.pageFields,
-    filledSelectors,
     fillSessionId: recordedId,
+    filledSelectors,
     logError,
+    fieldsAttempted: localAttempted,
+    fieldsVerified: localVerified,
+    fieldsRejected: localRejected,
+    attemptedLabels: pageResult.attemptedLabels ?? [],
+    notChecked: pageResult.skipped.filter(isNotChecked),
+    fieldOutcomes: localOutcomes,
+    ...(telemetry ? { schemaVersion: 2 as const } : {}),
   };
 }

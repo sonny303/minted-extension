@@ -276,6 +276,8 @@ const fillNote = el<HTMLElement>("fill-note");
 const fillResults = el<HTMLElement>("fill-results");
 const fillReportTime = el<HTMLElement>("fill-report-time");
 const fillSummaryBox = el<HTMLElement>("fill-summary");
+const fillAttemptedBox = el<HTMLElement>("fill-attempted");
+const fillNotCheckedBox = el<HTMLElement>("fill-not-checked");
 const fillAiReview = el<HTMLElement>("fill-ai-review");
 const fillAiStatus = el<HTMLElement>("fill-ai-status");
 const fillAiAcceptBtn = el<HTMLButtonElement>("fill-ai-accept");
@@ -1584,6 +1586,8 @@ function clearFillResults(): void {
   touchStatus.hidden = true;
   fillResults.hidden = true;
   fillReportTime.hidden = true;
+  fillAttemptedBox.hidden = true;
+  fillNotCheckedBox.hidden = true;
   fillSkippedBox.hidden = true;
   fillManualBox.hidden = true;
   fillEventWarn.hidden = true;
@@ -1941,7 +1945,6 @@ function renderFillSummary(
     fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const staticFilled = summary.staticFilled ?? summary.filled;
   const aiFilled = summary.aiFilled ?? 0;
-  const attempted = summary.filled + summary.skipped.length;
   // The heading carries the counts, so no pill; the rows are the filled field
   // LABELS from the page result — values are never retained (PHI). The page
   // denominator keeps coverage honest: "24 mapped" on a ~117-field form is
@@ -1950,18 +1953,37 @@ function renderFillSummary(
     summary.pageFields != null && summary.pageFields > 0
       ? ` The page has ~${summary.pageFields} fillable fields.`
       : "";
-  fillSummaryBox.replaceChildren(
-    bucketDetails(
-      `Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled} of ${attempted} actual writes.${pageNote}`,
+  if (summary.fieldsAttempted != null) {
+    const identifiedCurrentStep = summary.fieldOutcomes?.filter((field) => field.stepKey != null).length;
+    const currentStepNote = identifiedCurrentStep == null ? "" : ` ${identifiedCurrentStep} mapped fields have a confirmed current step.`;
+    fillSummaryBox.replaceChildren(bucketDetails(
+      `Verified ${summary.fieldsVerified ?? 0}; ${summary.fieldsAttempted} setter attempts remain unverified.${currentStepNote}${pageNote}`,
       null,
-      summary.writtenSelectors ?? summary.filledLabels,
-    ),
-  );
+      [],
+    ));
+    fieldList(fillAttemptedBox, "Attempted but not verified:", (summary.attemptedLabels ?? []).map((label) => ({
+      label,
+      reason: "setter was attempted; the portal state was not checked",
+      kind: "unverified",
+    })));
+    fieldList(fillNotCheckedBox, "Not checked:", summary.notChecked ?? []);
+  } else {
+    const attempted = summary.filled + summary.skipped.length;
+    fillSummaryBox.replaceChildren(
+      bucketDetails(
+        `Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled} of ${attempted} actual writes.${pageNote}`,
+        null,
+        summary.writtenSelectors ?? summary.filledLabels,
+      ),
+    );
+    fieldList(fillAttemptedBox, "Attempted but not verified:", []);
+    fieldList(fillNotCheckedBox, "Not checked:", []);
+  }
   renderAiReview(summary.aiReview ?? null, restored ?? null);
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
   // Manual/gap bucket shows fix-it links, scoped to the
   // fill that actually ran (lastFill), not whatever is selected now.
-  fieldList(fillManualBox, "Needs manual entry or review:", summary.manual, {
+  fieldList(fillManualBox, "Form-wide planning items — page not checked:", summary.manual, {
     portalKey: lastFill?.portalKey ?? portal?.key ?? null,
     providerId: lastFill?.providerId ?? selectedProviderId(),
   });
@@ -1974,14 +1996,13 @@ function renderFillSummary(
       "Fill applied, but it couldn't be logged to Minted Panel. Retry from the case record.";
   }
 
-  // Field-gap flag — mapped fields that came back without a value
-  // (skipped + needs-manual). Shown BEFORE the submit affordances so the human
-  // sees the gaps first; submitting is never blocked.
-  const gapCount = summary.skipped.length + summary.manual.length;
+  // Only current-run fields belong in the gap count. Planner items cover maps
+  // across every step, so their page presence was not checked in this run.
+  const gapCount = summary.skipped.length;
   gapFlag.hidden = gapCount === 0;
   if (gapCount > 0) {
     gapFlag.textContent =
-      `${gapCount} mapped ${gapCount === 1 ? "field has" : "fields have"} no value yet - ` +
+      `${gapCount} mapped ${gapCount === 1 ? "field needs" : "fields need"} review from this fill - ` +
       "review the lists above and complete them on the portal before you submit.";
   }
 
@@ -5439,12 +5460,15 @@ async function runSandboxFill(): Promise<void> {
   }
   const summary = response.data;
   const parts = [
-    `Filled ${summary.filled} of ${summary.pageFields} fields on this page`,
+    summary.fieldsAttempted != null
+      ? `Verified ${summary.fieldsVerified ?? 0}; ${summary.fieldsAttempted} setter attempts remain unverified`
+      : `Filled ${summary.filled} of ${summary.pageFields} fields on this page`,
   ];
   if (summary.skipped.length > 0)
     parts.push(`${summary.skipped.length} skipped`);
   if (summary.manual.length > 0)
-    parts.push(`${summary.manual.length} need manual entry`);
+    parts.push(`${summary.manual.length} form-wide planning items (page not checked)`);
+  if (summary.notChecked?.length) parts.push(`${summary.notChecked.length} not checked`);
   // A failed machine log is reported, never swallowed — but it does not make
   // the fill a failure, because the fill happened.
   setSandboxStatus(
@@ -5748,9 +5772,12 @@ runMockDryRunBtn.addEventListener("click", () => {
     }
     lastMockDryRunPortalKey = activePortal.key;
     const { filled, skipped, gaps, pass } = response.data;
-    mockDryRunStatus.textContent = pass
-      ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
-      : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
+    mockDryRunStatus.textContent = response.data.fieldsAttempted != null
+      ? `Mock dry run attempted ${response.data.fieldsAttempted} setter write${response.data.fieldsAttempted === 1 ? "" : "s"}; semantic verification is not available. Review the live form before marking it proven.`
+      : pass
+        ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
+        : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
+    if (response.data.logError) mockDryRunStatus.textContent += ` ${response.data.logError}`;
     renderTrainDryRun();
     // A passing run has nothing in either bucket, so `fieldList` hides them
     // and the result stays the one line it was.

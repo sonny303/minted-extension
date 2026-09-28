@@ -402,7 +402,9 @@ describe("TS-81 — read-only fill: every field accounted for, reasons surfaced"
       (g) => g.label.includes("caqh") || g.label.includes("#caqh"),
     );
     expect(caqh?.kind).toBe("no_value");
-    expect(caqh?.reason).toBe("empty on provider");
+    // Fill summaries use fixed safe reason text instead of echoing arbitrary
+    // unresolved text from the profile service.
+    expect(caqh?.reason).toBe("no value in Minted Panel");
     const ptan = coverage.gaps.find((g) => g.label === "Group Medicare PTAN");
     expect(ptan?.kind).toBe("no_mapping");
   });
@@ -1763,31 +1765,108 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
 
   it("allows the fill once the request really names the designated sandbox provider", async () => {
     const { handleRequest } = await import("../background/index");
-    chrome.tabs.sendMessage = (async (
-      _tabId: number,
-      message: { type?: string },
-    ) => {
-      if (message?.type === "PING") return { ok: true };
-      if (message?.type === "APPLY_FILL") {
-        return {
-          ok: true,
-          data: { filled: ["First name"], skipped: [], pageFields: 1 },
+    const originalMaps = [...mock.state.fieldMaps];
+    const controlledMapId = "4d0d6e10-4f6f-4a7d-8d80-5a3a16ea4e73";
+    const firstMap = originalMaps[0];
+    if (!firstMap) throw new Error("mock panel needs its base approved field map");
+    mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, {
+      ...firstMap,
+      id: controlledMapId,
+      selector: "label:First name",
+      pageStep: null,
+      mapType: "web",
+      source: "token",
+      token: "provider.firstName",
+      status: "approved",
+    });
+
+    try {
+      chrome.tabs.sendMessage = (async (
+        _tabId: number,
+        rawMessage: unknown,
+      ) => {
+        const message = rawMessage as {
+          type?: string;
+          instructions?: Array<{
+            mapId: string;
+            label: string;
+            telemetry?: { targetKey: string; frameKey: string; stepKey: string | null };
+          }>;
         };
-      }
-      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
-    }) as typeof chrome.tabs.sendMessage;
+        if (message?.type === "PING") return { ok: true };
+        if (message?.type === "PROBE_FILL") {
+          return {
+            ok: true,
+            data: (message.instructions ?? []).map(({ mapId }) => ({
+              mapId,
+              pageStatus: "eligible",
+              targetStatus: "unique",
+              pageSettled: true,
+              radioGroup: false,
+              pageFields: 1,
+            })),
+          };
+        }
+        if (message?.type === "APPLY_FILL") {
+          const instruction = message.instructions?.[0];
+          const telemetry = instruction?.telemetry;
+          const outcomeMapId = instruction?.mapId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instruction.mapId)
+            ? instruction.mapId
+            : null;
+          return {
+            ok: true,
+            data: {
+              filled: instruction ? [instruction.label] : [],
+              attemptedLabels: instruction ? [instruction.label] : [],
+              skipped: [],
+              pageFields: 1,
+              fieldOutcomes: instruction && telemetry ? [{
+                // The content producer normalizes non-UUID mock map IDs to null
+                // before returning its value-free V2 outcome.
+                mapId: outcomeMapId,
+                targetKey: telemetry.targetKey,
+                frameKey: telemetry.frameKey,
+                stepKey: telemetry.stepKey,
+                attempted: true,
+                outcome: "unverified",
+                reasonCode: "readback_unavailable",
+              }] : [],
+            },
+          };
+        }
+        throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+      }) as typeof chrome.tabs.sendMessage;
 
-    const summary = (await handleRequest({
-      type: "SANDBOX_FILL",
-      tabId: 1,
-      providerId: FIXTURES.SANDBOX_PROVIDER_ID,
-      portalKey: FIXTURES.PORTAL_KEY,
-      state: null,
-      facilityId: null,
-    })) as import("../shared/fill").SandboxFillSummary;
+      const summary = (await handleRequest({
+        type: "SANDBOX_FILL",
+        tabId: 1,
+        providerId: FIXTURES.SANDBOX_PROVIDER_ID,
+        portalKey: FIXTURES.PORTAL_KEY,
+        state: null,
+        facilityId: null,
+      })) as import("../shared/fill").SandboxFillSummary;
 
-    expect(summary.filled).toBe(1);
-    expect(summary.logError).toBeNull();
+      expect(summary).toMatchObject({
+        fieldsAttempted: 1,
+        fieldsVerified: 0,
+        fieldsRejected: 0,
+        filled: 0,
+        attemptedLabels: ["First name"],
+        notChecked: [],
+        skipped: [],
+        manual: [],
+        logError: null,
+      });
+      expect(summary.fieldOutcomes).toHaveLength(1);
+      expect(summary.fieldOutcomes?.[0]).toMatchObject({
+        mapId: controlledMapId,
+        attempted: true,
+        outcome: "unverified",
+        reasonCode: "readback_unavailable",
+      });
+    } finally {
+      mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
+    }
   });
 
   it("refuses CLEAR_PORTAL_FORM for a real, non-designated provider before touching the tab", async () => {
@@ -1928,8 +2007,22 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       return frames;
     }) as unknown as typeof chrome.webNavigation.getAllFrames;
     const applied: string[] = [];
-    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown) => {
-      const message = rawMessage as { type: string };
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown, options?: chrome.tabs.MessageSendOptions) => {
+      const message = rawMessage as { type: string; instructions?: Array<{ mapId: string }> };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: "eligible",
+            targetStatus: frameId === 0 ? "unique" : "missing",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 1,
+          })),
+        };
+      }
       if (message.type.startsWith("APPLY_")) applied.push(message.type);
       return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
     }) as typeof chrome.tabs.sendMessage;
@@ -2003,6 +2096,19 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
         return { ok: true, data: controlsByFrame.get(frameId) ?? [] };
       }
       if (message.type === "CLEAR_AI_SCAN") return { ok: true, data: null };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: ((rawMessage as { instructions?: Array<{ mapId: string }> }).instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: "eligible",
+            targetStatus: "unique",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 1,
+          })),
+        };
+      }
       if (message.type === "APPLY_FILL") {
         return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
       }
