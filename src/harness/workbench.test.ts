@@ -48,7 +48,7 @@ import {
   recognizeForm,
   resolveTrainRecognition,
 } from "../shared/trainForms";
-import { coveragePortal } from "../background/fill";
+import { coveragePortal, planFill } from "../background/fill";
 import {
   bindFillTab,
   enterActiveCase,
@@ -113,8 +113,12 @@ interface MockApi {
       [key: string]: unknown;
     }>;
     touches: Map<string, unknown>;
+    fillSessions: Map<string, Record<string, unknown>>;
+    learnedMaps: Map<string, Record<string, unknown>>;
+    learningRequests: Array<{ body: Record<string, unknown>; orgId: string | null }>;
     viewPrefs: Map<string, string[]>;
     failTouches: number;
+    failLearnings: number;
     // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
     completedSteps: Set<string>;
     // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
@@ -160,6 +164,14 @@ beforeEach(() => {
   stub.reset();
 });
 
+afterEach(() => {
+  mock.state.touches.clear();
+  mock.state.fillSessions.clear();
+  mock.state.learningRequests.length = 0;
+  mock.state.failTouches = 0;
+  mock.state.failLearnings = 0;
+});
+
 const HANDOFF = {
   type: "SET_ACTIVE_CASE",
   caseId: FIXTURES.CASE_ID as string,
@@ -168,6 +180,96 @@ const HANDOFF = {
   portalUrl: "https://portal.example.com/enroll/form",
 };
 const APP_ORIGIN = "https://mintedpanel.vercel.app";
+
+const AI_FILL_SESSION = "11111111-2222-4333-8444-555555555566";
+const AI_SELECTOR = "#ai-npi";
+const AI_PAGE_URL = "https://portal.example.com/enroll/form";
+const AI_MAPPING = {
+  selector: AI_SELECTOR,
+  token: "provider.npi",
+  confidence: 0.93,
+  fieldType: "text" as const,
+  pageUrl: AI_PAGE_URL,
+};
+
+async function seedAcceptedAiLearningReceipt(options: {
+  mappings?: typeof AI_MAPPING[];
+  facilityId?: string | null;
+  selectionRevision?: number;
+  eventRecorded?: boolean;
+} = {}) {
+  const { AI_ACCEPTED_RECEIPT_KEY, AI_SELECTION_REVISION_KEY } = await import("../background/index");
+  const mappings = options.mappings ?? [AI_MAPPING];
+  const facilityId = options.facilityId === undefined ? FIXTURES.FACILITY_ID : options.facilityId;
+  const selectionRevision = options.selectionRevision ?? 4;
+  const reportKey = `minted.fillReport.${FIXTURES.PROVIDER_ID}.${FIXTURES.PORTAL_KEY}`;
+  const learning = { state: "accepted" as const, confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0 };
+  await enterActiveCase({ caseId: FIXTURES.CASE_ID, providerId: FIXTURES.PROVIDER_ID, orgId: FIXTURES.PRIMARY_ORG });
+  await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+  await writePanelMode("case");
+  stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+  stub.sessionStore.set("minted.selectedProviderId", FIXTURES.PROVIDER_ID);
+  stub.sessionStore.set(`minted.selectedCaseId.${FIXTURES.PROVIDER_ID}`, FIXTURES.CASE_ID);
+  stub.sessionStore.set(`minted.selectedFacilityId.${FIXTURES.PROVIDER_ID}`, facilityId);
+  stub.sessionStore.set(AI_SELECTION_REVISION_KEY, selectionRevision);
+  stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+    tabId: 21,
+    fillSessionId: AI_FILL_SESSION,
+    providerId: FIXTURES.PROVIDER_ID,
+    caseId: FIXTURES.CASE_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    state: "KS",
+    facilityId,
+    orgId: FIXTURES.PRIMARY_ORG,
+    actorId: FIXTURES.USER_ID,
+    selectionRevision,
+    touchRecorded: false,
+    learning,
+    mappings,
+  });
+  stub.sessionStore.set(reportKey, {
+    tabId: 21,
+    providerId: FIXTURES.PROVIDER_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    caseId: FIXTURES.CASE_ID,
+    completedAt: "2026-09-26T12:00:00.000Z",
+    submitted: false,
+    summary: {
+      filled: mappings.length,
+      filledLabels: mappings.map((mapping) => mapping.selector),
+      skipped: [],
+      manual: [],
+      eventRecorded: options.eventRecorded ?? true,
+      eventError: null,
+      fillSessionId: AI_FILL_SESSION,
+      pageFields: mappings.length,
+      staticFilled: 0,
+      aiFilled: mappings.length,
+      writtenSelectors: mappings.map((mapping) => mapping.selector),
+      orgId: FIXTURES.PRIMARY_ORG,
+      facilityId,
+      state: "KS",
+      aiReview: {
+        scanId: "scan-ai-session",
+        fillSessionId: AI_FILL_SESSION,
+        status: "ready",
+        writes: mappings,
+        unprocessedControls: 0,
+        accepted: true,
+        learning,
+      },
+    },
+  });
+  mock.state.fillSessions.set(AI_FILL_SESSION, {
+    id: AI_FILL_SESSION,
+    caseId: FIXTURES.CASE_ID,
+    providerId: FIXTURES.PROVIDER_ID,
+    portalKey: FIXTURES.PORTAL_KEY,
+    fieldsFilled: mappings.length,
+  });
+  mock.state.learningRequests.length = 0;
+  return { reportKey, mappings, learning };
+}
 
 async function forceIdle(minutes: number): Promise<void> {
   const record = (await readActiveCaseRecord()) as ActiveCaseRecord;
@@ -415,6 +517,229 @@ describe("TS-83 — typed touch with retry preservation + next-best-action handb
     expect(state.status).toBe("active");
     if (state.status === "active")
       expect(state.record.caseId).toBe(FIXTURES.CASE2_ID);
+  });
+});
+
+describe("Step6 — accepted AI learning follows the logged human touch", () => {
+  async function markSubmitted(fillSessionId = AI_FILL_SESSION) {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({
+      type: "MARK_SUBMITTED",
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      fillSessionId,
+    });
+  }
+
+  it("learns an accepted receipt only after the touch and keeps original iframe URLs value-free", async () => {
+    const secondFrameUrl = "https://portal.example.com/embedded/step-2";
+    const mappings = [
+      AI_MAPPING,
+      { ...AI_MAPPING, selector: "#ai-license", pageUrl: secondFrameUrl },
+    ];
+    const { reportKey } = await seedAcceptedAiLearningReceipt({ mappings });
+
+    const result = await markSubmitted() as {
+      learning: { state: string; confirmedSavedCount: number; insertedCount: number };
+    };
+
+    expect(result.learning).toMatchObject({ state: "learned", confirmedSavedCount: 2, insertedCount: 2 });
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(2);
+    expect(mock.state.learningRequests.map((entry) => entry.body.page_url).sort()).toEqual([
+      AI_PAGE_URL,
+      secondFrameUrl,
+    ].sort());
+    for (const { body } of mock.state.learningRequests) {
+      expect(body).not.toHaveProperty("org_id");
+      expect(body).not.toHaveProperty("actor_id");
+      expect(JSON.stringify(body)).not.toContain("1234567890");
+      expect(JSON.stringify(body)).not.toContain("Alex");
+    }
+
+    const storedReceipt = stub.sessionStore.get("minted.aiAcceptedReceipt") as Record<string, unknown>;
+    expect(storedReceipt).toMatchObject({ touchRecorded: true, learning: { state: "learned" } });
+    expect(JSON.stringify(stub.sessionStore.get(reportKey))).not.toContain("1234567890");
+    expect(JSON.stringify(storedReceipt)).not.toContain("1234567890");
+
+    // A subsequent fill's normal map fetch exposes the learned mapping as a
+    // green static map; no special cache or client-side fallback is needed.
+    const maps = await getPortalFieldMaps(FIXTURES.PORTAL_KEY);
+    const { profile } = await getProviderProfile(FIXTURES.PROVIDER_ID, {
+      facilityId: FIXTURES.FACILITY_ID,
+      state: "KS",
+    });
+    expect(planFill(maps, profile).staticFills.map((fill) => fill.selector)).toContain(AI_SELECTOR);
+  });
+
+  it("does not learn when the AI suggestions were cleared before submission", async () => {
+    await seedAcceptedAiLearningReceipt();
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "CLEAR_AI_FILL", tabId: 21, fillSessionId: AI_FILL_SESSION });
+    await markSubmitted();
+
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("does not learn when the AI review was never accepted", async () => {
+    const { reportKey } = await seedAcceptedAiLearningReceipt();
+    const report = stub.sessionStore.get(reportKey) as Record<string, unknown>;
+    const summary = report.summary as Record<string, unknown>;
+    const review = summary.aiReview as Record<string, unknown>;
+    stub.sessionStore.set(reportKey, {
+      ...report,
+      summary: { ...summary, aiReview: { ...review, accepted: false } },
+    });
+    stub.sessionStore.set("minted.aiAcceptedReceipt", null);
+    await markSubmitted();
+
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("keeps a failed touch separate from learning", async () => {
+    await seedAcceptedAiLearningReceipt();
+    mock.state.failTouches = 1;
+
+    await expect(markSubmitted()).rejects.toThrow(ApiError);
+    expect(mock.state.touches.size).toBe(0);
+    expect(mock.state.learningRequests).toHaveLength(0);
+    expect(stub.sessionStore.get("minted.aiAcceptedReceipt")).toMatchObject({
+      touchRecorded: false,
+      learning: { state: "accepted" },
+    });
+  });
+
+  it("preserves a successful touch after learning fails and retry performs learning only", async () => {
+    await seedAcceptedAiLearningReceipt();
+    mock.state.failLearnings = 1;
+    const first = await markSubmitted() as { learning: { state: string } };
+    expect(first.learning.state).toBe("failed");
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.learningRequests).toHaveLength(1);
+    const touchRequestsBeforeRetry = mock.state.requests.filter((entry) => entry.path.includes("/touches")).length;
+
+    const { handleRequest } = await import("../background/index");
+    const retried = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as {
+      state: string;
+      confirmedSavedCount: number;
+    };
+    expect(retried).toMatchObject({ state: "learned", confirmedSavedCount: 1 });
+    expect(mock.state.touches.size).toBe(1);
+    expect(mock.state.requests.filter((entry) => entry.path.includes("/touches"))).toHaveLength(touchRequestsBeforeRetry);
+    expect(mock.state.learningRequests).toHaveLength(2);
+  });
+
+  it("returns honest idempotent replay counts and rejects learning after a facility switch", async () => {
+    const { handleRequest, AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    await seedAcceptedAiLearningReceipt();
+    // An approved matching map already exists. Retry confirms it, with no
+    // inserted count, instead of inventing a newly saved Good Catch.
+    mock.state.fieldMaps.push({
+      ...(mock.state.fieldMaps.find((map) => map.selector === "#npi") ?? {}),
+      id: "fm-ai-replay",
+      selector: AI_SELECTOR,
+      token: AI_MAPPING.token,
+      status: "approved",
+    });
+    const receipt = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...receipt,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    mock.state.touches.set("existing-touch", {
+      id: "existing-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const replay = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as {
+      state: string; confirmedSavedCount: number; insertedCount: number;
+    };
+    expect(replay).toMatchObject({ state: "learned", confirmedSavedCount: 1, insertedCount: 0 });
+
+    // A different selected secondary facility revokes the persisted receipt;
+    // the retry route makes no network write.
+    await seedAcceptedAiLearningReceipt({ facilityId: FIXTURES.FACILITY_ID });
+    const fresh = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...fresh,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    stub.sessionStore.set(`minted.selectedFacilityId.${FIXTURES.PROVIDER_ID}`, FIXTURES.FACILITY2_ID);
+    mock.state.touches.set("existing-touch-2", {
+      id: "existing-touch-2", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const requestsBefore = mock.state.learningRequests.length;
+    const changed = await handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(changed.state).toBe("revoked");
+    expect(mock.state.learningRequests).toHaveLength(requestsBefore);
+  });
+
+  it("rejects an A-to-B-to-A facility switch using the persisted selection revision", async () => {
+    const { handleRequest } = await import("../background/index");
+    await seedAcceptedAiLearningReceipt();
+    await handleRequest({
+      type: "SET_SELECTED_FACILITY",
+      providerId: FIXTURES.PROVIDER_ID,
+      facilityId: FIXTURES.FACILITY2_ID,
+    });
+    await handleRequest({
+      type: "SET_SELECTED_FACILITY",
+      providerId: FIXTURES.PROVIDER_ID,
+      facilityId: FIXTURES.FACILITY_ID,
+    });
+
+    await expect(handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION })).rejects.toThrow(/receipt/);
+    expect(mock.state.learningRequests).toHaveLength(0);
+  });
+
+  it("survives worker restart from session receipt and refuses an unlogged fill report", async () => {
+    const seeded = await seedAcceptedAiLearningReceipt();
+    const { AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    const receipt = stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(AI_ACCEPTED_RECEIPT_KEY, {
+      ...receipt,
+      touchRecorded: true,
+      learning: { state: "pending", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0 },
+    });
+    mock.state.touches.set("restart-touch", {
+      id: "restart-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    vi.resetModules();
+    const workerAfterRestart = await import("../background/index");
+    const restoredReport = await workerAfterRestart.handleRequest({
+      type: "GET_FILL_REPORT", providerId: FIXTURES.PROVIDER_ID,
+    }) as { submitted: boolean; summary: { aiReview?: { learning?: { state?: string } } } };
+    expect(restoredReport).toMatchObject({
+      submitted: true,
+      summary: { aiReview: { learning: { state: "failed" } } },
+    });
+    const restored = await workerAfterRestart.handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(restored.state).toBe("learned");
+
+    // A forged/stale accepted receipt without a successful fill-event report
+    // is revoked and cannot become a learned portal map.
+    await seedAcceptedAiLearningReceipt({ eventRecorded: false });
+    const current = stub.sessionStore.get(workerAfterRestart.AI_ACCEPTED_RECEIPT_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(workerAfterRestart.AI_ACCEPTED_RECEIPT_KEY, {
+      ...current,
+      touchRecorded: true,
+      learning: { state: "failed", confirmedSavedCount: 0, insertedCount: 0, preservedCount: 0, reason: "request_failed" },
+    });
+    mock.state.touches.set("unlogged-touch", {
+      id: "unlogged-touch", caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY, fillSessionId: AI_FILL_SESSION,
+    });
+    const before = mock.state.learningRequests.length;
+    const refused = await workerAfterRestart.handleRequest({ type: "RETRY_AI_LEARNING", fillSessionId: AI_FILL_SESSION }) as { state: string };
+    expect(refused.state).toBe("revoked");
+    expect(mock.state.learningRequests).toHaveLength(before);
+    expect(seeded.mappings).toHaveLength(1);
   });
 });
 
@@ -810,6 +1135,19 @@ describe("S4.1 — the fill report is a snapshot", () => {
     expect(restore).toContain("renderFillSummary(record.summary");
     expect(restore).not.toContain("GET_FILL_COVERAGE");
     expect(restore).not.toContain("refreshCoverage(");
+  });
+
+  it("restores ad hoc (case-free) fill report when no case is selected", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/sidepanel/main.ts", "utf8") as string;
+    const restore = source.slice(
+      source.indexOf("async function restoreFillReport"),
+      source.indexOf("function renderFacilityAddress"),
+    );
+    // Does not exit immediately on null selectedCase, checks ad hoc matching
+    expect(restore).not.toMatch(/if\s*\(\s*selectedCase\s*==\s*null\s*\)\s*return;/);
+    expect(restore).toContain("isAdHoc");
+    expect(restore).toContain("record.caseId != null");
   });
 });
 
@@ -1604,5 +1942,270 @@ describe("TE-3 — latency budgets on the seeded mock harness", () => {
     const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(2000); // the TE-3 budget
     expect(elapsed).toBeLessThan(1100); // < 3×400ms ⇒ genuinely concurrent
+  });
+});
+
+describe("Astra F2 — worker cancellation stays live through delayed frame apply", () => {
+  const TAB_ID = 91;
+  const TAB_URL = "https://portal.example.com/enroll/form";
+  const FRAME_URL = "https://portal.example.com/enroll/embedded";
+  const frames = [
+    { frameId: 0, url: TAB_URL },
+    { frameId: 3, url: FRAME_URL },
+  ];
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let previousTabGet: typeof chrome.tabs.get;
+  let previousGetAllFrames: typeof chrome.webNavigation.getAllFrames;
+
+  beforeEach(async () => {
+    stub.reset();
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: FIXTURES.PRIMARY_ORG });
+    await handleRequest({
+      type: "ENTER_ACTIVE_CASE",
+      caseId: FIXTURES.CASE_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      orgId: FIXTURES.PRIMARY_ORG,
+    });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+
+    stub.setQueryTabs([{ id: TAB_ID, url: TAB_URL, active: true, windowId: 1 } as chrome.tabs.Tab]);
+    previousSendMessage = chrome.tabs.sendMessage;
+    previousTabGet = chrome.tabs.get;
+    previousGetAllFrames = chrome.webNavigation.getAllFrames;
+    chrome.tabs.get = (async (tabId: number) => ({
+      id: tabId,
+      url: TAB_URL,
+      active: true,
+      windowId: 1,
+    })) as typeof chrome.tabs.get;
+    chrome.webNavigation.getAllFrames = (async () => frames) as unknown as typeof chrome.webNavigation.getAllFrames;
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+    chrome.tabs.get = previousTabGet;
+    chrome.webNavigation.getAllFrames = previousGetAllFrames;
+  });
+
+  it("cancels a static ad hoc fill after a group A-B-A switch before any page write", async () => {
+    const { handleRequest } = await import("../background/index");
+    const { AD_HOC_CASE_SELECTION } = await import("../shared/messages");
+    await handleRequest({ type: "CLEAR_ACTIVE_CASE" });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: AD_HOC_CASE_SELECTION });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-A" });
+
+    let releaseFrames!: () => void;
+    let announceFrames!: () => void;
+    const frameLookupStarted = new Promise<void>((resolve) => { announceFrames = resolve; });
+    const blockedFrames = new Promise<void>((resolve) => { releaseFrames = resolve; });
+    chrome.webNavigation.getAllFrames = (async () => {
+      announceFrames();
+      await blockedFrames;
+      return frames;
+    }) as unknown as typeof chrome.webNavigation.getAllFrames;
+    const applied: string[] = [];
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown, options?: chrome.tabs.MessageSendOptions) => {
+      const message = rawMessage as { type: string; instructions?: Array<{ mapId: string }> };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: "eligible",
+            targetStatus: frameId === 0 ? "unique" : "missing",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 1,
+          })),
+        };
+      }
+      if (message.type.startsWith("APPLY_")) applied.push(message.type);
+      return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+    }) as typeof chrome.tabs.sendMessage;
+    const request = {
+      type: "FILL" as const, tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+      caseId: null, groupId: "group-A", facilityId: FIXTURES.FACILITY_ID,
+      state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+    };
+    const pending = handleRequest(request);
+    const rejected = expect(pending).rejects.toThrow();
+    await frameLookupStarted;
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-B" });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-A" });
+    releaseFrames();
+    await rejected;
+    expect(applied).toEqual([]);
+    expect(mock.state.fillSessions.size).toBe(0);
+
+    // The same choices remain usable immediately; cancellation adds no lock.
+    await expect(handleRequest(request)).resolves.toMatchObject({ eventRecorded: true });
+    expect(applied).toContain("APPLY_FILL");
+    expect(await handleRequest({ type: "GET_FILL_REPORT", providerId: FIXTURES.PROVIDER_ID }))
+      .toMatchObject({ caseId: null, groupId: "group-A" });
+    expect(await handleRequest({ type: "GET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID })).toBe("group-A");
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: "another-org" });
+    expect(await handleRequest({ type: "GET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID })).toBeNull();
+  });
+
+  it.each([
+    [null, "group-A", FIXTURES.FACILITY_ID],
+    ["__ad_hoc__", null, FIXTURES.FACILITY_ID],
+    ["__ad_hoc__", "group-A", null],
+  ])("rejects incomplete ad hoc choices in the worker (%s, %s, %s)", async (caseChoice, groupId, facilityId) => {
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "CLEAR_ACTIVE_CASE" });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: caseChoice });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId });
+    await expect(handleRequest({
+      type: "FILL", tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+      caseId: null, groupId, facilityId, state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+    })).rejects.toThrow("Choose Ad hoc fill, a group, and a location");
+    expect(mock.state.fillSessions.size).toBe(0);
+  });
+
+  it("cancels after A-B-A switches, clears the delayed frame, and lets a refill own the report", async () => {
+    const { handleRequest, AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
+    let releaseFirstApply!: () => void;
+    let announceFirstApply!: () => void;
+    const firstApplyStarted = new Promise<void>((resolve) => { announceFirstApply = resolve; });
+    const blockedFirstApply = new Promise<void>((resolve) => { releaseFirstApply = resolve; });
+    const appliedFrames: number[] = [];
+    const clearedFrames: number[] = [];
+    const aiSessionIds: string[] = [];
+    const controlsByFrame = new Map<number, Array<{ selector: string; label: string; controlType: "text" }>>([
+      [0, [{ selector: "#ai-npi", label: "NPI", controlType: "text" }]],
+      [3, [{ selector: "#ai-email", label: "Email", controlType: "text" }]],
+    ]);
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      rawMessage: unknown,
+      options?: chrome.tabs.MessageSendOptions,
+    ) => {
+      const message = rawMessage as {
+        type?: string;
+        fillSessionId?: string;
+        instructions?: Array<{ selector: string; token?: string; confidence?: number }>;
+      };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "SCAN_UNMAPPED_CONTROLS") {
+        return { ok: true, data: controlsByFrame.get(frameId) ?? [] };
+      }
+      if (message.type === "CLEAR_AI_SCAN") return { ok: true, data: null };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: ((rawMessage as { instructions?: Array<{ mapId: string }> }).instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: "eligible",
+            targetStatus: "unique",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 1,
+          })),
+        };
+      }
+      if (message.type === "APPLY_FILL") {
+        return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+      }
+      if (message.type === "APPLY_AI_FILL") {
+        appliedFrames.push(frameId);
+        if (message.fillSessionId) aiSessionIds.push(message.fillSessionId);
+        if (frameId === 0) {
+          announceFirstApply();
+          await blockedFirstApply;
+        }
+        const writes = (message.instructions ?? []).map((instruction) => ({
+          selector: instruction.selector,
+          kind: "ai" as const,
+          token: instruction.token,
+          confidence: instruction.confidence,
+        }));
+        return { ok: true, data: { filled: writes.map((write) => write.selector), writes, skipped: [], pageFields: 2 } };
+      }
+      if (message.type === "CLEAR_AI_FILL") {
+        clearedFrames.push(frameId);
+        return { ok: true, data: 1 };
+      }
+      throw new Error(`unexpected content message: ${message.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+
+    const prepared = await handleRequest({
+      type: "PREPARE_AI_FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+    }) as import("../shared/fill").AiFillPreparation;
+    expect(prepared.controls.map((control) => control.selector)).toEqual(["#ai-npi", "#ai-email"]);
+
+    const originalFill = handleRequest({
+      type: "FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+      aiScanId: prepared.scanId,
+      aiMatches: [
+        { selector: "#ai-npi", token: "provider.npi", confidence: 0.95 },
+        { selector: "#ai-email", token: "provider.email", confidence: 0.95 },
+      ],
+    });
+    await firstApplyStarted;
+
+    // Each public selection route advances the worker generation. Returning
+    // to the original tuple cannot make the in-flight scan current again.
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: "secondary-provider" });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE2_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY2_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: "30563fd6-8e95-46a0-8e1c-cb3b968b3c3d" });
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: FIXTURES.PRIMARY_ORG });
+    await handleRequest({
+      type: "ENTER_ACTIVE_CASE",
+      caseId: FIXTURES.CASE_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      orgId: FIXTURES.PRIMARY_ORG,
+    });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+
+    const refill = await handleRequest({
+      type: "FILL",
+      tabId: TAB_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      state: "CO",
+      facilityId: FIXTURES.FACILITY_ID,
+    }) as import("../shared/fill").FillSummary;
+    const reportKey = `minted.fillReport.${FIXTURES.PROVIDER_ID}.${FIXTURES.PORTAL_KEY}`;
+    const currentReport = stub.sessionStore.get(reportKey) as import("../shared/fill").FillReportRecord;
+    expect(currentReport.summary.fillSessionId).toBe(refill.fillSessionId);
+    expect(currentReport.summary.aiReview).toBeFalsy();
+
+    releaseFirstApply();
+    const stale = await originalFill as import("../shared/fill").FillSummary;
+    expect(appliedFrames).toEqual([0]);
+    expect(clearedFrames).toContain(0);
+    expect(clearedFrames).not.toContain(3);
+    expect(aiSessionIds).toHaveLength(1);
+    expect(stale.aiReview).toBeNull();
+    expect(stale.aiFilled).toBe(0);
+    expect((await import("../background/fill")).readActiveAiReview(aiSessionIds[0]!)).toBeNull();
+    expect(stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY)).toBeNull();
+    expect((stub.sessionStore.get(reportKey) as import("../shared/fill").FillReportRecord).summary.fillSessionId)
+      .toBe(refill.fillSessionId);
   });
 });

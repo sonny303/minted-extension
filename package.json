@@ -1,7 +1,7 @@
 {
   "name": "minted-panel-workbench",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Minted Panel Chrome extension — one-click payer portal form fill from provider data via the Minted Panel API.",
   "type": "module",
   "scripts": {

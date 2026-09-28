@@ -222,10 +222,13 @@ function isAppliedHandoffReceipt(value: unknown): value is AppliedHandoffReceipt
 }
 
 /** Worker authority for Fill. A handoff can fill only after its exact
- * receipt-pinned selection was committed, and only with that committed tuple. */
+ * receipt-pinned selection was committed, and only with that committed tuple.
+ * An active in-panel case can fill only when the fill matches that case's provider/case tuple.
+ * An ad hoc fill (caseId == null) can fill only when no conflicting unexpired
+ * handoff or in-panel case is bound. */
 export async function assertFillMatchesActiveCase(input: {
   providerId: string;
-  caseId: string;
+  caseId?: string | null;
   facilityId: string | null;
 }): Promise<void> {
   await mutateActiveCase(async () => {
@@ -237,30 +240,53 @@ export async function assertFillMatchesActiveCase(input: {
       ? entry[ACTIVE_CASE_KEY]
       : null;
     if (record == null) return;
+
+    const activeState = resolveActiveCaseState(record, Date.now());
     if (
+      input.caseId &&
       record.caseId === input.caseId &&
-      resolveActiveCaseState(record, Date.now()).status === "expired"
+      activeState.status === "expired"
     ) {
       throw new Error(
         "This case's context expired - re-launch it from Minted Panel or re-select the case, then fill again.",
       );
     }
-    if (record.source !== "handoff") return;
 
-    const applied = entry[APPLIED_HANDOFF_KEY];
-    if (
-      !isAppliedHandoffReceipt(applied) ||
-      applied.receiptKey !== activeCaseReceiptKey(record) ||
-      applied.providerId !== record.providerId ||
-      applied.caseId !== record.caseId ||
-      (record.facilityId != null && applied.facilityId !== record.facilityId) ||
-      applied.providerId !== input.providerId ||
-      applied.caseId !== input.caseId ||
-      applied.facilityId !== input.facilityId
-    ) {
-      throw new Error(
-        "The active handoff changed - wait for the current case to finish loading, then fill again.",
-      );
+    if (record.source === "handoff") {
+      const applied = entry[APPLIED_HANDOFF_KEY];
+      if (
+        !isAppliedHandoffReceipt(applied) ||
+        applied.receiptKey !== activeCaseReceiptKey(record) ||
+        applied.providerId !== record.providerId ||
+        applied.caseId !== record.caseId ||
+        (record.facilityId != null && applied.facilityId !== record.facilityId) ||
+        applied.providerId !== input.providerId ||
+        applied.caseId !== input.caseId ||
+        applied.facilityId !== input.facilityId
+      ) {
+        throw new Error(
+          "The active handoff changed - wait for the current case to finish loading, then fill again.",
+        );
+      }
+      return;
+    }
+
+    if (activeState.status === "active") {
+      if (record.providerId !== input.providerId) {
+        throw new Error(
+          "The active provider changed - re-select the provider, then fill again.",
+        );
+      }
+      if (input.caseId != null && record.caseId !== input.caseId) {
+        throw new Error(
+          "The active case changed - re-select the case, then fill again.",
+        );
+      }
+      if (input.caseId == null && record.caseId != null) {
+        throw new Error(
+          "An active case is currently selected. Clear the active case before performing an ad hoc fill.",
+        );
+      }
     }
   });
 }

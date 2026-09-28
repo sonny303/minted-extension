@@ -12,6 +12,8 @@ import type { SelectorMatchReport } from "../shared/selectorMatch";
 import type { PickOutcome } from "../content/elementPicker";
 import { createFillEventV2OpaqueKey, isFillEventV2FieldOutcome, type FillEventV2FieldOutcome, type FillEventV2Outcome, type FillEventV2ReasonCode } from "../shared/fillEventV2";
 import { isExactFillPageIdentity, OTHER_PAGE_REASON, PAGE_UNKNOWN_REASON } from "../shared/fillPage";
+import type { ControlSummary } from "../shared/nanoAi";
+import { pageScopeMatches } from "../shared/pageScope";
 
 export interface TabFrame {
   frameId: number;
@@ -41,6 +43,7 @@ function isFillPageResult(value: unknown): value is FillPageResult {
   const row = value as Record<string, unknown>;
   return Array.isArray(row.filled) && row.filled.every((item) => typeof item === "string") &&
     (row.attemptedLabels === undefined || (Array.isArray(row.attemptedLabels) && row.attemptedLabels.every((item) => typeof item === "string"))) &&
+    (row.writes === undefined || Array.isArray(row.writes)) &&
     Array.isArray(row.skipped) && row.skipped.every(isReportedField) &&
     typeof row.pageFields === "number" && Number.isFinite(row.pageFields) && row.pageFields >= 0 &&
     (row.fieldOutcomes === undefined || (Array.isArray(row.fieldOutcomes) && row.fieldOutcomes.every(isFillEventV2FieldOutcome)));
@@ -67,6 +70,18 @@ function sanitizeReport(field: ReportedField): ReportedField {
     kind: knownKind ? field.kind : "unverified",
     reason: qualifiedMiss ? FIELD_NOT_FOUND_REASON : safeReason(field),
   };
+}
+
+export interface FramedAiScan {
+  frameId: number;
+  url: string;
+  controls: ControlSummary[];
+}
+
+export interface AiScanAcrossFrames {
+  frames: FramedAiScan[];
+  controls: ControlSummary[];
+  ambiguousSelectors: string[];
 }
 
 /** Frames in the tab, or `[{ frameId: 0 }]` when webNavigation is unavailable. */
@@ -162,12 +177,14 @@ function reportKey(field: ReportedField): string {
  */
 export function mergeFillPageResults(results: FillPageResult[]): FillPageResult {
   const filledLabels = new Set<string>();
+  const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped = new Map<string, ReportedField>();
   let pageFields = 0;
 
   for (const result of results) {
     pageFields += result.pageFields;
     for (const label of result.filled) filledLabels.add(label);
+    writes.push(...(result.writes ?? []));
   }
 
   for (const result of results) {
@@ -190,9 +207,220 @@ export function mergeFillPageResults(results: FillPageResult[]): FillPageResult 
 
   return {
     filled: [...filledLabels],
+    writes,
     skipped: [...skipped.values()],
     pageFields,
   };
+}
+
+/** Scan each frame locally. Frame IDs and URLs remain worker-owned and are
+ * returned only to the caller, never to the panel or a stored field map. */
+export async function scanUnmappedControlsAcrossFrames(
+  tabId: number,
+  scanId: string,
+  activeMaps: Array<{ selector: string; selectorFallbacks?: string[] | null; pageUrlScope?: string }>,
+): Promise<AiScanAcrossFrames> {
+  const frames = await listTabFrames(tabId);
+  const scanned = await Promise.all(frames.map(async (frame): Promise<FramedAiScan | null> => {
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "SCAN_UNMAPPED_CONTROLS",
+        scanId,
+        activeMaps: activeMaps.filter((map) => pageScopeMatches(map.pageUrlScope, frame.url)),
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      if (!raw?.ok || !Array.isArray(raw.data)) return null;
+      return {
+        frameId: frame.frameId,
+        url: frame.url,
+        controls: raw.data as ControlSummary[],
+      };
+    } catch {
+      return null;
+    }
+  }));
+  const live = scanned.filter((item): item is FramedAiScan => item != null);
+  if (live.length === 0) throw new Error("Could not scan the enrollment form");
+
+  const occurrences = new Map<string, number>();
+  for (const frame of live) {
+    for (const control of frame.controls) {
+      occurrences.set(control.selector, (occurrences.get(control.selector) ?? 0) + 1);
+    }
+  }
+  const ambiguousSelectors = [...occurrences]
+    .filter(([, count]) => count > 1)
+    .map(([selector]) => selector);
+  const ambiguous = new Set(ambiguousSelectors);
+  for (const frame of live) {
+    frame.controls = frame.controls.filter((control) => !ambiguous.has(control.selector));
+  }
+  return {
+    frames: live,
+    controls: live.flatMap((frame) => frame.controls),
+    ambiguousSelectors,
+  };
+}
+
+export async function clearAiScanAcrossFrames(
+  tabId: number,
+  scanId: string,
+  frameIds: number[],
+): Promise<void> {
+  await Promise.all(frameIds.map((frameId) => sendToFrame(tabId, frameId, {
+    type: "CLEAR_AI_SCAN",
+    scanId,
+  }).catch(() => undefined)));
+}
+
+export async function clearAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+  frameIds?: number[],
+): Promise<number> {
+  const responses = frameIds == null
+    ? await sendToAllFrames(tabId, { type: "CLEAR_AI_FILL", fillSessionId })
+    : await Promise.all(frameIds.map(async (frameId): Promise<FrameResponse> => {
+        try {
+          const raw = (await sendToFrame(tabId, frameId, {
+            type: "CLEAR_AI_FILL",
+            fillSessionId,
+          })) as { ok?: boolean; data?: unknown } | undefined;
+          return raw?.ok
+            ? { frameId, ok: true, data: raw.data }
+            : { frameId, ok: false };
+        } catch {
+          return { frameId, ok: false };
+        }
+      }));
+  return responses.reduce((count, response) =>
+    response.ok && typeof response.data === "number" ? count + response.data : count,
+  0);
+}
+
+export interface AiFillApplyLifecycle {
+  isCancelled: () => boolean;
+  validate: () => Promise<void>;
+  onDispatch?: (frameId: number) => void;
+}
+
+export async function acceptAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "ACCEPT_AI_FILL", fillSessionId });
+}
+
+/** Release value-bearing undo snapshots after the successful submission touch. */
+export async function finalizeAiFillAcrossFrames(
+  tabId: number,
+  fillSessionId: string,
+): Promise<void> {
+  await sendToAllFrames(tabId, { type: "FINALIZE_AI_FILL", fillSessionId });
+}
+
+/** Target AI instructions only to the frame that produced each selector. */
+export async function applyAiFillAcrossBoundFrames(
+  tabId: number,
+  scanId: string,
+  fillSessionId: string,
+  frames: FramedAiScan[],
+  instructions: FillInstruction[],
+  lifecycle?: AiFillApplyLifecycle,
+): Promise<FillPageResult> {
+  const assertCurrent = async (): Promise<void> => {
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+    await lifecycle?.validate();
+    if (lifecycle?.isCancelled()) throw new Error("AI fill operation was cancelled");
+  };
+  await assertCurrent();
+  const results: FillPageResult[] = [];
+  for (const frame of frames) {
+    await assertCurrent();
+    const liveFrames = await listTabFrames(tabId);
+    await assertCurrent();
+    const stillLive = liveFrames.some((current) =>
+      current.frameId === frame.frameId && current.url === frame.url,
+    );
+    const bound = new Set(frame.controls.map((control) => control.selector));
+    const forFrame = instructions.filter((instruction) => bound.has(instruction.selector));
+    if (forFrame.length === 0) continue;
+    if (!stillLive) {
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed after scan",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+      continue;
+    }
+    await assertCurrent();
+    lifecycle?.onDispatch?.(frame.frameId);
+    try {
+      const raw = (await sendToFrame(tabId, frame.frameId, {
+        type: "APPLY_AI_FILL",
+        scanId,
+        fillSessionId,
+        instructions: forFrame,
+      })) as { ok?: boolean; data?: unknown } | undefined;
+      try {
+        await assertCurrent();
+      } catch (error) {
+        // Invalidation may race a content reply. Clear this frame after the
+        // reply as well as during cancellation so late writes cannot survive.
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw error;
+      }
+      if (raw?.ok && raw.data) {
+        const result = raw.data as FillPageResult;
+        // The transient frame binding lets learning preserve each iframe's
+        // actual page scope without persisting an ephemeral frame id.
+        results.push({
+          ...result,
+          writes: result.writes?.map((write) => ({ ...write, pageUrl: frame.url })),
+        });
+      } else {
+        results.push({
+          filled: [],
+          writes: [],
+          skipped: forFrame.map((instruction) => ({
+            label: instruction.selector,
+            reason: "AI target could not be applied",
+            kind: "skipped",
+          })),
+          pageFields: 0,
+        });
+      }
+    } catch {
+      if (lifecycle) {
+        try {
+          await assertCurrent();
+        } catch (error) {
+          await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+          throw error;
+        }
+      }
+      if (lifecycle?.isCancelled()) {
+        await clearAiFillAcrossFrames(tabId, fillSessionId, [frame.frameId]);
+        throw new Error("AI fill operation was cancelled");
+      }
+      results.push({
+        filled: [],
+        writes: [],
+        skipped: forFrame.map((instruction) => ({
+          label: instruction.selector,
+          reason: "AI frame changed before apply",
+          kind: "skipped",
+        })),
+        pageFields: 0,
+      });
+    }
+  }
+  await assertCurrent();
+  return mergeFillPageResults(results);
 }
 
 /** Sum MATCH_SELECTOR reports; valid if any frame parsed the selector. */
@@ -220,15 +448,44 @@ export function mergeSelectorReports(reports: SelectorMatchReport[]): SelectorMa
   };
 }
 
-/** APPLY_FILL across frames: every frame gets the full plan; merge outcomes. */
+/** APPLY_FILL across frames: each frame gets only in-scope values. Empty plans
+ * still reach content.js so every reachable frame contributes its page count. */
 export async function applyFillAcrossFrames(
   tabId: number,
   instructions: FillInstruction[],
-  options: { captureV2?: boolean } = {},
+  optionsOrValidate: { captureV2?: boolean; validate?: () => Promise<void> } | (() => Promise<void>) = {},
 ): Promise<FillPageResult> {
-  if (instructions.length === 0) return { filled: [], skipped: [], pageFields: 0, fieldOutcomes: [] };
+  const options = typeof optionsOrValidate === "function"
+    ? { validate: optionsOrValidate, captureV2: "captureV2" in optionsOrValidate ? Boolean((optionsOrValidate as { captureV2?: boolean }).captureV2) : false }
+    : optionsOrValidate;
+  const { captureV2 = false, validate } = options;
+  if (instructions.length === 0) {
+    const frames = await listTabFrames(tabId);
+    const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+      try {
+        const raw = (await sendToFrame(tabId, frame.frameId, {
+          type: "APPLY_FILL",
+          instructions: [],
+        })) as { ok?: boolean; data?: unknown } | undefined;
+        return raw?.ok
+          ? { frameId: frame.frameId, ok: true, data: raw.data }
+          : { frameId: frame.frameId, ok: false };
+      } catch {
+        return { frameId: frame.frameId, ok: false };
+      }
+    }));
+    const pageResults: FillPageResult[] = [];
+    for (const response of responses) {
+      if (!response.ok || !response.data) continue;
+      pageResults.push(response.data as FillPageResult);
+    }
+    if (pageResults.length === 0) {
+      throw new Error("Could not reach the enrollment form in any frame");
+    }
+    return mergeFillPageResults(pageResults);
+  }
   const frames = await listTabFrames(tabId);
-  const frameKeys = new Map(frames.map((frame) => [frame.frameId, options.captureV2 ? createFillEventV2OpaqueKey("f") : ""]));
+  const frameKeys = new Map(frames.map((frame) => [frame.frameId, captureV2 ? createFillEventV2OpaqueKey("f") : ""]));
   // Probe/apply correlation is always enabled, even for a V1 server. V2
   // serialization remains gated separately by endpoint capability.
   const targetKeys = new Map(instructions.map((instruction) => [instruction, createFillEventV2OpaqueKey("t")]));
@@ -242,8 +499,13 @@ export async function applyFillAcrossFrames(
     pageStep: instruction.pageStep,
   }));
   const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+    await validate?.();
+    const scopedProbes = probes.filter((probe) => {
+      const orig = instructions.find((i) => i.mapId === probe.mapId);
+      return pageScopeMatches(orig?.pageUrlScope, frame.url);
+    });
     try {
-      const raw = (await sendToFrame(tabId, frame.frameId, { type: "PROBE_FILL", instructions: probes })) as
+      const raw = (await sendToFrame(tabId, frame.frameId, { type: "PROBE_FILL", instructions: scopedProbes })) as
         | { ok?: boolean; data?: unknown }
         | undefined;
       return raw?.ok ? { frameId: frame.frameId, ok: true, data: raw.data } : { frameId: frame.frameId, ok: false };
@@ -259,16 +521,21 @@ export async function applyFillAcrossFrames(
     if (!response.ok) continue;
     const rows = Array.isArray(response.data) ? response.data.filter(isFillProbeResult) : [];
     const rowMap = new Map(rows.map((row) => [row.mapId, row]));
-    const expectedMapIds = new Set(instructions.map((instruction) => instruction.mapId));
+    const frameUrl = frames.find((f) => f.frameId === response.frameId)?.url;
+    const expectedFrameInstructions = instructions.filter((instruction) =>
+      pageScopeMatches(instruction.pageUrlScope, frameUrl),
+    );
+    const expectedMapIds = new Set(expectedFrameInstructions.map((instruction) => instruction.mapId));
     const exactCompleteResult = Array.isArray(response.data) && rows.length === response.data.length &&
       rows.length === expectedMapIds.size && rowMap.size === expectedMapIds.size &&
       [...expectedMapIds].every((mapId) => rowMap.has(mapId));
     probeByFrame.set(response.frameId, exactCompleteResult ? rowMap : new Map());
-    if (exactCompleteResult) pageFields += rows[0]?.pageFields ?? 0;
+    if (exactCompleteResult && rows.length > 0) pageFields += rows[0]?.pageFields ?? 0;
   }
 
   const filled: string[] = [];
   const attemptedLabels: string[] = [];
+  const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped: ReportedField[] = [];
   const fieldOutcomes: FillEventV2FieldOutcome[] = [];
   let priorApplyMayHaveChangedPage = false;
@@ -281,7 +548,7 @@ export async function applyFillAcrossFrames(
     stepKey: string | null,
     evidence?: FillEventV2FieldOutcome["notFoundEvidence"],
   ): void => {
-    if (!options.captureV2) return;
+    if (!captureV2) return;
     const row: FillEventV2FieldOutcome = {
       mapId: uuid(instruction.mapId),
       targetKey: targetKeys.get(instruction) as string,
@@ -300,7 +567,11 @@ export async function applyFillAcrossFrames(
   };
 
   for (const instruction of instructions) {
-    const reachableFrames = responses.filter((response) => response.ok);
+    const reachableFrames = responses.filter((response) => {
+      if (!response.ok) return false;
+      const frameUrl = frames.find((f) => f.frameId === response.frameId)?.url;
+      return pageScopeMatches(instruction.pageUrlScope, frameUrl);
+    });
     const incompleteProbe = reachableFrames.some((response) =>
       !probeByFrame.get(response.frameId)?.has(instruction.mapId),
     );
@@ -356,7 +627,7 @@ export async function applyFillAcrossFrames(
       } else if (knownPage && eligible.length > 0 && rows.every(({ probe }) => probe.pageSettled) && eligible.every(({ probe }) => probe.targetStatus === "missing")) {
         const frameId = eligible[0]?.frameId ?? null;
         let stepKey: string | null = null;
-        if (options.captureV2 && instruction.pageStep) {
+        if (captureV2 && instruction.pageStep) {
           stepKey = stepKeys.get(instruction.pageStep) ?? createFillEventV2OpaqueKey("s");
           stepKeys.set(instruction.pageStep, stepKey);
         }
@@ -378,14 +649,14 @@ export async function applyFillAcrossFrames(
     const targetFrame = candidates[0];
     if (!targetFrame) continue;
     let stepKey: string | null = null;
-    if (options.captureV2 && knownPage && instruction.pageStep) {
+    if (captureV2 && knownPage && instruction.pageStep) {
       stepKey = stepKeys.get(instruction.pageStep) ?? createFillEventV2OpaqueKey("s");
       stepKeys.set(instruction.pageStep, stepKey);
     }
     const routed: FillInstruction = {
       ...instruction,
       probeKey: targetKeys.get(instruction) as string,
-      ...(options.captureV2 ? {
+      ...(captureV2 ? {
         telemetry: {
           targetKey: targetKeys.get(instruction) as string,
           frameKey: frameKeys.get(targetFrame.frameId) as string,
@@ -404,8 +675,9 @@ export async function applyFillAcrossFrames(
       }
       const result = raw.data;
       filled.push(...result.filled);
+      if (result.writes) writes.push(...result.writes);
       skipped.push(...result.skipped.map(sanitizeReport));
-      if (options.captureV2) {
+      if (captureV2) {
         const routedIdentity = routed.telemetry;
         const outcomes = result.fieldOutcomes ?? [];
         const matchingOutcome = outcomes.length === 1 && routedIdentity &&
@@ -443,7 +715,7 @@ export async function applyFillAcrossFrames(
     }
   }
 
-  return { filled, attemptedLabels, skipped, pageFields, fieldOutcomes };
+  return { filled, attemptedLabels, writes, skipped, pageFields, fieldOutcomes };
 }
 
 /** SCAN_FIELDS across frames with shell-noise filtering. */

@@ -12,7 +12,10 @@
 //   status                 ONLY "approved" fills (S5.1, 2026-07-28); proposed
 //                          rows are unreviewed observations and never fill
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
+import type { ControlSummary } from "../shared/nanoAi";
 import type {
+  AiFillCandidate,
+  AiFillReview,
   FillCoverage,
   FillInstruction,
   FillPageResult,
@@ -25,13 +28,21 @@ import {
   getPortalFieldMaps,
   getPortalFieldMapsWithMeta,
   getProviderProfile,
+  getViewPrefs,
   postFillEvent,
   postSharedTestFill,
 } from "./api";
 import {
   applyFillAcrossFrames,
+  applyAiFillAcrossBoundFrames,
+  acceptAiFillAcrossFrames,
+  clearAiFillAcrossFrames,
+  clearAiScanAcrossFrames,
   listTabFrames,
+  scanUnmappedControlsAcrossFrames,
   sendToFrame,
+  type FramedAiScan,
+  type AiFillApplyLifecycle,
 } from "./frameMessaging";
 import {
   buildFillEventV2Metadata,
@@ -163,14 +174,15 @@ function isNotChecked(field: ReportedField): boolean {
 }
 
 export interface FillPlan {
-  instructions: FillInstruction[];
+  staticFills: FillInstruction[];
+  aiFills: FillInstruction[];
   manual: ReportedField[];
 }
 
 export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
 
-  const instructions: FillInstruction[] = [];
+  const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
 
   for (const map of maps) {
@@ -224,7 +236,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
 
-    instructions.push({
+    staticFills.push({
       mapId: map.id,
       label,
       selector: map.selector,
@@ -232,6 +244,8 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       fieldType: map.fieldType,
       value: applyTransform(String(raw), map.transform),
       pageStep: map.pageStep ?? null,
+      ...(map.learnedVia === "nano" ? { pageUrlScope: map.urlPattern ?? "" } : {}),
+      kind: "static",
     });
     if (map.source === "manual_partial") {
       manual.push({
@@ -243,7 +257,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     }
   }
 
-  return { instructions, manual };
+  return { staticFills, aiFills: [], manual };
 }
 
 // The coverage sensor (Epic 3a): reuse planFill so the "we can supply M of N"
@@ -255,10 +269,10 @@ export function computeCoverage(
   maps: PortalFieldMap[],
   profile: ProviderProfileResponse,
 ): FillCoverage {
-  const { instructions, manual } = planFill(maps, profile);
+  const { staticFills, manual } = planFill(maps, profile);
   return {
-    available: instructions.length,
-    total: instructions.length + manual.length,
+    available: staticFills.length,
+    total: staticFills.length + manual.length,
     gaps: manual,
   };
 }
@@ -272,6 +286,8 @@ export interface CoverageRequest {
   portalKey: string;
   state: string;
   facilityId: string | null;
+  groupId?: string | null;
+  caseId?: string | null;
 }
 
 // Resolve the SAME field maps + profile the fill flow fetches and compute
@@ -284,6 +300,8 @@ export async function coveragePortal(request: CoverageRequest): Promise<FillCove
     getProviderProfile(request.providerId, {
       state: request.state,
       facilityId: request.facilityId,
+      groupId: request.groupId,
+      caseId: request.caseId,
     }),
   ]);
   return computeCoverage(maps, profile);
@@ -292,40 +310,433 @@ export async function coveragePortal(request: CoverageRequest): Promise<FillCove
 export interface FillRequest {
   tabId: number;
   providerId: string;
-  caseId: string;
+  caseId?: string | null;
   portalKey: string;
   state: string;
   // The resolved location: the user's pick, or the provider's sole facility.
   // null when the provider has no facilities — facility.* tokens then come
   // back unresolved with a reason, which is correct, not an error.
   facilityId: string | null;
+  groupId?: string | null;
 }
 
-export async function fillPortal(request: FillRequest): Promise<FillSummary> {
+export interface AiFillGuard {
+  orgId: string | null;
+  revision: number;
+  selectionRevision: number;
+  tabUrl: string;
+  validate: () => Promise<void>;
+}
+
+interface PreparedAiFill {
+  request: FillRequest;
+  guard: AiFillGuard;
+  maps: PortalFieldMap[];
+  profile: ProviderProfileResponse;
+  scanId: string;
+  frames: FramedAiScan[];
+  controls: ControlSummary[];
+  tokenCatalog: string[];
+  unprocessedControls: number;
+  createdAt: number;
+  fillEventV2?: boolean;
+  operation?: AiFillOperation;
+}
+
+interface AiFillOperation {
+  fillSessionId: string;
+  cancelled: boolean;
+  dispatchedFrameIds: Set<number>;
+  abortController: AbortController;
+}
+
+export interface AcceptedAiFillReceipt {
+  tabId: number;
+  fillSessionId: string;
+  providerId: string;
+  caseId?: string | null;
+  portalKey: string;
+  state: string;
+  facilityId: string | null;
+  groupId?: string | null;
+  orgId: string | null;
+  actorId: string;
+  selectionRevision: number;
+  touchRecorded: boolean;
+  learning: import("../shared/fill").AiLearningSummary;
+  mappings: AiFillReview["writes"];
+}
+
+/** Strip query and fragment data before a portal URL enters a learning
+ * receipt. Credentials and non-web schemes are never eligible. */
+export function canonicalLearningPageUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+      return null;
+    }
+    return `${url.origin}${url.pathname || "/"}`;
+  } catch {
+    return null;
+  }
+}
+
+const preparedAiFills = new Map<string, PreparedAiFill>();
+const activeAiOperations = new Map<string, { prepared: PreparedAiFill; operation: AiFillOperation }>();
+const activeAiReviews = new Map<string, {
+  request: FillRequest;
+  guard: AiFillGuard;
+  review: AiFillReview;
+}>();
+const AI_CONFIDENCE_THRESHOLD = 0.85;
+const AI_PREPARED_MAX_AGE_MS = 120_000;
+
+async function discardPreparedAiFill(scanId: string, prepared: PreparedAiFill): Promise<void> {
+  preparedAiFills.delete(scanId);
+  if (prepared.operation) await cancelAiOperation(prepared, prepared.operation);
+  await clearAiScanAcrossFrames(
+    prepared.request.tabId,
+    prepared.scanId,
+    prepared.frames.map((frame) => frame.frameId),
+  );
+}
+
+async function cancelAiOperation(prepared: PreparedAiFill, operation: AiFillOperation): Promise<void> {
+  operation.cancelled = true;
+  operation.abortController.abort();
+  activeAiReviews.delete(operation.fillSessionId);
+  await clearAiFillAcrossFrames(
+    prepared.request.tabId,
+    operation.fillSessionId,
+    [...operation.dispatchedFrameIds],
+  );
+  await clearAiScanAcrossFrames(
+    prepared.request.tabId,
+    prepared.scanId,
+    prepared.frames.map((frame) => frame.frameId),
+  );
+}
+
+async function finishAiOperation(prepared: PreparedAiFill, operation: AiFillOperation): Promise<void> {
+  activeAiOperations.delete(operation.fillSessionId);
+  if (preparedAiFills.get(prepared.scanId) === prepared) preparedAiFills.delete(prepared.scanId);
+  await clearAiScanAcrossFrames(
+    prepared.request.tabId,
+    prepared.scanId,
+    prepared.frames.map((frame) => frame.frameId),
+  );
+}
+
+function isAllowedAiToken(token: string): boolean {
+  return token.length <= 80 && !/(^|[._])ssn/i.test(token);
+}
+
+function controlLooksSensitive(control: ControlSummary): boolean {
+  return [control.label, control.placeholder, control.name, control.id, control.selector]
+    .some((value) => typeof value === "string" && /\bssn\b|social[ _-]*security/i.test(value));
+}
+
+function sameFillRequest(a: FillRequest, b: FillRequest): boolean {
+  return (
+    a.tabId === b.tabId &&
+    a.providerId === b.providerId &&
+    (a.caseId || null) === (b.caseId || null) &&
+    a.portalKey === b.portalKey &&
+    a.state === b.state &&
+    a.facilityId === b.facilityId &&
+    (a.groupId || null) === (b.groupId || null)
+  );
+}
+
+function isExactCandidate(value: unknown): value is AiFillCandidate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (keys.join(",") !== "confidence,selector,token") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.selector === "string" && typeof candidate.token === "string" &&
+    typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence);
+}
+
+async function fetchPortalMaps(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
+  try {
+    if (typeof getPortalFieldMapsWithMeta === "function") {
+      const res = await getPortalFieldMapsWithMeta(portalKey);
+      if (res && Array.isArray(res.maps)) return res;
+    }
+  } catch {
+    // fall back to getPortalFieldMaps
+  }
+  if (typeof getPortalFieldMaps === "function") {
+    const maps = await getPortalFieldMaps(portalKey);
+    return { maps: maps ?? [], fillEventV2: false };
+  }
+  return { maps: [], fillEventV2: false };
+}
+
+/** Prepare a value-free local-model prompt and retain the value-bearing fill
+ * source only in this worker's memory until the final request arrives. */
+export async function prepareAiFillPortal(
+  request: FillRequest,
+  guard: AiFillGuard,
+): Promise<import("../shared/fill").AiFillPreparation> {
+  const [{ maps, fillEventV2 }, { profile }, viewPrefs] = await Promise.all([
+    fetchPortalMaps(request.portalKey),
+    getProviderProfile(request.providerId, {
+      state: request.state,
+      facilityId: request.facilityId,
+      groupId: request.groupId,
+      caseId: request.caseId,
+    }),
+    getViewPrefs().catch(() => null),
+  ]);
+  await guard.validate();
+  const scanId = crypto.randomUUID();
+  const scan = await scanUnmappedControlsAcrossFrames(
+    request.tabId,
+    scanId,
+    maps.filter((map) => map.mapType === "web").map((map) => ({
+      selector: map.selector,
+      selectorFallbacks: map.selectorFallbacks ?? [],
+      ...(map.learnedVia === "nano" ? { pageUrlScope: map.urlPattern ?? "" } : {}),
+    })),
+  );
+  try {
+    await guard.validate();
+  } catch (error) {
+    await clearAiScanAcrossFrames(request.tabId, scanId, scan.frames.map((frame) => frame.frameId));
+    throw error;
+  }
+
+  const cleanControls = scan.controls.filter((control) => !controlLooksSensitive(control));
+  const safeTokens = new Set<string>();
+  for (const token of [
+    ...(viewPrefs?.catalog.map((entry) => entry.key) ?? []),
+    ...profile.tokens.map((entry) => entry.token),
+    ...profile.unresolved.map((entry) => entry.token),
+  ]) {
+    if (isAllowedAiToken(token)) safeTokens.add(token);
+  }
+  // Nano processes a bounded 32-control batch. Remaining controls are reported
+  // explicitly as manual review; they are never silently dropped.
+  const controls = cleanControls.slice(0, 32);
+  const unprocessedControls = scan.ambiguousSelectors.length + (scan.controls.length - controls.length);
+  const prepared: PreparedAiFill = {
+    request,
+    guard,
+    maps,
+    profile,
+    scanId,
+    frames: scan.frames.map((frame) => ({
+      ...frame,
+      controls: frame.controls.filter((control) => controls.some((candidate) => candidate.selector === control.selector)),
+    })),
+    controls,
+    tokenCatalog: [...safeTokens],
+    unprocessedControls,
+    createdAt: Date.now(),
+    fillEventV2: fillEventV2 ?? false,
+  };
+  preparedAiFills.set(scanId, prepared);
+  while (preparedAiFills.size > 4) {
+    const oldest = preparedAiFills.keys().next().value;
+    if (oldest == null) break;
+    const expired = preparedAiFills.get(oldest);
+    preparedAiFills.delete(oldest);
+    if (expired) void clearAiScanAcrossFrames(expired.request.tabId, expired.scanId, expired.frames.map((frame) => frame.frameId));
+  }
+  return { scanId, controls, tokenCatalog: prepared.tokenCatalog, unprocessedControls };
+}
+
+export async function invalidatePendingAiScans(tabId?: number): Promise<void> {
+  for (const [scanId, prepared] of [...preparedAiFills]) {
+    if (tabId != null && prepared.request.tabId !== tabId) continue;
+    preparedAiFills.delete(scanId);
+    if (prepared.operation) await cancelAiOperation(prepared, prepared.operation);
+    else await clearAiScanAcrossFrames(prepared.request.tabId, scanId, prepared.frames.map((frame) => frame.frameId));
+  }
+}
+
+export function readActiveAiReview(fillSessionId: string): {
+  request: FillRequest;
+  guard: AiFillGuard;
+  review: AiFillReview;
+} | null {
+  return activeAiReviews.get(fillSessionId) ?? null;
+}
+
+export function removeActiveAiReview(fillSessionId: string): void {
+  activeAiReviews.delete(fillSessionId);
+}
+
+export async function invalidateActiveAiReviews(tabId?: number): Promise<void> {
+  for (const { prepared, operation } of [...activeAiOperations.values()]) {
+    if (tabId != null && prepared.request.tabId !== tabId) continue;
+    await cancelAiOperation(prepared, operation);
+  }
+  for (const [fillSessionId, active] of activeAiReviews) {
+    if (tabId != null && active.request.tabId !== tabId) continue;
+    activeAiReviews.delete(fillSessionId);
+    await clearAiFillAcrossFrames(active.request.tabId, fillSessionId);
+  }
+}
+
+export async function acceptActiveAiReview(
+  fillSessionId: string,
+  tabId: number,
+): Promise<boolean> {
+  const active = activeAiReviews.get(fillSessionId);
+  if (!active || active.request.tabId !== tabId || active.review.writes.length === 0) return false;
+  await active.guard.validate();
+  await acceptAiFillAcrossFrames(tabId, fillSessionId);
+  activeAiReviews.delete(fillSessionId);
+  return true;
+}
+
+export async function clearAiReviewInTab(tabId: number, fillSessionId: string): Promise<number> {
+  const cleared = await clearAiFillAcrossFrames(tabId, fillSessionId);
+  activeAiReviews.delete(fillSessionId);
+  return cleared;
+}
+
+export interface FillPortalOptions {
+  validate?: () => Promise<void>;
+  scanId?: string;
+  candidates?: AiFillCandidate[];
+  aiStatus?: "unavailable" | "no-matches" | "error";
+  orgId?: string | null;
+}
+
+export async function fillPortal(
+  request: FillRequest,
+  options: FillPortalOptions = {},
+): Promise<FillSummary> {
   const startedAt = new Date().toISOString();
   // The attempt's idempotency id doubles as the fill_sessions row PK; the
   // panel passes it back as fill_session_id when the human marks the
   // submission, tying the business log to this machine log.
   const fillSessionId = crypto.randomUUID();
-  const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
-    getPortalFieldMapsWithMeta(request.portalKey),
-    getProviderProfile(request.providerId, {
-      state: request.state,
-      facilityId: request.facilityId,
-    }),
-  ]);
-  const { instructions, manual } = planFill(maps, profile);
+  let prepared: PreparedAiFill | null = null;
+  let operation: AiFillOperation | null = null;
+  if (options.scanId) {
+    prepared = preparedAiFills.get(options.scanId) ?? null;
+    if (!prepared || !sameFillRequest(prepared.request, request)) {
+      if (prepared) await discardPreparedAiFill(options.scanId, prepared);
+      throw new Error("The form changed during AI review. Run Fill again.");
+    }
+    if (Date.now() - prepared.createdAt > AI_PREPARED_MAX_AGE_MS) {
+      await discardPreparedAiFill(options.scanId, prepared);
+      throw new Error("The AI review expired. Run Fill again.");
+    }
+    const candidates = options.candidates ?? [];
+    if (candidates.length > 32 || candidates.some((candidate) => !isExactCandidate(candidate))) {
+      await discardPreparedAiFill(options.scanId, prepared);
+      throw new Error("Invalid AI field suggestions. Run Fill again.");
+    }
+    const candidateSelectors = new Set<string>();
+    const knownControls = new Set(prepared.controls.map((control) => control.selector));
+    const knownTokens = new Set(prepared.tokenCatalog);
+    for (const candidate of candidates) {
+      if (
+        candidateSelectors.has(candidate.selector) ||
+        !knownControls.has(candidate.selector) ||
+        !knownTokens.has(candidate.token) ||
+        !isAllowedAiToken(candidate.token) ||
+        candidate.confidence < AI_CONFIDENCE_THRESHOLD ||
+        candidate.confidence > 1
+      ) {
+        await discardPreparedAiFill(options.scanId, prepared);
+        throw new Error("Invalid AI field suggestions. Run Fill again.");
+      }
+      candidateSelectors.add(candidate.selector);
+    }
+    try {
+      await prepared.guard.validate();
+    } catch (error) {
+      await discardPreparedAiFill(options.scanId, prepared);
+      throw error;
+    }
+    if (prepared.operation) {
+      throw new Error("This AI fill is already being applied.");
+    }
+    operation = {
+      fillSessionId,
+      cancelled: false,
+      dispatchedFrameIds: new Set(),
+      abortController: new AbortController(),
+    };
+    prepared.operation = operation;
+    activeAiOperations.set(fillSessionId, { prepared, operation });
+  } else if (options.candidates?.length) {
+    throw new Error("AI suggestions have no matching form scan. Run Fill again.");
+  }
+
+  const resolvedData = prepared
+    ? { maps: prepared.maps, profile: prepared.profile, fillEventV2: prepared.fillEventV2 ?? false }
+    : await (async () => {
+        const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
+          fetchPortalMaps(request.portalKey),
+          getProviderProfile(request.providerId, {
+            state: request.state,
+            facilityId: request.facilityId,
+            groupId: request.groupId,
+            caseId: request.caseId,
+          }),
+        ]);
+        return { maps, profile, fillEventV2 };
+      })();
+  const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+  const fillEventV2 = resolvedData.fillEventV2;
+
+  const assertPreparedCurrent = async (): Promise<void> => {
+    await options.validate?.();
+    if (!prepared || !operation) return;
+    if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+    await prepared.guard.validate();
+    if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
+      throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+  };
+
+  // Resolve only catalog values already retained by the worker. The panel
+  // sends selector/token/confidence triples, never provider values.
+  const tokenValues = new Map(resolvedData.profile.tokens.map((entry) => [entry.token, entry.value]));
+  const controlTypes = new Map((prepared?.controls ?? []).map((control) => [control.selector, control.controlType]));
+  const aiInstructions: FillInstruction[] = [];
+  for (const candidate of options.candidates ?? []) {
+    const raw = tokenValues.get(candidate.token);
+    if (raw == null || raw === "" || !["string", "number", "boolean"].includes(typeof raw)) continue;
+    const type = controlTypes.get(candidate.selector);
+    if (!type) continue;
+    aiInstructions.push({
+      mapId: `ai:${candidate.selector}`,
+      label: candidate.selector,
+      selector: candidate.selector,
+      selectorFallbacks: [],
+      fieldType: type === "select" ? "select" : type === "radio" ? "radio" : type === "checkbox" ? "checkbox" : type === "date" ? "date" : "text",
+      value: String(raw),
+      pageStep: null,
+      kind: "ai",
+      token: candidate.token,
+      confidence: candidate.confidence,
+    });
+  }
 
   // Pre-flight ping: any frame answering is enough (Availity's form lives in
   // a child iframe). ensureContentScript already ran in the worker.
   try {
+    await assertPreparedCurrent();
     const frames = await listTabFrames(request.tabId);
+    await assertPreparedCurrent();
     let alive = false;
     for (const frame of frames) {
       try {
+        await assertPreparedCurrent();
         const pong = (await sendToFrame(request.tabId, frame.frameId, {
           type: "PING",
         })) as { ok?: boolean } | undefined;
+        await assertPreparedCurrent();
         if (pong?.ok === true) {
           alive = true;
           break;
@@ -336,18 +747,30 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     }
     if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
   } catch (error) {
+    if (prepared && operation) {
+      await cancelAiOperation(prepared, operation);
+      await finishAiOperation(prepared, operation);
+    }
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
       { cause: error },
     );
   }
 
-  let pageResult: FillPageResult;
+  let pageResultStatic: FillPageResult;
   try {
-    // Keep local reporting truthful even when the server remains on V1. The
-    // same run-local outcomes are serialized only when meta advertises V2.
-    pageResult = await applyFillAcrossFrames(request.tabId, instructions, { captureV2: true });
+    await assertPreparedCurrent();
+    const validateWithV2 = Object.assign(assertPreparedCurrent, {
+      captureV2: true,
+      validate: assertPreparedCurrent,
+    });
+    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills, validateWithV2);
+    await assertPreparedCurrent();
   } catch (error) {
+    if (prepared && operation) {
+      await cancelAiOperation(prepared, operation);
+      await finishAiOperation(prepared, operation);
+    }
     // The pre-flight ping just proved the content script is reachable, so a
     // failure here is a genuine page/apply error. The one residual edge is a
     // tab that navigates away in the window between the ping and this call —
@@ -362,8 +785,47 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
       { cause: error },
     );
   }
+
+  let aiStatus: AiFillReview["status"] | undefined = options.aiStatus ?? (prepared ? "ready" : undefined);
+  let aiPageResult: FillPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
+  if (prepared) {
+    try {
+      await assertPreparedCurrent();
+      const lifecycle: AiFillApplyLifecycle = {
+        isCancelled: () => operation?.cancelled === true || preparedAiFills.get(prepared!.scanId) !== prepared,
+        validate: () => prepared!.guard.validate(),
+        onDispatch: (frameId) => operation?.dispatchedFrameIds.add(frameId),
+      };
+      aiPageResult = await applyAiFillAcrossBoundFrames(
+        request.tabId,
+        prepared.scanId,
+        fillSessionId,
+        prepared.frames,
+        aiInstructions,
+        lifecycle,
+      );
+      await assertPreparedCurrent();
+      aiStatus = aiInstructions.length > 0 && aiPageResult.writes?.length
+        ? "ready"
+        : "no-matches";
+    } catch {
+      if (operation) await cancelAiOperation(prepared, operation);
+      aiPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
+      aiStatus = "error";
+    } finally {
+      await clearAiScanAcrossFrames(request.tabId, prepared.scanId, prepared.frames.map((frame) => frame.frameId));
+    }
+  }
+
+  const combinePageResult = (): FillPageResult => ({
+    filled: [...pageResultStatic.filled, ...aiPageResult.filled],
+    writes: [...(pageResultStatic.writes ?? []), ...(aiPageResult.writes ?? [])],
+    skipped: [...pageResultStatic.skipped, ...aiPageResult.skipped],
+    pageFields: pageResultStatic.pageFields,
+  });
+  let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
-  const localOutcomes = createV2Outcomes(pageResult, manual, instructions);
+  const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
   const localRejected = localOutcomes.filter((field) => field.outcome === "write_rejected").length;
@@ -385,15 +847,16 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
   let eventError: string | null = null;
   try {
     if (telemetryValidationError) throw new Error(telemetryValidationError);
+    await assertPreparedCurrent();
     await postFillEvent({
       id: fillSessionId,
-      caseId: request.caseId,
+      caseId: request.caseId ?? null,
       providerId: request.providerId,
       portalKey: request.portalKey,
       fillMode: "web",
       startedAt,
       completedAt,
-      fieldsFilled: telemetry?.fieldsVerified ?? pageResult.filled.length,
+      fieldsFilled: telemetry?.fieldsVerified ?? (pageResult.writes?.length ?? pageResult.filled.length),
       // Preserve producer kinds (other_page). Content not-found historically
       // omitted kind — default those to "skipped" so the panel drift predicate
       // still matches. Never blanket-overwrite every skip to "skipped".
@@ -402,7 +865,7 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ]),
       ...(telemetry ? { v2: telemetry } : {}),
-    });
+    }, { signal: operation?.abortController.signal });
   } catch (error) {
     eventRecorded = false;
     // eventError is the COMPLETE warning line the panel shows verbatim. A 403
@@ -418,12 +881,65 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     }
   }
 
+  if (prepared && operation) {
+    try {
+      await assertPreparedCurrent();
+    } catch {
+      await cancelAiOperation(prepared, operation);
+    }
+    if (operation.cancelled) {
+      aiPageResult = { filled: [], writes: [], skipped: [], pageFields: 0 };
+      aiStatus = "error";
+      pageResult = combinePageResult();
+    }
+  }
+
   const notChecked = pageResult.skipped.filter(isNotChecked);
   const skipped = pageResult.skipped.filter((field) => !isNotChecked(field));
 
-  return {
-    filled: localVerified,
-    filledLabels: [],
+  const staticFilled = pageResult.writes?.filter((write) => write.kind === "static").length ?? pageResult.filled.length;
+  const aiFilled = pageResult.writes?.filter((write) => write.kind === "ai").length ?? 0;
+  const reviewWrites = (pageResult.writes ?? [])
+    .filter((write) => write.kind === "ai" && write.token && write.confidence != null)
+    .map((write) => {
+      const instruction = aiInstructions.find((candidate) => candidate.selector === write.selector);
+      const sourceFrame = prepared?.frames.find((candidate) =>
+        candidate.controls.some((control) => control.selector === write.selector),
+      );
+      const sourceUrl = write.pageUrl !== undefined
+        ? write.pageUrl
+        : sourceFrame?.url || (sourceFrame?.frameId === 0 ? prepared?.guard.tabUrl : "") || "";
+      return {
+        selector: write.selector,
+        token: write.token!,
+        confidence: write.confidence!,
+        fieldType: instruction?.fieldType && instruction.fieldType !== "file"
+          ? instruction.fieldType
+          : "text",
+        pageUrl: canonicalLearningPageUrl(sourceUrl),
+      };
+    });
+  const aiReview: AiFillReview | null = !operation?.cancelled && (prepared || options.aiStatus)
+    ? {
+        scanId: prepared?.scanId ?? null,
+        fillSessionId,
+        status: aiStatus ?? "no-matches",
+        writes: reviewWrites,
+        unprocessedControls: prepared?.unprocessedControls ?? 0,
+        accepted: false,
+      }
+    : null;
+  if (prepared && operation && !operation.cancelled &&
+    preparedAiFills.get(prepared.scanId) === prepared && reviewWrites.length > 0 && eventRecorded) {
+    activeAiReviews.set(fillSessionId, {
+      request,
+      guard: prepared.guard,
+      review: aiReview!,
+    });
+  }
+  const summary: FillSummary = {
+    filled: staticFilled + aiFilled,
+    filledLabels: pageResult.filled,
     skipped,
     manual,
     eventRecorded,
@@ -438,8 +954,17 @@ export async function fillPortal(request: FillRequest): Promise<FillSummary> {
     attemptedLabels: pageResult.attemptedLabels ?? [],
     notChecked,
     fieldOutcomes: localOutcomes,
-    ... (telemetry ? { schemaVersion: 2 as const, telemetry } : {}),
+    ...(telemetry ? { schemaVersion: 2 as const, telemetry } : {}),
+    staticFilled,
+    aiFilled,
+    writtenSelectors: [...new Set((pageResult.writes ?? []).map((write) => write.selector))],
+    aiReview,
+    orgId: prepared?.guard.orgId ?? options.orgId ?? null,
+    facilityId: request.facilityId,
+    state: request.state,
   };
+  if (prepared && operation) await finishAiOperation(prepared, operation);
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,13 +1000,13 @@ export async function sandboxFillPortal(
   const startedAt = new Date().toISOString();
   const fillSessionId = crypto.randomUUID();
   const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
-    getPortalFieldMapsWithMeta(request.portalKey),
+    fetchPortalMaps(request.portalKey),
     getProviderProfile(request.providerId, {
       state: request.state ?? undefined,
       facilityId: request.facilityId,
     }),
   ]);
-  const { instructions, manual } = planFill(maps, profile);
+  const { staticFills, manual } = planFill(maps, profile);
 
   try {
     const frames = await listTabFrames(request.tabId);
@@ -509,7 +1034,7 @@ export async function sandboxFillPortal(
 
   let pageResult: FillPageResult;
   try {
-    pageResult = await applyFillAcrossFrames(request.tabId, instructions, { captureV2: true });
+    pageResult = await applyFillAcrossFrames(request.tabId, staticFills, { captureV2: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     throw new Error(
@@ -521,7 +1046,7 @@ export async function sandboxFillPortal(
     );
   }
   const completedAt = new Date().toISOString();
-  const localOutcomes = createV2Outcomes(pageResult, manual, instructions);
+  const localOutcomes = createV2Outcomes(pageResult, manual, staticFills);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
   const localRejected = localOutcomes.filter((field) => field.outcome === "write_rejected").length;
@@ -565,6 +1090,13 @@ export async function sandboxFillPortal(
       : "Sandbox fill applied, but telemetry could not be recorded.";
   }
 
+  // The selectors we actually wrote — the exact set "Clear portal form"
+  // resets, so it can never touch something the extension did not type.
+  const filledLabelSet = new Set(pageResult.filled);
+  const filledSelectors = staticFills
+    .filter((i) => filledLabelSet.has(i.label))
+    .map((i) => i.selector);
+
   return {
     filled: localVerified,
     filledLabels: [],
@@ -572,6 +1104,7 @@ export async function sandboxFillPortal(
     manual,
     pageFields: pageResult.pageFields,
     fillSessionId: recordedId,
+    filledSelectors,
     logError,
     fieldsAttempted: localAttempted,
     fieldsVerified: localVerified,

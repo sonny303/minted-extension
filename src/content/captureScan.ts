@@ -401,15 +401,25 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
  * calls this too, so a hand-picked field and an auto-detected one carry
  * identical metadata — there is no second, drifting copy of "what a captured
  * field looks like". Shape only: never a value. */
-export function describeControl(el: Element): CapturedField {
+export interface DescribeControlOptions {
+  /** Omit declared choice values when only selector/label metadata is needed. */
+  includeOptions?: boolean;
+}
+
+export function describeControl(
+  el: Element,
+  options: DescribeControlOptions = {},
+): CapturedField {
   const type = controlType(el);
-  const options = optionsFor(el, type);
+  const capturedOptions = options.includeOptions === false
+    ? undefined
+    : optionsFor(el, type);
   return {
     label: captureLabel(el, type),
     selector: selectorFor(el),
     fieldType: type,
     formSection: sectionFor(el),
-    ...(options !== undefined ? { options } : {}),
+    ...(capturedOptions !== undefined ? { options: capturedOptions } : {}),
   };
 }
 

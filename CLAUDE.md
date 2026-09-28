@@ -15,7 +15,7 @@ provider data in one click, then logs the fill and the human's submission back
 to the case. Credentialing coordinators otherwise retype the same provider
 details into dozens of portals per provider; this removes that.
 
-v0 is unlisted (loaded unpacked). Capture and fill reach **any DB-registered portal** — the panel
+**Current release: v0.1.2** (September 27, 2026), packaged and published to the Chrome Web Store as an unlisted extension (Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`) and loaded unpacked for local development. Capture and fill reach **any DB-registered portal** — the panel
 requests the registry's origins on demand and the worker injects `content.js`
 where there's no static match.
 
@@ -62,6 +62,8 @@ local release prerequisites and does not submit or publish a package. Follow
 [`docs/release/README.md`](docs/release/README.md); the legacy `dist/` build is
 not the staging installation target.
 
+Chrome Web Store packaging runs via `./scripts/package-extension.sh` (or `npm test && ./scripts/package-extension.sh`), which builds the extension and bundles a clean root-level zip archive (`minted-panel-workbench-v<version>.zip`) stripped of macOS metadata (`__MACOSX`, `.DS_Store`). Automated contract validation runs via `scripts/release/contract.test.mjs`.
+
 `src/harness/workbench.test.ts` drives the **real background modules** against
 `scripts/mock-panel-api.mjs`, an in-repo mirror of the panel /api contract — so
 CI never touches a real portal or the real panel. Add harness coverage for any
@@ -93,18 +95,18 @@ close-out loop silently.
   unlike the camelCased rows.
 - **Touches body is snake_case** (locked) — `POST /api/cases/:id/touches` takes
   `{ kind: "portal_submission", portal_key, idempotency_id, fill_session_id?,
-  note?, payer_reference_id?, wip_note?, task_id?, pdf_filename?,
-  bump_status? }`. Server sets org + user from the JWT.
+note?, payer_reference_id?, wip_note?, task_id?, pdf_filename?,
+bump_status? }`. Server sets org + user from the JWT.
 - **`bump_status: true`** additionally moves In Progress → Submitted, evidenced
   by that touch. Off by default and omitted unless asked, so "never an
-  *implicit* status change" still holds. The outcome rides `meta.status_bump`
+  _implicit_ status change" still holds. The outcome rides `meta.status_bump`
   (`applied`|`skipped` + reason), **never the touch** — a rejected transition
   is not a failed touch.
 - **Structured touch:** same route, `kind: "structured_touch"` — `touch_type`
   required (one of seven canonical types); the portal_submission-only fields
   are a loud 422 on this kind. Sets mirrored in `src/shared/structuredTouch.ts`.
 - **Fill-events body is camelCase** — `{ id, caseId, providerId, portalKey,
-  fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
+fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
 - **Idempotency:** fill-events — the client-generated `id` is both idempotency
   key and row PK. Touches — `idempotency_id` becomes the anchor touch's PK; the
   worker reuses it on retries, and a replay short-circuits at the anchor
@@ -172,7 +174,7 @@ close-out loop silently.
 - **Case selection is required before fill** — via the handoff, unified search,
   active-cases list, NBA handback, or manual picker; all funnel into one
   active-case state. **The sandbox is the one exception** and does not weaken
-  the rule: a sandbox fill is attributable to no case *by construction* — it
+  the rule: a sandbox fill is attributable to no case _by construction_ — it
   writes no touch, moves no status, and logs through a route carrying neither
   case nor provider.
 - **A case can have several locations; a fill still targets exactly ONE.**
@@ -195,7 +197,7 @@ close-out loop silently.
   DOB) are in-memory only — cleared on org/case change, sign-out, tab close,
   expiry.
 - **Portal access is dynamic.** `optional_host_permissions:
-  ["https://*/*"]` lets the panel *request* origins, but it only ever requests
+["https://*/*"]` lets the panel _request_ origins, but it only ever requests
   the specific origins the registry names (`portalOriginPatterns`) — never
   `https://*/*` itself. `ensureContentScript` (`src/background/inject.ts`)
   injects **per frame** (falling back to `allFrames`) when there's no static
@@ -353,9 +355,9 @@ stores maps as `label:First Name`, which is not parseable CSS.
 
 ### Drifted library rows are actionable
 
-"In the library but not on this page" IS the *needs updating* half of the job.
+"In the library but not on this page" IS the _needs updating_ half of the job.
 **"Check page"** re-tests the library's own selector live, because "not found"
-is a fact about the *scan*, not the page. **"Re-point"** proposes at the new
+is a fact about the _scan_, not the page. **"Re-point"** proposes at the new
 selector carrying the library's own name — the old map stays until someone
 retires it in the web app, and the status line says exactly that instead of
 implying the library was edited.
@@ -380,7 +382,7 @@ legitimate answer.
 
 1. The panel clears `sandboxActive` in `clearSandboxOnRealSelection`, called
    unconditionally from every funnel a real selection goes through, plus
-   org-switch and sign-out. (`enterSandbox` sets the flag only *after* its own
+   org-switch and sign-out. (`enterSandbox` sets the flag only _after_ its own
    `selectProviderInPanel` resolves, so entering doesn't clobber itself.)
 2. The worker's `SANDBOX_FILL` and `CLEAR_PORTAL_FORM` handlers re-check the
    roster's own `is_test_provider` flag (`assertSandboxProvider`) — a stale
@@ -402,7 +404,7 @@ than a fake success.
   `:nth-child()` chain at the nearest id-bearing ancestor. (Mixing a
   document-wide query index with a sibling-scoped pseudo-class resolved to zero
   elements.) Name-based selectors carry the input **type** too.
-- **Radio group labels** prefer the group's *question* (fieldset legend /
+- **Radio group labels** prefer the group's _question_ (fieldset legend /
   `[role=radiogroup]` aria); options keep their own text.
 - **`nearbyLabel`** adopts a short preceding caption for a control the form
   wires no label for — never crossing into a sibling that owns its own control,
@@ -422,6 +424,7 @@ than a fake success.
 Recipes live in `.claude/skills/` rather than here — this file stays facts,
 they carry procedure:
 
+- **`publish-update-to-chrome-store`** — repeatable packaging, verification, and Chrome Web Store upload procedure for the published extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`.
 - **`chrome-extension-minted`** — MV3 architecture, worker/side-panel/content
   messaging, the write boundary, and the common MV3 bugs.
 - **`chrome-devtools-minted`** — DevTools debugging: form state, `/api`
@@ -431,6 +434,10 @@ they carry procedure:
 The panel repo (`sonny303/mintedpanel`) carries the same three plus
 `supabase-migrations`, `api-isolation-gate`, `e2e-harness`, and
 `minted-m3-audit`; attach both repos for cross-repo work.
+
+## Scheduled backups (GCS)
+
+Nightly scheduled backup workflow (`.github/workflows/scheduled-backup.yml`) runs daily at 04:15 UTC (staggered after `mintedpanel`). Creates full git bundles (`git bundle create --all`) and SHA-256 manifests, uploaded to Google Cloud Storage via Workload Identity Federation (`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`) with 7-day fallback GitHub artifact retention.
 
 ## Keep this file honest
 

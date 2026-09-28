@@ -1132,6 +1132,30 @@ button.link:hover {
   color: var(--mp-ink-400);
 }
 
+.ai-review {
+  padding: 10px 12px;
+  border-top: 1px solid var(--mp-line-100);
+  background: #fffaf0;
+}
+
+.ai-review-status {
+  margin: 0 0 8px;
+  color: #854d0e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-review-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-review-actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
 .bucket + .bucket,
 .report-time + .bucket {
   border-top: 1px solid var(--mp-line-100);

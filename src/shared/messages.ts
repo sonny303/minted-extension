@@ -23,6 +23,9 @@ import type {
   FillSummary,
   MockDryRunSummary,
   SandboxFillSummary,
+  AiFillPreparation,
+  AiFillCandidate,
+  AiLearningSummary,
 } from "./fill";
 import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
@@ -30,6 +33,9 @@ import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
 import type { SelectorMatchReport } from "./selectorMatch";
+
+// Distinct from an unselected/loading case; never sent to the Panel API.
+export const AD_HOC_CASE_SELECTION = "__ad_hoc__";
 
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
@@ -163,6 +169,8 @@ export type BgRequest =
   | {
       type: "GET_PROVIDER_FACILITIES";
       providerId: string;
+      groupId?: string | null;
+      caseId?: string | null;
       facilityId?: string | null;
       state?: string;
     }
@@ -170,6 +178,8 @@ export type BgRequest =
   | { type: "SET_SELECTED_PROVIDER"; providerId: string | null }
   | { type: "GET_SELECTED_CASE"; providerId: string }
   | { type: "SET_SELECTED_CASE"; providerId: string; caseId: string | null }
+  | { type: "GET_SELECTED_GROUP"; providerId: string }
+  | { type: "SET_SELECTED_GROUP"; providerId: string; groupId: string | null }
   | { type: "GET_SELECTED_FACILITY"; providerId: string }
   | {
       type: "SET_SELECTED_FACILITY";
@@ -233,13 +243,29 @@ export type BgRequest =
       type: "FILL";
       tabId: number;
       providerId: string;
-      caseId: string;
+      caseId?: string | null;
       portalKey: string;
       state: string;
       // The resolved location (user pick or sole facility); null only when
       // the provider has no facilities.
       facilityId: string | null;
+      groupId?: string | null;
+      aiScanId?: string;
+      aiMatches?: AiFillCandidate[];
+      aiStatus?: "unavailable" | "no-matches" | "error";
     }
+  | {
+      type: "PREPARE_AI_FILL";
+      tabId: number;
+      providerId: string;
+      caseId?: string | null;
+      portalKey: string;
+      state: string;
+      facilityId: string | null;
+      groupId?: string | null;
+    }
+  | { type: "ACCEPT_AI_FILL"; tabId: number; fillSessionId: string }
+  | { type: "CLEAR_AI_FILL"; tabId: number | null; fillSessionId: string }
   // Read-only coverage sensor (Epic 3a): resolve the same profile + field maps
   // a fill would fetch for this selection and return "M of N + gaps" WITHOUT
   // touching the page or logging anything. Carries the fill selection's data
@@ -247,14 +273,16 @@ export type BgRequest =
   | {
       type: "GET_FILL_COVERAGE";
       providerId: string;
-      caseId: string;
+      caseId?: string | null;
       portalKey: string;
       state: string;
       facilityId: string | null;
+      groupId?: string | null;
     }
   // The provider's most recent persisted fill report, or null. The panel
   // uses it to restore the review state when it reopens.
   | { type: "GET_FILL_REPORT"; providerId: string }
+  | { type: "RETRY_AI_LEARNING"; fillSessionId: string }
   // Pressed by the human AFTER they submit the portal form themselves — the
   // extension never touches the portal's submit button. fillSessionId is the
   // fill attempt's idempotency id when the fill event was recorded, else null.
@@ -369,6 +397,8 @@ export interface BgResponseMap {
   SET_SELECTED_PROVIDER: null;
   GET_SELECTED_CASE: string | null;
   SET_SELECTED_CASE: null;
+  GET_SELECTED_GROUP: string | null;
+  SET_SELECTED_GROUP: null;
   GET_SELECTED_FACILITY: string | null;
   SET_SELECTED_FACILITY: null;
   SET_VIEW_PREFS: null;
@@ -387,9 +417,17 @@ export interface BgResponseMap {
   GET_FILL_COVERAGE: FillCoverage;
   GET_FILL_REPORT: FillReportRecord | null;
   FILL: FillSummary;
+  PREPARE_AI_FILL: AiFillPreparation;
+  ACCEPT_AI_FILL: boolean;
+  CLEAR_AI_FILL: number;
   // S4.4: the touch PLUS the opt-in bump's outcome. A skipped bump is not a
   // failed touch — the panel reports both.
-  MARK_SUBMITTED: { touch: SubmissionTouch; statusBump: StatusBumpMeta | null };
+  MARK_SUBMITTED: {
+    touch: SubmissionTouch;
+    statusBump: StatusBumpMeta | null;
+    learning: AiLearningSummary | null;
+  };
+  RETRY_AI_LEARNING: AiLearningSummary;
 }
 
 // Typed wrapper so panel call sites get the right response type per request.

@@ -19,6 +19,7 @@ import {
   resolveFillPage,
 } from "../shared/fillPage";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
+import { pageScopeMatches } from "../shared/pageScope";
 import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // DYN-PAGE-02 — the SAME "positively hidden" rule the scanner uses, shared
 // rather than copied so the two surfaces can never disagree about what an
@@ -37,7 +38,7 @@ function normalize(text: string): string {
     .replace(/[\s:*]+$/, "");
 }
 
-type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
 interface ProbedTarget {
   mapId: string;
@@ -279,8 +280,21 @@ function labelTextOf(input: HTMLInputElement): string {
 }
 
 type ApplyOutcome =
-  | { ok: true; attempted: boolean }
-  | { ok: false; reason: string; kind?: ReportedFieldKind; outcome?: FillEventV2Outcome; reasonCode?: FillEventV2ReasonCode };
+  | {
+      ok: true;
+      attempted: boolean;
+      changed: boolean;
+      target: Fillable;
+      expectedValue: string | boolean;
+    }
+  | {
+      ok: false;
+      reason: string;
+      kind?: ReportedFieldKind;
+      outcome?: FillEventV2Outcome;
+      reasonCode?: FillEventV2ReasonCode;
+      target?: Fillable;
+    };
 
 /** DYN-PAGE-02 — the control resolved but sits in an inactive panel, so the
  * fill declines to write it. Never drift: the selector was found. */
@@ -320,26 +334,33 @@ function applyRadio(el: HTMLInputElement, value: string, markAttempted: () => vo
       reasonCode: "option_missing",
     };
   }
+  if (match.matches(":disabled")) {
+    return { ok: false, reason: "field is disabled or read-only" };
+  }
   // The visibility guard belongs HERE, not on the resolved element: a radio
   // group is one field made of N controls, and `match` — the one that gets
   // clicked — need not be the one the selector resolved to.
   if (isHiddenControl(match)) return HIDDEN_OUTCOME;
-  if (!match.checked) {
+  const changed = !match.checked;
+  if (changed) {
     markAttempted();
     match.click();
-    return { ok: true, attempted: true };
   }
-  return { ok: true, attempted: false };
+  if (!match.checked) return { ok: false, reason: "field did not retain the requested value", target: match };
+  return { ok: true, attempted: changed, changed, target: match, expectedValue: true };
 }
 
 function applyCheckbox(el: HTMLInputElement, value: string, markAttempted: () => void): ApplyOutcome {
   const wantChecked = TRUTHY.has(normalize(value));
-  if (el.checked !== wantChecked) {
+  const changed = el.checked !== wantChecked;
+  if (changed) {
     markAttempted();
     el.click();
-    return { ok: true, attempted: true };
   }
-  return { ok: true, attempted: false };
+  if (el.checked !== wantChecked) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, attempted: changed, changed, target: el, expectedValue: wantChecked };
 }
 
 function applySelect(el: HTMLSelectElement, value: string, markAttempted: () => void): ApplyOutcome {
@@ -356,13 +377,16 @@ function applySelect(el: HTMLSelectElement, value: string, markAttempted: () => 
       reasonCode: "option_missing",
     };
   }
-  if (el.value !== match.value) {
+  const changed = el.value !== match.value;
+  if (changed) {
     markAttempted();
     el.value = match.value;
     fireChanged(el);
-    return { ok: true, attempted: true };
   }
-  return { ok: true, attempted: false };
+  if (el.value !== match.value) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, attempted: changed, changed, target: el, expectedValue: match.value };
 }
 
 function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
@@ -388,9 +412,123 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   if (el instanceof HTMLInputElement && (el.disabled || el.readOnly)) {
     return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
   }
+  const changed = el.value !== instruction.value;
   markAttempted();
   setNativeValue(el, instruction.value);
-  return { ok: true, attempted: true };
+  if (el.value !== instruction.value) {
+    return { ok: false, reason: "field did not retain the requested value", target: el };
+  }
+  return { ok: true, attempted: true, changed, target: el, expectedValue: instruction.value };
+}
+
+function installFillStyle(el: Element): void {
+  const root = el.getRootNode();
+  const styleId = "__minted-panel-fill-style";
+  const existing = root instanceof ShadowRoot
+    ? root.getElementById(styleId)
+    : document.getElementById(styleId);
+  if (existing) return;
+  const style = document.createElement("style");
+  style.id = styleId;
+  style.textContent = [
+    ".mp-fill-static{outline:2px solid #15803d!important;outline-offset:2px}",
+    ".mp-fill-ai{outline:2px solid #d97706!important;outline-offset:2px}",
+  ].join("\n");
+  if (root instanceof ShadowRoot) root.append(style);
+  else (document.head ?? document.documentElement).append(style);
+}
+
+export function decorateFill(el: Fillable, kind: "static" | "ai", token?: string): void {
+  installFillStyle(el);
+  el.classList.add(kind === "ai" ? "mp-fill-ai" : "mp-fill-static");
+  if (kind === "ai" && token) el.setAttribute("title", `AI Suggested: ${token}`);
+}
+
+/** Write once a content-local scan has verified the exact empty target. */
+export function applyAiValue(
+  el: Fillable,
+  value: string,
+): { ok: true; changed: boolean; target: Fillable; writtenValue: string } | { ok: false; reason: string } {
+  if (isHiddenControl(el) || el.matches(":disabled")) {
+    return { ok: false, reason: "field is hidden or disabled" };
+  }
+  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) {
+    return { ok: false, reason: "field is read-only" };
+  }
+  if (el instanceof HTMLInputElement && ["button", "file", "hidden", "image", "password", "reset", "submit"].includes(el.type)) {
+    return { ok: false, reason: "field type is not supported" };
+  }
+  const isRadio = el instanceof HTMLInputElement && el.type === "radio";
+  if (isRadio) {
+    const group = el.name
+      ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(el.name)}"]`, el.form ?? document)
+          .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
+      : [el];
+    if (group.some((radio) => radio.checked)) return { ok: false, reason: "field already has a value" };
+  } else if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    if (el.checked) return { ok: false, reason: "field already has a value" };
+    if (!TRUTHY.has(normalize(value))) return { ok: false, reason: "suggestion does not require a write" };
+  } else if (el.value !== "") {
+    return { ok: false, reason: "field already has a value" };
+  }
+  const previousValue: string | boolean =
+    el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")
+      ? el.checked
+      : el.value;
+
+  const fieldType = el instanceof HTMLSelectElement
+    ? "select"
+    : el instanceof HTMLInputElement && el.type === "radio"
+      ? "radio"
+      : el instanceof HTMLInputElement && el.type === "checkbox"
+        ? "checkbox"
+        : "text";
+  const outcome = applyValue(el, {
+    mapId: "ai-suggestion",
+    label: "AI suggestion",
+    selector: "",
+    selectorFallbacks: [],
+    fieldType,
+    value,
+    pageStep: null,
+    kind: "ai",
+  }, () => void 0);
+  if (!outcome.ok) {
+    if (outcome.target) {
+      const currentValue: string | boolean =
+        outcome.target instanceof HTMLInputElement &&
+        (outcome.target.type === "radio" || outcome.target.type === "checkbox")
+          ? outcome.target.checked
+          : outcome.target.value;
+      // Restore only while the rejected value remains the immediate result of
+      // this write; later user edits are never overwritten by the caller.
+      if (currentValue !== previousValue) restoreAiValueWithoutEvents(outcome.target, previousValue);
+      return { ok: false, reason: "AI write did not read back" };
+    }
+    return { ok: false, reason: outcome.reason };
+  }
+  const writtenValue = String(outcome.expectedValue);
+  return { ...outcome, writtenValue };
+}
+
+function restoreAiValueWithoutEvents(el: Fillable, value: string | boolean): void {
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+    el.checked = value === true;
+    return;
+  }
+  const next = typeof value === "string" ? value : "";
+  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
+  if (descriptor?.set) descriptor.set.call(el, next);
+  else el.value = next;
+}
+
+export function restoreAiValue(el: Fillable, previous: string | boolean): void {
+  if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) {
+    el.checked = previous === true;
+    fireChanged(el);
+    return;
+  }
+  setNativeValue(el, typeof previous === "string" ? previous : "");
 }
 
 // The page's fillable controls — the denominator for honest coverage
@@ -551,6 +689,7 @@ export function applyFillOnPage(
 ): FillPageResult {
   const filled: string[] = [];
   const attemptedLabels: string[] = [];
+  const writes: NonNullable<FillPageResult["writes"]> = [];
   const skipped: ReportedField[] = [];
   const fieldOutcomes: FillEventV2FieldOutcome[] = [];
   const recordOutcome = (
@@ -588,6 +727,16 @@ export function applyFillOnPage(
     try {
       if (isOtherPageInstruction(instruction, currentPage)) {
         skipped.push(otherPageReport(instruction));
+        recordOutcome(instruction, false, "other_page", "other_page");
+        continue;
+      }
+      if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
+        skipped.push({
+          label: instruction.label,
+          reason: "mapping is scoped to a different page",
+          mapId: instruction.mapId,
+          kind: "other_page",
+        });
         recordOutcome(instruction, false, "other_page", "other_page");
         continue;
       }
@@ -650,6 +799,16 @@ export function applyFillOnPage(
       if (outcome.ok) {
         filled.push(instruction.label);
         if (outcome.attempted) attemptedLabels.push(instruction.label);
+        if (outcome.changed) {
+          const kind = instruction.kind ?? "static";
+          decorateFill(outcome.target, kind, instruction.token);
+          writes.push({
+            selector: instruction.selector,
+            kind,
+            ...(instruction.token ? { token: instruction.token } : {}),
+            ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
+          });
+        }
         // R1 knows the setter accepted the write, not that the portal retained
         // it. Semantic readback arrives in R3.
         if (!outcome.attempted) {
@@ -695,5 +854,5 @@ export function applyFillOnPage(
       recordOutcome(instruction, writeAttempted, "unverified", "context_changed");
     }
   }
-  return { filled, attemptedLabels, skipped, pageFields: countPageFields(), fieldOutcomes };
+  return { filled, attemptedLabels, writes, skipped, pageFields: countPageFields(), fieldOutcomes };
 }
