@@ -3,6 +3,7 @@
 // running on our own chrome-extension:// origin are served — content scripts
 // send with the web page's URL, so page-adjacent code can never trigger auth
 // or API traffic, and tokens never appear in responses.
+import { AD_HOC_CASE_SELECTION } from "../shared/messages";
 import type {
   BgRequest,
   BgResponse,
@@ -117,6 +118,7 @@ chrome.sidePanel
 registerActiveCaseListeners();
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
+const SELECTED_GROUP_PREFIX = "minted.selectedGroupId.";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
 const SELECTED_FACILITY_PREFIX = "minted.selectedFacilityId.";
 const SUBMIT_TOUCH_ID_PREFIX = "minted.submitTouchId.";
@@ -269,6 +271,7 @@ async function clearOrgSelections(): Promise<void> {
     (key) =>
       key === SELECTED_PROVIDER_KEY ||
       key.startsWith(SELECTED_CASE_PREFIX) ||
+      key.startsWith(SELECTED_GROUP_PREFIX) ||
       key.startsWith(SELECTED_FACILITY_PREFIX) ||
       key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
       key.startsWith(FILL_REPORT_PREFIX) ||
@@ -311,10 +314,12 @@ async function createAiFillGuard(request: {
   providerId: string;
   caseId?: string | null;
   facilityId: string | null;
+  groupId?: string | null;
 }) {
   const revision = fillSelectionRevision;
   const activeRevision = activeTabRevision;
   const navigationRevision = tabNavigationRevision.get(request.tabId) ?? 0;
+  await assertFillMatchesActiveCase(request);
   const [orgId, selectionRevision] = await Promise.all([
     readActiveOrgId(),
     readAiSelectionRevision(),
@@ -330,7 +335,7 @@ async function createAiFillGuard(request: {
     ) {
       throw new Error("The form or selection changed during AI review. Run Fill again.");
     }
-    const [providerId, caseId, facilityId, currentOrg, currentTab, activeTabs, currentRevision] = await Promise.all([
+    const [providerId, caseId, facilityId, currentOrg, currentTab, activeTabs, currentRevision, groupId] = await Promise.all([
       readSessionString(SELECTED_PROVIDER_KEY),
       readSessionString(SELECTED_CASE_PREFIX + request.providerId),
       readSessionString(SELECTED_FACILITY_PREFIX + request.providerId),
@@ -338,10 +343,15 @@ async function createAiFillGuard(request: {
       chrome.tabs.get(request.tabId),
       chrome.tabs.query({ active: true, currentWindow: true }),
       readAiSelectionRevision(),
+      readSessionString(SELECTED_GROUP_PREFIX + request.providerId),
     ]);
+    if (request.caseId == null && (caseId !== AD_HOC_CASE_SELECTION || !request.groupId || !request.facilityId)) {
+      throw new Error("Choose Ad hoc fill, a group, and a location before filling.");
+    }
     if (
       providerId !== request.providerId ||
-      (caseId || null) !== (request.caseId || null) ||
+      (caseId === AD_HOC_CASE_SELECTION ? null : caseId || null) !== (request.caseId || null) ||
+      (request.groupId != null && groupId !== request.groupId) ||
       facilityId !== request.facilityId ||
       currentOrg !== orgId ||
       currentRevision !== selectionRevision ||
@@ -409,7 +419,7 @@ function isFillReportRecord(value: unknown): value is FillReportRecord {
     typeof record === "object" &&
     typeof record.providerId === "string" &&
     typeof record.portalKey === "string" &&
-    typeof record.caseId === "string" &&
+    (record.caseId === null || typeof record.caseId === "string") &&
     typeof record.completedAt === "string" &&
     typeof record.submitted === "boolean" &&
     record.summary != null &&
@@ -1260,6 +1270,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         getProviderProfile(request.providerId, {
           facilityId: request.facilityId,
           state: request.state,
+          groupId: request.groupId,
+          caseId: request.caseId,
         }),
         readCardLayout(),
       ]);
@@ -1303,6 +1315,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         request.caseId,
       );
       return null;
+    case "GET_SELECTED_GROUP":
+      return readSessionString(SELECTED_GROUP_PREFIX + request.providerId);
+    case "SET_SELECTED_GROUP":
+      if ((await readSessionString(SELECTED_GROUP_PREFIX + request.providerId)) !== request.groupId) {
+        await beginAiFillAttempt();
+      }
+      await writeSessionString(SELECTED_GROUP_PREFIX + request.providerId, request.groupId);
+      return null;
     case "GET_SELECTED_FACILITY":
       return readSessionString(SELECTED_FACILITY_PREFIX + request.providerId);
     case "SET_SELECTED_FACILITY":
@@ -1335,13 +1355,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return readFillReport(request.providerId);
     case "PREPARE_AI_FILL": {
       await beginAiFillAttempt();
-      await assertFillMatchesActiveCase({
-        providerId: request.providerId,
-        caseId: request.caseId,
-        facilityId: request.facilityId,
-      });
-      await ensureContentScript(request.tabId);
       const guard = await createAiFillGuard(request);
+      await ensureContentScript(request.tabId);
       return prepareAiFillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
@@ -1358,17 +1373,12 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       if (!request.aiScanId) await beginAiFillAttempt();
       // The worker is the final authority: an expired context cannot fill,
       // and a handoff must match the exact receipt-pinned applied selection.
-      await assertFillMatchesActiveCase({
-        providerId: request.providerId,
-        caseId: request.caseId,
-        facilityId: request.facilityId,
-      });
+      const attemptRevision = fillSelectionRevision;
+      const guard = await createAiFillGuard(request);
       // Inject content.js when it isn't already there (any dynamically-registered portal)
       // before fillPortal's pre-flight PING, so fill reaches any DB-registered
       // portal, not just the statically-matched one.
       await ensureContentScript(request.tabId);
-      const orgId = await readActiveOrgId();
-      const attemptRevision = fillSelectionRevision;
       const summary = await fillPortal({
         tabId: request.tabId,
         providerId: request.providerId,
@@ -1381,7 +1391,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         scanId: request.aiScanId,
         candidates: request.aiMatches,
         aiStatus: request.aiStatus,
-        orgId,
+        orgId: guard.orgId,
+        validate: guard.validate,
       });
       // Context invalidation can race the awaited content apply or fill-event
       // request. A canceled operation may return a static-only summary, but it
@@ -1402,6 +1413,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           providerId: request.providerId,
           portalKey: request.portalKey,
           caseId: request.caseId ?? null,
+          groupId: request.groupId ?? null,
           summary,
           completedAt: new Date().toISOString(),
           submitted: false,

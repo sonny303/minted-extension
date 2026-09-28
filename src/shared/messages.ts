@@ -34,6 +34,9 @@ import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
 import type { SelectorMatchReport } from "./selectorMatch";
 
+// Distinct from an unselected/loading case; never sent to the Panel API.
+export const AD_HOC_CASE_SELECTION = "__ad_hoc__";
+
 export type BgRequest =
   | { type: "GET_AUTH_STATE" }
   | { type: "SIGN_IN"; email: string; password: string }
@@ -166,6 +169,8 @@ export type BgRequest =
   | {
       type: "GET_PROVIDER_FACILITIES";
       providerId: string;
+      groupId?: string | null;
+      caseId?: string | null;
       facilityId?: string | null;
       state?: string;
     }
@@ -173,6 +178,8 @@ export type BgRequest =
   | { type: "SET_SELECTED_PROVIDER"; providerId: string | null }
   | { type: "GET_SELECTED_CASE"; providerId: string }
   | { type: "SET_SELECTED_CASE"; providerId: string; caseId: string | null }
+  | { type: "GET_SELECTED_GROUP"; providerId: string }
+  | { type: "SET_SELECTED_GROUP"; providerId: string; groupId: string | null }
   | { type: "GET_SELECTED_FACILITY"; providerId: string }
   | {
       type: "SET_SELECTED_FACILITY";
@@ -390,6 +397,8 @@ export interface BgResponseMap {
   SET_SELECTED_PROVIDER: null;
   GET_SELECTED_CASE: string | null;
   SET_SELECTED_CASE: null;
+  GET_SELECTED_GROUP: string | null;
+  SET_SELECTED_GROUP: null;
   GET_SELECTED_FACILITY: string | null;
   SET_SELECTED_FACILITY: null;
   SET_VIEW_PREFS: null;

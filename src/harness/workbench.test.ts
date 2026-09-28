@@ -1911,6 +1911,69 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
     chrome.webNavigation.getAllFrames = previousGetAllFrames;
   });
 
+  it("cancels a static ad hoc fill after a group A-B-A switch before any page write", async () => {
+    const { handleRequest } = await import("../background/index");
+    const { AD_HOC_CASE_SELECTION } = await import("../shared/messages");
+    await handleRequest({ type: "CLEAR_ACTIVE_CASE" });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: AD_HOC_CASE_SELECTION });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-A" });
+
+    let releaseFrames!: () => void;
+    let announceFrames!: () => void;
+    const frameLookupStarted = new Promise<void>((resolve) => { announceFrames = resolve; });
+    const blockedFrames = new Promise<void>((resolve) => { releaseFrames = resolve; });
+    chrome.webNavigation.getAllFrames = (async () => {
+      announceFrames();
+      await blockedFrames;
+      return frames;
+    }) as unknown as typeof chrome.webNavigation.getAllFrames;
+    const applied: string[] = [];
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown) => {
+      const message = rawMessage as { type: string };
+      if (message.type.startsWith("APPLY_")) applied.push(message.type);
+      return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+    }) as typeof chrome.tabs.sendMessage;
+    const request = {
+      type: "FILL" as const, tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+      caseId: null, groupId: "group-A", facilityId: FIXTURES.FACILITY_ID,
+      state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+    };
+    const pending = handleRequest(request);
+    const rejected = expect(pending).rejects.toThrow();
+    await frameLookupStarted;
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-B" });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId: "group-A" });
+    releaseFrames();
+    await rejected;
+    expect(applied).toEqual([]);
+    expect(mock.state.fillSessions.size).toBe(0);
+
+    // The same choices remain usable immediately; cancellation adds no lock.
+    await expect(handleRequest(request)).resolves.toMatchObject({ eventRecorded: true });
+    expect(applied).toContain("APPLY_FILL");
+    expect(await handleRequest({ type: "GET_FILL_REPORT", providerId: FIXTURES.PROVIDER_ID }))
+      .toMatchObject({ caseId: null, groupId: "group-A" });
+    expect(await handleRequest({ type: "GET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID })).toBe("group-A");
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: "another-org" });
+    expect(await handleRequest({ type: "GET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID })).toBeNull();
+  });
+
+  it.each([
+    [null, "group-A", FIXTURES.FACILITY_ID],
+    ["__ad_hoc__", null, FIXTURES.FACILITY_ID],
+    ["__ad_hoc__", "group-A", null],
+  ])("rejects incomplete ad hoc choices in the worker (%s, %s, %s)", async (caseChoice, groupId, facilityId) => {
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "CLEAR_ACTIVE_CASE" });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: caseChoice });
+    await handleRequest({ type: "SET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID, groupId });
+    await expect(handleRequest({
+      type: "FILL", tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+      caseId: null, groupId, facilityId, state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+    })).rejects.toThrow("Choose Ad hoc fill, a group, and a location");
+    expect(mock.state.fillSessions.size).toBe(0);
+  });
+
   it("cancels after A-B-A switches, clears the delayed frame, and lets a refill own the report", async () => {
     const { handleRequest, AI_ACCEPTED_RECEIPT_KEY } = await import("../background/index");
     let releaseFirstApply!: () => void;

@@ -503,6 +503,7 @@ export async function clearAiReviewInTab(tabId: number, fillSessionId: string): 
 }
 
 export interface FillPortalOptions {
+  validate?: () => Promise<void>;
   scanId?: string;
   candidates?: AiFillCandidate[];
   aiStatus?: "unavailable" | "no-matches" | "error";
@@ -590,6 +591,7 @@ export async function fillPortal(
   const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
 
   const assertPreparedCurrent = async (): Promise<void> => {
+    await options.validate?.();
     if (!prepared || !operation) return;
     if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
       throw new Error("The form or selection changed during AI review. Run Fill again.");
@@ -661,7 +663,7 @@ export async function fillPortal(
   let pageResultStatic: FillPageResult;
   try {
     await assertPreparedCurrent();
-    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills);
+    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills, assertPreparedCurrent);
     await assertPreparedCurrent();
   } catch (error) {
     if (prepared && operation) {

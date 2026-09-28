@@ -151,7 +151,7 @@ describe("local AI fill orchestration", () => {
 
     const summary = await fillPortal(request, { aiStatus: "unavailable", orgId: "org-1" });
 
-    expect(mocks.applyFillAcrossFrames).toHaveBeenCalledWith(request.tabId, [expect.objectContaining({ selector: "#static-npi", value: "1234567890" })]);
+    expect(mocks.applyFillAcrossFrames).toHaveBeenCalledWith(request.tabId, [expect.objectContaining({ selector: "#static-npi", value: "1234567890" })], expect.any(Function));
     expect(mocks.applyAiFillAcrossBoundFrames).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ filled: 1, staticFilled: 1, aiFilled: 0, aiReview: { status: "unavailable", writes: [] } });
     expect(mocks.postFillEvent).toHaveBeenCalledTimes(1);

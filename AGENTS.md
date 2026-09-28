@@ -35,6 +35,7 @@ Minted Panel Workbench (`sonny303/minted-extension`) is a Manifest V3 Chrome ext
      (a) the isolated sandbox test provider mode (exercises the profile pipeline without attaching to a real case), or
      (b) authorized ad hoc form fills where the operator explicitly selects a Provider + Location + Group with `(No case · Ad hoc fill)`.
    - For ad hoc fills, `assertFillMatchesActiveCase` enforces that no conflicting unexpired handoff or active in-panel case is bound. The fill session logs against the provider without mutating case state or allowing form submission.
+   - Ad hoc choice is distinct from the empty case placeholder. Group joins provider/case/location in worker session selection; changes invalidate pending static and AI fills. Location state comes from the profile facility projection, never the provider's home state.
 6. **Wire Contract Cohesion**:
    - `src/shared/apiTypes.ts` mirrors the server `/api` response shapes. Never alter a contract unilaterally.
 

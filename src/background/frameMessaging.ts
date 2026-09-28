@@ -400,9 +400,11 @@ export function mergeSelectorReports(reports: SelectorMatchReport[]): SelectorMa
 export async function applyFillAcrossFrames(
   tabId: number,
   instructions: FillInstruction[],
+  validate?: () => Promise<void>,
 ): Promise<FillPageResult> {
   const frames = await listTabFrames(tabId);
   const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+    await validate?.();
     const scoped = instructions.filter((instruction) =>
       pageScopeMatches(instruction.pageUrlScope, frame.url),
     );
