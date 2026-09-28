@@ -633,4 +633,60 @@ describe("P06 explicit org recovery", () => {
     expect((await readActiveCaseRecord())?.caseId).toBe(CASE_B);
     await expect(handleRequest({ type: "GET_ACTIVE_ORG" })).resolves.toBe(OTHER_ORG_ID);
   });
+
+  describe("ad hoc (case-free) fill guarding", () => {
+    it("allows case-free fill when no active case is bound", async () => {
+      await expect(
+        assertFillMatchesActiveCase({
+          providerId: "59ad83a8-d8b6-419d-8dcc-88c04a54c4da",
+          caseId: null,
+          facilityId: null,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("rejects case-free fill when an unexpired handoff is active", async () => {
+      await handleExternalMessage(message(CASE_A), APP_ORIGIN);
+      await expect(
+        assertFillMatchesActiveCase({
+          providerId: message(CASE_A).providerId,
+          caseId: null,
+          facilityId: FACILITY_ID,
+        }),
+      ).rejects.toThrow(/active handoff changed/i);
+    });
+
+    it("rejects case-free fill when an in-panel case is actively selected", async () => {
+      await enterActiveCase({
+        caseId: CASE_A,
+        providerId: message(CASE_A).providerId,
+        orgId: ORG_ID,
+      });
+
+      await expect(
+        assertFillMatchesActiveCase({
+          providerId: message(CASE_A).providerId,
+          caseId: null,
+          facilityId: null,
+        }),
+      ).rejects.toThrow(/active case is currently selected/i);
+    });
+
+    it("allows case-free fill after active case is cleared", async () => {
+      await enterActiveCase({
+        caseId: CASE_A,
+        providerId: message(CASE_A).providerId,
+        orgId: ORG_ID,
+      });
+      await clearActiveCase();
+
+      await expect(
+        assertFillMatchesActiveCase({
+          providerId: message(CASE_A).providerId,
+          caseId: null,
+          facilityId: null,
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
 });

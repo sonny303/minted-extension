@@ -1,3 +1,4 @@
+import { AD_HOC_CASE_SELECTION } from "../shared/messages";
 // Side panel UI: sign-in, org/provider/case selection, and fill controls.
 // All API calls run in the background worker; this file renders state and
 // sends typed messages. Portal detection follows the active tab.
@@ -7,6 +8,7 @@ import type {
   CaseListItem,
   CasePortalTask,
   NextBestActionResult,
+  ProviderGroupRef,
   ProviderListItem,
   ProviderProfileFacility,
   UserOrgMembership,
@@ -196,6 +198,8 @@ const caseWork = el<HTMLElement>("case-work");
 const providerBar = el<HTMLElement>("provider-bar");
 const providerBarName = el<HTMLElement>("provider-bar-name");
 const providerBarSwitch = el<HTMLButtonElement>("provider-bar-switch");
+const groupField = el<HTMLElement>("group-field");
+const groupSelect = el<HTMLSelectElement>("group-select");
 const facilitySelect = el<HTMLSelectElement>("facility-select");
 const facilityHint = el<HTMLElement>("facility-hint");
 const facilityAddress = el<HTMLElement>("facility-address");
@@ -311,10 +315,24 @@ const queueSection = el<HTMLElement>("queue-section");
 // panel reopens.
 interface LastFill {
   providerId: string;
-  caseId: string;
+  caseId: string | null;
   portalKey: string;
   fillSessionId: string | null;
   submitted: boolean;
+}
+
+let selectedGroupId: string | null = null;
+let fillSelectionRevision = 0;
+let groupSelectionWrite: Promise<void> = Promise.resolve();
+function syncSelectedGroup(): Promise<void> {
+  const providerId = selectedProviderId();
+  const groupId = selectedGroupId;
+  if (!providerId) return Promise.resolve();
+  groupSelectionWrite = groupSelectionWrite.catch(() => undefined).then(async () => {
+    const response = await sendToBackground({ type: "SET_SELECTED_GROUP", providerId, groupId });
+    if (!response.ok) throw new Error(response.error);
+  });
+  return groupSelectionWrite;
 }
 
 let lastAiReview: AiFillReview | null = null;
@@ -434,6 +452,7 @@ function selectedProviderId(): string | null {
 /** Set (or clear) the selection. Rejects a non-uuid the same way reading the
  * dropdown's placeholder value used to. */
 function setSelectedProviderId(id: string | null): void {
+  if (selectedProvider !== id) invalidateFillSelection();
   selectedProvider = id != null && UUID_RE.test(id) ? id : null;
   renderSelectedProvider();
 }
@@ -1123,8 +1142,12 @@ async function refreshFacilityCards(
   generation: number,
 ): Promise<void> {
   const state = selectedCaseState();
+  const groupId = selectedGroupId;
+  const caseId = selectedCaseId();
   const response = await sendToBackground({
     type: "GET_PROVIDER_FACILITIES",
+    groupId,
+    caseId,
     providerId,
     facilityId,
     ...(state ? { state } : {}),
@@ -1134,6 +1157,8 @@ async function refreshFacilityCards(
     isCurrent(generation) &&
     selectedProviderId() === providerId &&
     selectedFacilityId() === facilityId &&
+    selectedGroupId === groupId &&
+    selectedCaseId() === caseId &&
     response.ok
   ) {
     needsFacility = response.data.needsFacility;
@@ -1345,19 +1370,21 @@ function renderCaseContext(
 // selected (case switch — doesn't bump the generation) or a newer context
 // superseded it (provider/org switch — does). Non-critical: on error it hides
 // silently, never raising the error box.
-function refreshCaseContext(): void {
+let caseContextLoad: Promise<void> = Promise.resolve();
+function refreshCaseContext(): Promise<void> {
   const caseId = selectedCaseId();
   // Same case already shown / in flight — leave the block as-is.
-  if (caseId === caseContextCaseId) return;
+  if (caseId === caseContextCaseId) return caseContextLoad;
   caseContextCaseId = caseId;
   if (caseId == null) {
     renderCaseContext(null);
-    return;
+    caseContextLoad = Promise.resolve();
+    return caseContextLoad;
   }
   // Hide while loading — the block is advisory, so no spinner/placeholder.
   renderCaseContext(null);
   const generation = loadGeneration;
-  void (async () => {
+  caseContextLoad = (async () => {
     const response = await sendToBackground({
       type: "GET_CASE_CONTEXT",
       caseId,
@@ -1367,6 +1394,7 @@ function refreshCaseContext(): void {
     if (!isCurrent(generation) || caseId !== caseContextCaseId) return;
     renderCaseContext(response.ok ? response.data : null);
   })();
+  return caseContextLoad;
 }
 
 // Prefill payer reference from the case and clear the WIP note on reselection.
@@ -1434,6 +1462,85 @@ function recentSubmissionPhrase(
   return whole === 1 ? "yesterday" : `${whole} days ago`;
 }
 
+function renderGroupSelector(provider: ProviderListItem | null): void {
+  groupSelect.replaceChildren();
+  if (!provider) {
+    groupField.hidden = true;
+    selectedGroupId = null;
+    return;
+  }
+
+  const providerGroups: ProviderGroupRef[] =
+    provider.groups && provider.groups.length > 0
+      ? provider.groups
+      : provider.groupId
+      ? [{ id: provider.groupId, name: "Assigned Group", isPrimary: true }]
+      : [];
+
+  const activeCaseId = selectedCaseId();
+  const activeCaseItem = activeCaseId
+    ? cases.find((c) => c.id === activeCaseId) ?? null
+    : null;
+  const caseGroupId = activeCaseItem?.groupId ?? null;
+
+  if (caseGroupId) {
+    // If the active case has an assigned group, group selection is pinned to that case group.
+    selectedGroupId = caseGroupId;
+    const caseGroupName =
+      providerGroups.find((g) => g.id === caseGroupId)?.name ?? "Case Group";
+    groupSelect.add(new Option(caseGroupName, caseGroupId));
+    groupSelect.value = caseGroupId;
+    groupSelect.disabled = true;
+    groupSelect.title = "Group is determined by the selected case";
+    groupField.hidden = false;
+    return;
+  }
+
+  // When no case is selected (or the case has no group), the operator can pick from
+  // the provider's affiliated groups.
+  groupSelect.disabled = false;
+  groupSelect.title = "";
+
+  if (providerGroups.length === 0) {
+    groupField.hidden = true;
+    selectedGroupId = null;
+    return;
+  }
+
+  groupField.hidden = false;
+  const groupPlaceholder = new Option("Select a group…", "");
+  groupPlaceholder.disabled = true;
+  groupSelect.add(groupPlaceholder);
+
+  const optgroup = document.createElement("optgroup");
+  optgroup.label = "Affiliated Groups";
+  for (const g of providerGroups) {
+    optgroup.appendChild(
+      new Option(g.isPrimary ? `${g.name} (Primary)` : g.name, g.id),
+    );
+  }
+  groupSelect.appendChild(optgroup);
+
+  if (
+    selectedGroupId &&
+    providerGroups.some((g) => g.id === selectedGroupId)
+  ) {
+    groupSelect.value = selectedGroupId;
+  } else if (providerGroups.length > 0) {
+    const primary = providerGroups.find((g) => g.isPrimary) ?? providerGroups[0];
+    if (primary) {
+      selectedGroupId = primary.id;
+      groupSelect.value = primary.id;
+    } else {
+      selectedGroupId = null;
+      groupSelect.value = "";
+    }
+  } else {
+    selectedGroupId = null;
+    groupSelect.value = "";
+  }
+}
+
 /** The "who am I working on, and how do I change it" line above the cards.
  * With the dropdown retired, Search IS the switcher — so this states the
  * current provider and offers one button back to it. */
@@ -1445,6 +1552,12 @@ function renderSelectedProvider(): void {
     : "No provider selected";
   providerBarName.classList.toggle("id-empty", provider == null);
   providerBarSwitch.textContent = provider ? "Change" : "Find a provider";
+  renderGroupSelector(provider);
+}
+
+function invalidateFillSelection(): void {
+  fillSelectionRevision += 1;
+  clearFillResults();
 }
 
 function clearFillResults(): void {
@@ -1524,6 +1637,7 @@ function isFillReady(): boolean {
   const expiredBlocked =
     activeCaseStatus === "expired" &&
     activeCase != null &&
+    selectedCaseId() != null &&
     activeCase.caseId === selectedCaseId();
   const unappliedHandoffBlocked =
     activeCase?.source === "handoff" &&
@@ -1536,7 +1650,8 @@ function isFillReady(): boolean {
     !facilityBlocked &&
     !expiredBlocked &&
     !unappliedHandoffBlocked &&
-    selectedCaseId(),
+    (selectedCaseId() != null || (caseSelect.value === AD_HOC_CASE_SELECTION &&
+      selectedGroupId != null && selectedFacilityId() != null)),
   );
 }
 
@@ -1564,13 +1679,15 @@ function updateFillReady(): void {
 
 // The coverage sensor reflects the profile (provider + state + facility) and the
 // portal's field maps — NOT the case — but only shows for a fill-ready
-// selection, so a case must be picked for the key to be non-null. null = not
-// fill-ready = panel hidden.
+// selection.
 // Fill state comes from the selected case, not the registry row — a
 // national portal serves many states, while every case names its own.
+// When no case is selected, falls back to facility state or provider home state.
 function selectedCaseState(): string {
   const caseItem = cases.find((c) => c.id === selectedCaseId());
-  return caseItem?.state ?? "";
+  if (caseItem?.state) return caseItem.state;
+  const facility = facilities.find((f) => f.id === selectedFacilityId());
+  return facility?.state ?? "";
 }
 
 function coverageSelectionKey(): string | null {
@@ -1578,6 +1695,8 @@ function coverageSelectionKey(): string | null {
   return [
     selectedProviderId(),
     selectedFacilityId() ?? "none",
+    selectedGroupId ?? "none",
+    selectedCaseId() ?? caseSelect.value,
     portal?.key ?? "",
     selectedCaseState(),
   ].join("|");
@@ -1603,7 +1722,7 @@ function refreshCoverage(): void {
   const activePortal = portal;
   // Unreachable when key != null (isFillReady guaranteed all three), but keep
   // the narrowing explicit for the type checker.
-  if (!providerId || !caseId || activePortal == null) return;
+  if (!providerId || activePortal == null) return;
   const facilityId = selectedFacilityId();
   // Capture the generation at request time, like every other loader: an org /
   // provider / refresh / sign-out switch bumps it and this response is dropped.
@@ -1613,10 +1732,11 @@ function refreshCoverage(): void {
     const response = await sendToBackground({
       type: "GET_FILL_COVERAGE",
       providerId,
-      caseId,
+      caseId: caseId ?? null,
       portalKey: activePortal.key,
       state: selectedCaseState(),
       facilityId,
+      groupId: selectedGroupId,
     });
     // Discard a stale response: a newer generation superseded this selection,
     // OR the fill-ready selection changed to a different coverage key while we
@@ -1865,25 +1985,38 @@ function renderFillSummary(
       "review the lists above and complete them on the portal before you submit.";
   }
 
-  const submitted = restored?.submitted === true;
-  // Payer-reference and WIP-note boxes show while the human can
-  // still act; an already-logged (restored) report hides them.
-  submitDetails.hidden = submitted;
-  if (!submitted) {
-    resetSubmitInputs();
-    renderTaskLink();
-  } else {
+  const hasCase = (lastFill?.caseId ?? selectedCaseId()) != null;
+  if (!hasCase) {
+    submitDetails.hidden = true;
     taskLink.hidden = true;
     selectedTaskId = null;
+    submitHint.hidden = true;
+    dupWarn.hidden = true;
+    dupConfirmPending = false;
+    markSubmittedBtn.hidden = true;
+    submitStatus.hidden = false;
+    submitStatus.textContent = "Ad hoc fill completed — logged under provider.";
+  } else {
+    const submitted = restored?.submitted === true;
+    // Payer-reference and WIP-note boxes show while the human can
+    // still act; an already-logged (restored) report hides them.
+    submitDetails.hidden = submitted;
+    if (!submitted) {
+      resetSubmitInputs();
+      renderTaskLink();
+    } else {
+      taskLink.hidden = true;
+      selectedTaskId = null;
+    }
+    submitHint.hidden = submitted;
+    dupWarn.hidden = true;
+    dupConfirmPending = false;
+    markSubmittedBtn.hidden = submitted;
+    markSubmittedBtn.disabled = false;
+    markSubmittedBtn.textContent = "Mark submitted";
+    submitStatus.hidden = !submitted;
+    if (submitted) submitStatus.textContent = "Logged to the case.";
   }
-  submitHint.hidden = submitted;
-  dupWarn.hidden = true;
-  dupConfirmPending = false;
-  markSubmittedBtn.hidden = submitted;
-  markSubmittedBtn.disabled = false;
-  markSubmittedBtn.textContent = "Mark submitted";
-  submitStatus.hidden = !submitted;
-  if (submitted) submitStatus.textContent = "Logged to the case.";
 }
 
 function renderAiReview(review: AiFillReview | null, restored: { completedAt: string; submitted: boolean } | null = null): void {
@@ -1917,7 +2050,7 @@ async function loadCases(
   generation: number,
   options: LoadCasesOptions = {},
 ): Promise<HandoffRead<readonly string[]>> {
-  clearFillResults();
+  invalidateFillSelection();
   // Drop the previous provider's rows NOW — the active-cases list must never
   // show provider A's cases under provider B while the fetch is in flight.
   cases = [];
@@ -1954,7 +2087,7 @@ async function loadCases(
     });
     if (!isCurrent(generation)) return { status: "stale" };
     rememberedId =
-      remembered.ok && cases.some((c) => c.id === remembered.data)
+      remembered.ok && (remembered.data === AD_HOC_CASE_SELECTION || cases.some((c) => c.id === remembered.data))
         ? remembered.data
         : null;
     // A remembered case that no longer exists (closed, or another org's) is
@@ -1967,25 +2100,23 @@ async function loadCases(
       });
     }
   }
+  const rememberedGroup = await sendToBackground({ type: "GET_SELECTED_GROUP", providerId });
+  if (!isCurrent(generation)) return { status: "stale" };
+  selectedGroupId = rememberedGroup.ok ? rememberedGroup.data : null;
   caseSelect.replaceChildren();
-  const placeholder = new Option(
-    cases.length ? "Select a case…" : "No open cases for this provider",
-    "",
-    true,
-    rememberedId == null,
-  );
-  placeholder.disabled = cases.length > 0;
+  const placeholder = new Option("Select a case or ad hoc fill…", "", true, rememberedId == null);
+  placeholder.disabled = true;
   caseSelect.add(placeholder);
+  caseSelect.add(new Option("No case · Ad hoc fill", AD_HOC_CASE_SELECTION, false, rememberedId === AD_HOC_CASE_SELECTION));
   for (const c of cases) {
-    caseSelect.add(
-      new Option(caseLabel(c), c.id, false, c.id === rememberedId),
-    );
+    caseSelect.add(new Option(caseLabel(c), c.id, false, c.id === rememberedId));
   }
-  caseSelect.disabled = cases.length === 0;
+  caseSelect.disabled = false;
   renderCaseStatusPill();
   renderCaseNote();
   renderDuplicateGuard();
   renderActiveCases();
+  renderGroupSelector(providers.find((p) => p.id === selectedProviderId()) ?? null);
   // Load context for the restored case (or hide when none was restored). Runs
   // under this generation; a superseding switch discards its response.
   if (!options.deferContext) refreshCaseContext();
@@ -2006,22 +2137,34 @@ async function restoreFillReport(
   generation: number,
 ): Promise<void> {
   lastReportBrokenCount = 0;
-  if (selectedCase == null) return;
+  const revision = fillSelectionRevision;
   const response = await sendToBackground({
     type: "GET_FILL_REPORT",
     providerId,
   });
-  if (!isCurrent(generation)) return;
+  if (!isCurrent(generation) || revision !== fillSelectionRevision) return;
   if (!response.ok || response.data == null) return;
   const record: FillReportRecord = response.data;
-  if (record.caseId !== selectedCase) return;
+  if (selectedCase == null || selectedCase !== caseSelect.value || selectedProviderId() !== providerId) return;
+  if (record.portalKey !== portal?.key || (record.groupId ?? null) !== selectedGroupId ||
+      (record.summary.facilityId ?? null) !== selectedFacilityId() ||
+      (record.summary.state ?? "") !== selectedCaseState()) return;
+  const isAdHoc = selectedCase === AD_HOC_CASE_SELECTION;
+  if (isAdHoc) {
+    // For ad hoc fills, restore reports where caseId is null and portal matches the active page.
+    if (record.caseId != null) return;
+    if (portal?.key && record.portalKey !== portal.key) return;
+  } else {
+    // For case-bound fills, the report must match the selected case.
+    if (record.caseId !== selectedCase) return;
+  }
   // Drift signal: dead selectors from this portal's last REAL fill.
   if (record.portalKey === portal?.key) {
     lastReportBrokenCount = countBrokenSelectors(record.summary.skipped ?? []);
   }
   lastFill = {
     providerId,
-    caseId: record.caseId,
+    caseId: record.caseId ?? null,
     portalKey: record.portalKey,
     fillSessionId: record.summary.fillSessionId,
     submitted: record.submitted,
@@ -2166,10 +2309,16 @@ async function loadFacilities(
   known: {
     facilityId?: string | null;
     state?: string;
+    caseId?: string | null;
     strictFacility?: boolean;
     deferSelectionWrites?: boolean;
   } = {},
 ): Promise<HandoffRead<readonly string[]>> {
+  const caseId = known.caseId !== undefined ? known.caseId : selectedCaseId();
+  // A handoff supplies its case before the picker is populated. The server
+  // derives that case's group; ordinary loads use the settled group selector.
+  const groupId = known.deferSelectionWrites ? undefined : selectedGroupId;
+  const state = known.state ?? cases.find((item) => item.id === caseId)?.state;
   facilities = [];
   facilitiesLoaded = false;
   needsFacility = false;
@@ -2193,8 +2342,10 @@ async function loadFacilities(
   let response = await sendToBackground({
     type: "GET_PROVIDER_FACILITIES",
     providerId,
+    caseId,
+    groupId,
     ...(speculativeFacilityId ? { facilityId: speculativeFacilityId } : {}),
-    ...(known.state ? { state: known.state } : {}),
+    ...(state ? { state } : {}),
   });
   // A newer provider/org selection superseded this load — discard silently.
   if (!isCurrent(generation)) return { status: "stale" };
@@ -2208,7 +2359,9 @@ async function loadFacilities(
     response = await sendToBackground({
       type: "GET_PROVIDER_FACILITIES",
       providerId,
-      ...(known.state ? { state: known.state } : {}),
+      caseId,
+      groupId,
+      ...(state ? { state } : {}),
     });
     if (!isCurrent(generation)) return { status: "stale" };
   }
@@ -2230,7 +2383,8 @@ async function loadFacilities(
   // The quick cards AND the served picker catalog ride on the same (single,
   // audited) profile fetch as the facility set.
   currentCatalog = response.data.catalog;
-  renderQuickCards(response.data.cards);
+  const cardsCurrent = caseId === selectedCaseId() && (groupId === undefined || groupId === selectedGroupId);
+  renderQuickCards(cardsCurrent ? response.data.cards : null);
 
   if (facilities.length === 0) {
     // Nothing to resolve: facility tokens come back unresolved with a
@@ -2255,9 +2409,16 @@ async function loadFacilities(
     facilitySelect.replaceChildren(
       new Option(sole.name || "Location", sole.id, true, true),
     );
+    if (known.deferSelectionWrites !== true) {
+      await sendToBackground({ type: "SET_SELECTED_FACILITY", providerId, facilityId: sole.id });
+      if (!isCurrent(generation)) return { status: "stale" };
+    }
     renderFacilityAddress();
     renderIdentityGuard();
     updateFillReady();
+    if (known.deferSelectionWrites !== true && !cardsCurrent) {
+      await refreshFacilityCards(providerId, sole.id, generation);
+    }
     return { status: "ok", data: facilities.map((facility) => facility.id) };
   }
 
@@ -2331,18 +2492,39 @@ async function loadFacilities(
   // same id, this read already resolved it — no second profile request.
   const selectedId = selectedFacilityId();
   if (
+    known.deferSelectionWrites !== true &&
     selectedId != null &&
-    facilities.length > 1 &&
-    selectedId !== resolvedSpeculativeId
+    (!cardsCurrent || (facilities.length > 1 && selectedId !== resolvedSpeculativeId))
   ) {
     await refreshFacilityCards(providerId, selectedId, generation);
   }
   return { status: "ok", data: facilities.map((facility) => facility.id) };
 }
 
+// Settle case/group before the profile read, then restore only once the
+// location and case context are ready. This keeps the initial cards and report
+// on the same selection without adding another profile request on reopen.
+async function loadProviderSelection(
+  providerId: string,
+  generation: number,
+  known: { facilityId?: string | null; state?: string } = {},
+): Promise<void> {
+  facilitiesLoaded = false;
+  renderQuickCards(null);
+  const caseRead = await loadCases(providerId, generation, { deferContext: true, deferReport: true });
+  if (caseRead.status !== "ok" || !isCurrent(generation)) return;
+  const revision = fillSelectionRevision;
+  await Promise.all([
+    refreshCaseContext(),
+    loadFacilities(providerId, generation, known),
+  ]);
+  if (!isCurrent(generation) || revision !== fillSelectionRevision) return;
+  await restoreFillReport(providerId, caseSelect.value || null, generation);
+}
+
 async function loadProviders(generation: number): Promise<void> {
   setError(mainError, null);
-  clearFillResults();
+  invalidateFillSelection();
   renderProviderCard(null);
 
   // The roster is still loaded (search filters it locally, the card reads it,
@@ -2378,11 +2560,7 @@ async function loadProviders(generation: number): Promise<void> {
   // Same generation flows down: if a switch lands during these loads they
   // discard themselves, and loadProviders is never reached by a stale caller
   // (the checks above bail first).
-  if (provider)
-    await Promise.all([
-      loadCases(provider.id, generation),
-      loadFacilities(provider.id, generation),
-    ]);
+  if (provider) await loadProviderSelection(provider.id, generation);
 }
 
 // Account row shows the active org's name beside the avatar —
@@ -2417,7 +2595,7 @@ async function loadOrgs(generation: number): Promise<void> {
   hideSearchResults();
   renderProviderCard(null);
   renderIdentityGuard();
-  clearFillResults();
+  invalidateFillSelection();
 
   const response = await sendToBackground({ type: "LIST_MY_ORGS" });
   // A newer sign-out / re-entry superseded this load — discard silently.
@@ -2528,6 +2706,7 @@ async function loadPortalRegistry(generation: number): Promise<void> {
   void detectPortal();
 }
 
+let detectedPageUrl: string | null = null;
 async function detectPortal(): Promise<void> {
   // Train uses the shared registry + sticky selection messaging (TRAIN-DUAL).
   // Do not overwrite `portal` from the Work `portalRows` list while training.
@@ -2536,6 +2715,8 @@ async function detectPortal(): Promise<void> {
     return;
   }
   const tab = await queryActiveTab();
+  if (portalTabId !== (tab?.id ?? null) || detectedPageUrl !== (tab?.url ?? null)) invalidateFillSelection();
+  detectedPageUrl = tab?.url ?? null;
   portal = matchPortalByUrl(tab?.url, portalRows);
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
@@ -2805,7 +2986,7 @@ orgSelect.addEventListener("change", () => {
     // on carries x-org-id.
     await sendToBackground({ type: "SET_ACTIVE_ORG", orgId });
     if (!isCurrent(generation)) return;
-    clearFillResults();
+    invalidateFillSelection();
     hideSearchResults();
     orgReady = true;
     renderModeSurfaces();
@@ -2823,7 +3004,20 @@ providerBarSwitch.addEventListener("click", () => {
   searchInput.focus();
 });
 
+groupSelect.addEventListener("change", () => {
+  selectedGroupId = groupSelect.value || null;
+  invalidateFillSelection();
+  renderQuickCards(null);
+  void syncSelectedGroup().catch((error: unknown) => setError(mainError, error instanceof Error ? error.message : "Could not select group"));
+  const providerId = selectedProviderId();
+  const facilityId = selectedFacilityId();
+  if (providerId && facilityId) void refreshFacilityCards(providerId, facilityId, loadGeneration);
+  updateFillReady();
+});
+
 facilitySelect.addEventListener("change", () => {
+  invalidateFillSelection();
+  renderQuickCards(null);
   const providerId = selectedProviderId();
   const facilityId = selectedFacilityId();
   if (providerId && applyingHandoffKey == null) {
@@ -2860,33 +3054,46 @@ function applyCaseChoice(caseId: string | null, recordEntry: boolean): void {
   // not a leftover remembered location from another case on the same provider.
   preferCaseFacility = caseId != null;
   if (providerId) {
-    void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId });
-    if (recordEntry && caseId != null) {
-      void (async () => {
-        await sendToBackground({
-          type: "ENTER_ACTIVE_CASE",
-          caseId,
-          providerId,
-          orgId: activeOrgId,
-        });
-        // Entering a case supersedes any expired/previous context — re-read so
-        // the banner and gates reflect the fresh record.
-        await refreshActiveCase(false);
-      })();
+    void sendToBackground({ type: "SET_SELECTED_CASE", providerId, caseId: caseSelect.value === AD_HOC_CASE_SELECTION ? AD_HOC_CASE_SELECTION : caseId });
+    if (recordEntry) {
+      if (caseId != null) {
+        void (async () => {
+          await sendToBackground({
+            type: "ENTER_ACTIVE_CASE",
+            caseId,
+            providerId,
+            orgId: activeOrgId,
+          });
+          // Entering a case supersedes any expired/previous context — re-read so
+          // the banner and gates reflect the fresh record.
+          await refreshActiveCase(false);
+        })();
+      } else {
+        void (async () => {
+          await sendToBackground({
+            type: "CLEAR_ACTIVE_CASE",
+          });
+          await refreshActiveCase(false);
+        })();
+      }
     }
   }
   renderCaseStatusPill();
   renderCaseNote();
   renderDuplicateGuard();
   renderActiveCases();
+  renderGroupSelector(providers.find((p) => p.id === selectedProviderId()) ?? null);
   refreshCaseContext();
-  clearFillResults();
+  invalidateFillSelection();
+  renderQuickCards(null);
+  const facilityId = selectedFacilityId();
+  if (providerId && facilityId) void refreshFacilityCards(providerId, facilityId, loadGeneration);
   resetTouchForm();
   updateFillReady();
 }
 
 caseSelect.addEventListener("change", () => {
-  applyCaseChoice(caseSelect.value || null, true);
+  applyCaseChoice(selectedCaseId(), true);
 });
 
 bindAiReviewActions(
@@ -2911,18 +3118,32 @@ fillBtn.addEventListener("click", () => {
   // the result is discarded rather than rendered under the wrong provider —
   // the same wrong-record guard the loaders use. The fill itself still ran and
   // is logged server-side against the click-time provider/case.
+  if (!isFillReady()) return;
+  invalidateFillSelection();
   const generation = loadGeneration;
+  const revision = fillSelectionRevision;
+  const groupId = selectedGroupId;
+  const state = selectedCaseState();
+  const isFillCurrent = () => isCurrent(generation) && revision === fillSelectionRevision;
   const providerId = selectedProviderId();
   const caseId = selectedCaseId();
   const facilityId = selectedFacilityId();
   // Same hard gates the disabled state enforces: org resolved, provider,
-  // facility resolved, case selected.
-  if (!orgResolved() || !providerId || !caseId) return;
+  // facility resolved. Case is optional for ad hoc fills.
+  if (!orgResolved() || !providerId) return;
   if (!facilitiesLoaded || (needsFacility && facilityId == null)) return;
   void (async () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
+    try {
+      await syncSelectedGroup();
+    } catch (error) {
+      setError(mainError, error instanceof Error ? error.message : "Could not select group");
+      return;
+    }
+    if (!isFillCurrent()) return;
     const tab = await queryActiveTab();
+    if (!isFillCurrent()) return;
     const clickPortal = matchPortalByUrl(tab?.url, portalRows);
     portal = clickPortal;
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
@@ -2935,7 +3156,6 @@ fillBtn.addEventListener("click", () => {
       return;
     }
     setError(mainError, null);
-    clearFillResults();
     fillBtn.disabled = true;
     fillBtn.textContent = "Filling…";
     fillBtn.classList.add("filling");
@@ -2947,7 +3167,7 @@ fillBtn.addEventListener("click", () => {
       let aiMatches: Array<{ selector: string; token: string; confidence: number }> = [];
       let aiStatus: "unavailable" | "no-matches" | "error" | undefined;
       const nanoReady = await canUseNano();
-      if (!isCurrent(generation)) return;
+      if (!isFillCurrent()) return;
       if (!nanoReady) {
         aiStatus = "unavailable";
       } else {
@@ -2955,12 +3175,13 @@ fillBtn.addEventListener("click", () => {
           type: "PREPARE_AI_FILL",
           tabId: tab.id,
           providerId,
-          caseId,
+          caseId: caseId ?? null,
           portalKey: clickPortal.key,
-          state: selectedCaseState(),
+          state,
           facilityId,
+          groupId,
         });
-        if (!isCurrent(generation)) return;
+        if (!isFillCurrent()) return;
         if (prepared.ok) {
           aiScanId = prepared.data.scanId;
           const boundedControls = prepared.data.controls.slice(0, NANO_LIMITS.maxControls);
@@ -2979,7 +3200,7 @@ fillBtn.addEventListener("click", () => {
       // new document. The worker repeats this binding check before writes.
       const currentTab = await queryActiveTab();
       if (
-        !isCurrent(generation) || currentTab?.id !== tab.id ||
+        !isFillCurrent() || currentTab?.id !== tab.id ||
         (currentTab.url ?? "") !== originalUrl ||
         matchPortalByUrl(currentTab.url, portalRows)?.key !== clickPortal.key
       ) {
@@ -2991,10 +3212,11 @@ fillBtn.addEventListener("click", () => {
         type: "FILL",
         tabId: tab.id,
         providerId,
-        caseId,
+        caseId: caseId ?? null,
         portalKey: clickPortal.key,
-        state: selectedCaseState(),
+        state,
         facilityId,
+        groupId,
         ...(aiScanId ? { aiScanId, aiMatches } : {}),
         ...(aiStatus ? { aiStatus } : {}),
       });
@@ -3010,14 +3232,14 @@ fillBtn.addEventListener("click", () => {
     }
     // Selection changed mid-fill: drop this result so it can't render under the
     // provider now selected. Button chrome above is already restored.
-    if (!isCurrent(generation)) return;
+    if (!isFillCurrent()) return;
     if (!response.ok) {
       setError(mainError, response.error);
       return;
     }
     lastFill = {
       providerId,
-      caseId,
+      caseId: caseId ?? null,
       portalKey: clickPortal.key,
       fillSessionId: response.data.fillSessionId,
       submitted: false,
@@ -3054,12 +3276,13 @@ async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
 // carries the payer reference, WIP note, and matched task_id when one was chosen.
 markSubmittedBtn.addEventListener("click", () => {
   const context = lastFill;
-  if (!context) return;
+  if (!context || !context.caseId) return;
+  const caseId = context.caseId;
 
   // On a case submitted inside the duplicate window, the first click
   // surfaces a warning and re-labels the button; the next click logs anyway.
   if (!dupConfirmPending) {
-    const caseItem = cases.find((c) => c.id === context.caseId);
+    const caseItem = cases.find((c) => c.id === caseId);
     const phrase = recentSubmissionPhrase(caseItem);
     // Duplicate warning shows on pickup, where it can still save the
     // work. Submitting stays a one-click confirm rather than a second warning:
@@ -3086,7 +3309,7 @@ markSubmittedBtn.addEventListener("click", () => {
     const response = await sendToBackground({
       type: "MARK_SUBMITTED",
       providerId: context.providerId,
-      caseId: context.caseId,
+      caseId,
       portalKey: context.portalKey,
       fillSessionId: context.fillSessionId,
       payerReferenceId: payerRefInput.value,
@@ -3097,7 +3320,7 @@ markSubmittedBtn.addEventListener("click", () => {
       bumpStatus: true,
     });
     if (!response.ok) {
-      // A 404 here can now also mean a cross-org/invalid task_id — surface the
+      // A 404 here can also mean a cross-org/invalid task_id — surface the
       // server's message as-is and let the human retry. Never auto-retry with
       // the task stripped.
       //
@@ -3153,7 +3376,7 @@ markSubmittedBtn.addEventListener("click", () => {
     // fill of the same case won't re-offer it.
     if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
     // After success, surface the next-best-action queue top.
-    void refreshNextBestAction(context.caseId);
+    void refreshNextBestAction(caseId);
   })();
 });
 
@@ -3271,10 +3494,7 @@ async function selectProviderInPanel(
   if (!isCurrent(generation)) return;
   setSelectedProviderId(provider.id);
   renderProviderCard(providers.find((p) => p.id === provider.id) ?? null);
-  await Promise.all([
-    loadCases(provider.id, generation),
-    loadFacilities(provider.id, generation),
-  ]);
+  await loadProviderSelection(provider.id, generation);
 }
 
 // Select a case from anywhere (search result, NBA handback, handoff apply) —
@@ -3331,13 +3551,10 @@ async function selectCaseInPanel(
   }
   setSelectedProviderId(providerId);
   renderProviderCard(providers.find((p) => p.id === providerId) ?? null);
-  await Promise.all([
-    loadCases(providerId, generation),
-    loadFacilities(providerId, generation, {
-      facilityId: preferredFacilityId,
-      ...(preferredState ? { state: preferredState } : {}),
-    }),
-  ]);
+  await loadProviderSelection(providerId, generation, {
+    facilityId: preferredFacilityId,
+    ...(preferredState ? { state: preferredState } : {}),
+  });
   if (recordEntry && isCurrent(generation)) await refreshActiveCase(false);
 }
 
@@ -3413,6 +3630,7 @@ async function loadHandoffSelection(
       deferReport: true,
     }),
     loadFacilities(record.providerId, generation, {
+      caseId: record.caseId,
       facilityId: record.facilityId,
       strictFacility: record.facilityId != null,
       deferSelectionWrites: true,
@@ -3732,7 +3950,7 @@ async function switchOrgForHandoff(record: ActiveCaseRecord): Promise<void> {
   activeOrgId = target;
   renderOrgContext();
   orgSelect.value = target;
-  clearFillResults();
+  invalidateFillSelection();
   hideSearchResults();
   orgReady = true;
   renderModeSurfaces();
@@ -3919,6 +4137,9 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
   applyingHandoffKey = null;
   rejectedHandoffKey = null;
   handoffNotice = null;
+  const facilityId = selectedFacilityId();
+  if (facilityId) await refreshFacilityCards(record.providerId, facilityId, selection.generation);
+  if (!isCurrent(selection.generation)) return;
   await restoreFillReport(record.providerId, record.caseId, selection.generation);
   renderHandoffBanner();
   updateFillReady();

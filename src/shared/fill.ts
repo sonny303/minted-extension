@@ -191,7 +191,8 @@ export interface FillReportRecord {
   tabId?: number;
   providerId: string;
   portalKey: string;
-  caseId: string;
+  caseId?: string | null;
+  groupId?: string | null;
   summary: FillSummary;
   // When the fill ran (ISO). The panel labels a restored report with it so a
   // stale report is never mistaken for a fresh one.
