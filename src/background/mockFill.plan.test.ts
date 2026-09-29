@@ -77,4 +77,13 @@ describe("planMockFill", () => {
       expect.objectContaining({ mapId: "file", kind: "file" }),
     ]);
   });
+
+  it("uses a curated synthetic cityStateZip value in form previews", () => {
+    const plan = planMockFill([
+      map({ id: "city-state-zip", selector: "label:City, State ZIP", token: "facility.cityStateZip" }),
+    ]);
+    expect(plan.instructions).toHaveLength(1);
+    expect(plan.instructions[0]?.value).toBe("Sampleville, NC 27601");
+    expect(plan.gaps).toEqual([]);
+  });
 });

@@ -81,6 +81,30 @@ describe("planFill", () => {
     expect(plan.staticFills[0]?.pageStep).toBeNull();
   });
 
+  it("fills one web field from the computed facility cityStateZip profile token", () => {
+    const profileWithCityStateZip: ProviderProfileResponse = {
+      ...profile,
+      tokens: [...profile.tokens, { token: "facility.cityStateZip", value: "Austin, TX 78701" }],
+    };
+    const plan = planFill(
+      [map({ id: "city-state-zip", selector: "#city-state-zip", token: "facility.cityStateZip" })],
+      profileWithCityStateZip,
+    );
+
+    expect(plan.staticFills).toHaveLength(1);
+    expect(plan.staticFills[0]).toMatchObject({ selector: "#city-state-zip", value: "Austin, TX 78701" });
+    expect(plan.manual).toEqual([]);
+
+    const missing = planFill(
+      [map({ id: "city-state-zip-missing", selector: "#city-state-zip", token: "facility.cityStateZip" })],
+      profile,
+    );
+    expect(missing.staticFills).toEqual([]);
+    expect(missing.manual).toEqual([
+      expect.objectContaining({ mapId: "city-state-zip-missing", kind: "no_value" }),
+    ]);
+  });
+
   it("carries trained pageStep onto each instruction (DYN-PAGE-01)", () => {
     const plan = planFill(
       [map({ id: "a", selector: "label:First Name", pageStep: "credentials" })],
