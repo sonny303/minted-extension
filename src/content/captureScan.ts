@@ -9,6 +9,7 @@ import {
   querySelectorAllDeep,
   querySelectorDeep,
 } from "./deepDom";
+import { isPrimeFacesFocusInput, primeFacesSelectMenu } from "./primeFaces";
 
 export interface CapturedField {
   /** The payer's own label text, verbatim (trimmed). The server normalizes it
@@ -85,6 +86,9 @@ export function isHiddenControl(el: Element): boolean {
 /** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
  * or positively hidden per `isHiddenControl`. */
 export function isCapturableControl(el: Element): boolean {
+  if (isPrimeFacesFocusInput(el)) return false;
+  const menu = primeFacesSelectMenu(el);
+  if (menu && el === menu.select) return hasLayoutBox(menu.wrapper) && !isHiddenControl(menu.wrapper);
   return hasLayoutBox(el) && !isHiddenControl(el);
 }
 
@@ -429,16 +433,16 @@ export function describeControl(
  * on nothing mappable. */
 export function nearestCapturableControl(node: Element | null): Element | null {
   if (node == null) return null;
-  if (node.matches(FILLABLE)) return node;
+  if (node.matches(FILLABLE)) return primeFacesSelectMenu(node)?.select ?? node;
   for (const ancestor of ancestorsIncludingShadow(node)) {
-    if (ancestor.matches(FILLABLE)) return ancestor;
+    if (ancestor.matches(FILLABLE)) return primeFacesSelectMenu(ancestor)?.select ?? ancestor;
   }
   const label = closestDeep(node, "label");
   if (label) {
     const forId = label.getAttribute("for");
     if (forId) {
       const target = querySelectorDeep(`#${CSS.escape(forId)}`);
-      if (target?.matches(FILLABLE)) return target;
+      if (target?.matches(FILLABLE)) return primeFacesSelectMenu(target)?.select ?? target;
     }
     const inner = querySelectorDeep(FILLABLE, label);
     if (inner) return inner;
@@ -462,7 +466,11 @@ export function scanCapturableFields(): CapturedField[] {
   const visible = controls
     .filter(({ el }) => isCapturableControl(el))
     .sort(
-      (a, b) => compareVisualPosition(a.el, b.el) || a.index - b.index,
+      (a, b) => {
+        const aMenu = primeFacesSelectMenu(a.el);
+        const bMenu = primeFacesSelectMenu(b.el);
+        return compareVisualPosition(aMenu?.wrapper ?? a.el, bMenu?.wrapper ?? b.el) || a.index - b.index;
+      },
     );
 
   for (const { el } of visible) {

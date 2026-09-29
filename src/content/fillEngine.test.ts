@@ -2,13 +2,14 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyFill, applyFillOnPage, clearPortalForm, probeFillOnPage } from "./fillEngine";
+import { applyFill, applyFillOnPage, applyFillSettled, clearPortalForm, probeFillOnPage } from "./fillEngine";
 import { describeSelectorMatches } from "./elementPicker";
 import type { FillInstruction } from "../shared/fill";
 import { OTHER_PAGE_KIND, OTHER_PAGE_REASON, PAGE_UNKNOWN_KIND, PAGE_UNKNOWN_REASON } from "../shared/fillPage";
 import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
+import { buildDateReversionFixture } from "../__fixtures__/dom/portalScenarios";
 
 // jsdom does not provide CSS.escape; applyRadio uses it to scope a NAMED radio
 // group. Same shim the captureScan and elementPicker suites already carry —
@@ -37,6 +38,8 @@ function instr(
     pageStep: over.pageStep ?? null,
     ...(over.probeKey ? { probeKey: over.probeKey } : {}),
     ...(over.telemetry ? { telemetry: over.telemetry } : {}),
+    ...(over.nativeDateValue ? { nativeDateValue: over.nativeDateValue } : {}),
+    ...(over.exactSelectValue ? { exactSelectValue: true } : {}),
     ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
   };
 }
@@ -483,6 +486,165 @@ describe("applyFill", () => {
     );
   });
 
+  it("writes native date inputs in canonical ISO even when the display shape is different", () => {
+    document.body.innerHTML = `<input id="start-date" type="date" />`;
+    const result = applyFill([
+      instr({
+        label: "Start date",
+        selector: "#start-date",
+        fieldType: "date",
+        value: "02/02/2025",
+        nativeDateValue: "2025-02-02",
+      }),
+    ]);
+    expect(result.filled).toEqual(["Start date"]);
+    expect(document.querySelector<HTMLInputElement>("#start-date")?.value).toBe("2025-02-02");
+  });
+
+  it("feeds PrimeFaces datepicker's keydown-gated input model before blur", () => {
+    document.body.innerHTML = `<span class="p-datepicker ui-calendar"><input id="effective-date" type="text" /></span>`;
+    const input = document.querySelector<HTMLInputElement>("#effective-date")!;
+    let keydownSeen = false;
+    let modelValue = "";
+    input.addEventListener("keydown", () => { keydownSeen = true; });
+    input.addEventListener("input", () => {
+      if (!keydownSeen) return;
+      keydownSeen = false;
+      modelValue = input.value;
+    });
+    input.addEventListener("blur", () => { input.value = modelValue; });
+
+    const result = applyFill([
+      instr({ label: "Effective date", selector: "#effective-date", fieldType: "date", value: "02/02/2026" }),
+    ]);
+    expect(result.filled).toEqual(["Effective date"]);
+    expect(input.value).toBe("02/02/2026");
+    expect(modelValue).toBe("02/02/2026");
+  });
+
+  it("selects a taxonomy code from a lazy PrimeFaces menu beyond the capture option cap", async () => {
+    const targetCode = "251B00000X";
+    const options = Array.from({ length: 856 }, (_, index) => {
+      const code = index === 650 ? targetCode : `code-${String(index).padStart(4, "0")}`;
+      return `<option value="${code}">${code}</option>`;
+    }).join("");
+    document.body.innerHTML = `
+      <div id="taxonomy" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select One</span>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="taxonomy_focus" type="text" aria-label="Taxonomy" />
+        <select id="taxonomy_input" aria-hidden="true" aria-label="Taxonomy"><option value="">Select One</option>${options}</select>
+      </div>
+      <div id="taxonomy_panel" class="ui-selectonemenu-panel" style="display:none"><ul id="taxonomy_items"></ul></div>
+    `;
+    const select = document.querySelector<HTMLSelectElement>("#taxonomy_input")!;
+    const wrapper = document.querySelector<HTMLElement>("#taxonomy")!;
+    const label = wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label")!;
+    const panel = document.querySelector<HTMLElement>("#taxonomy_panel")!;
+    wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger")!.addEventListener("click", () => {
+      panel.style.display = "block";
+      panel.querySelector("ul")!.innerHTML = Array.from(select.options)
+        .filter((option) => option.value)
+        .map((option) => `<li class="ui-selectonemenu-item" role="option" data-label="${option.text}">${option.text}</li>`)
+        .join("");
+      panel.querySelectorAll<HTMLElement>(".ui-selectonemenu-item").forEach((item) => {
+        item.addEventListener("click", () => {
+          select.value = item.textContent ?? "";
+          label.textContent = item.textContent;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      });
+    });
+
+    const result = await applyFillSettled([
+      instr({ label: "Taxonomy", selector: "#taxonomy_focus", fieldType: "select", value: targetCode, exactSelectValue: true }),
+    ]);
+    expect(select.value).toBe(targetCode);
+    expect(label.textContent).toBe(targetCode);
+    expect(result.filled).toEqual(["Taxonomy"]);
+    expect(result.skipped).toEqual([]);
+    expect(result.fieldOutcomes).toEqual([]);
+  });
+
+  it("keeps regular field success and value-free reporting when a PrimeFaces click throws", async () => {
+    document.body.innerHTML = `
+      <input id="name" type="text" />
+      <div id="taxonomy" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select One</span><span class="ui-selectonemenu-trigger"></span>
+        <input id="taxonomy_focus" type="text" aria-label="Taxonomy" />
+        <select id="taxonomy_input" aria-hidden="true" aria-label="Taxonomy"><option value="">Select One</option><option value="code">code</option></select>
+      </div>
+    `;
+    const secret = "provider-data-must-not-leak";
+    document.querySelector<HTMLElement>("#taxonomy .ui-selectonemenu-trigger")!.click = () => { throw new Error(secret); };
+    const result = await applyFillSettled([
+      instr({ label: "Name", selector: "#name", value: "Ada" }),
+      instr({ label: "Taxonomy", selector: "#taxonomy_focus", fieldType: "select", value: "code", exactSelectValue: true }),
+    ]);
+    expect(document.querySelector<HTMLInputElement>("#name")?.value).toBe("Ada");
+    expect(result.filled).toContain("Name");
+    expect(result.skipped).toContainEqual(expect.objectContaining({
+      label: "Taxonomy",
+      reason: "field could not be applied; review it on the portal",
+      kind: "unverified",
+    }));
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("does not report a date mask's delayed year corruption as filled", async () => {
+    const fixture = buildDateReversionFixture();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      document.body.innerHTML = `<input id="effective-date" type="text" /><input id="same-label-other" type="text" />`;
+      const date = document.querySelector<HTMLInputElement>("#effective-date")!;
+      date.addEventListener("input", () => {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = setTimeout(() => { date.value = fixture.revertedValue; }, fixture.delayMs);
+      });
+      const result = await applyFillSettled([
+        instr({ label: "Effective date", selector: "#effective-date", fieldType: "date", value: fixture.attemptedValue }),
+        instr({ label: "Effective date", selector: "#same-label-other", value: "ok", mapId: "m-other" }),
+      ]);
+      expect(date.value).toBe("02/02/6100");
+      expect(result.filled).toEqual(["Effective date"]);
+      expect(result.writes?.map((write) => write.selector)).toEqual(["#same-label-other"]);
+      expect(result.skipped).toContainEqual(expect.objectContaining({
+        label: "Effective date",
+        reason: "portal changed the date after fill; review this field on the portal",
+        kind: "unverified",
+      }));
+      expect(JSON.stringify(result)).not.toContain("02/02/6100");
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      fixture.dispose();
+    }
+  });
+
+  it("checks a repeated date write even when the requested value was already present", async () => {
+    const fixture = buildDateReversionFixture();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      document.body.innerHTML = `<input id="effective-date" type="text" value="${fixture.attemptedValue}" />`;
+      const date = document.querySelector<HTMLInputElement>("#effective-date")!;
+      date.addEventListener("input", () => {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = setTimeout(() => { date.value = fixture.revertedValue; }, fixture.delayMs);
+      });
+      const result = await applyFillSettled([
+        instr({ label: "Effective date", selector: "#effective-date", fieldType: "date", value: fixture.attemptedValue }),
+      ]);
+      expect(date.value).toBe(fixture.revertedValue);
+      expect(result.filled).toEqual([]);
+      expect(result.skipped).toContainEqual(expect.objectContaining({
+        label: "Effective date",
+        kind: "unverified",
+      }));
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      fixture.dispose();
+    }
+  });
+
   it("shows an already-selected choice as not checked, not verified", () => {
     document.body.innerHTML = `<input id="agree" type="checkbox" checked />`;
     const result = applyFill([
@@ -752,7 +914,7 @@ describe("clearPortalForm", () => {
     );
   });
 
-  it("fires input+change so a controlled input sees the clear", () => {
+  it("fires input, change, blur, and focusout so controlled inputs see the clear", () => {
     // Same reason applyFill uses the native setter: a React-style portal that
     // only listens to events would otherwise re-render the old value straight
     // back, leaving the form visibly unchanged.
@@ -761,8 +923,10 @@ describe("clearPortalForm", () => {
     const seen: string[] = [];
     input.addEventListener("input", () => seen.push("input"));
     input.addEventListener("change", () => seen.push("change"));
+    input.addEventListener("blur", () => seen.push("blur"));
+    input.addEventListener("focusout", () => seen.push("focusout"));
     clearPortalForm();
-    expect(seen).toEqual(["input", "change"]);
+    expect(seen).toEqual(["input", "change", "blur", "focusout"]);
   });
 
   it("keeps going when one control throws", () => {

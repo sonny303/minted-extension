@@ -128,6 +128,33 @@ describe("isCapturableControl", () => {
 });
 
 describe("scanCapturableFields", () => {
+  it("captures a PrimeFaces backing select once and omits its focus input", () => {
+    const options = Array.from({ length: 856 }, (_, index) =>
+      `<option value="taxonomy-${index}">taxonomy-${index}</option>`,
+    ).join("");
+    document.body.innerHTML = `
+      <div id="taxonomy" class="ui-selectonemenu" role="combobox">
+        <label class="ui-selectonemenu-label">Select One</label>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="ProviderTaxonomy_focus" type="text" aria-label="Taxonomy" />
+        <select id="ProviderTaxonomy_input" aria-hidden="true" aria-label="Taxonomy">
+          <option value="">Select One</option>${options}
+        </select>
+      </div>
+    `;
+    stubVisibleBox(document.querySelector("#taxonomy")!);
+
+    const fields = scanCapturableFields();
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({
+      label: "Taxonomy",
+      selector: "#ProviderTaxonomy_input",
+      fieldType: "select",
+    });
+    expect(fields[0]?.options).toHaveLength(50);
+    expect(fields.some((field) => field.selector === "#ProviderTaxonomy_focus")).toBe(false);
+  });
+
   it("keeps only visible fillable controls and still collapses radio groups", () => {
     document.body.innerHTML = `
       <div style="display:none">
