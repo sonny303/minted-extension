@@ -68,11 +68,77 @@ const STATE_ABBREVS: Record<string, string> = {
   wisconsin: "WI", wyoming: "WY",
 };
 
-// yyyy-mm-dd (or a full ISO timestamp) → mm/dd/yyyy, without timezone math.
-function toMmDdYyyy(value: string): string {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return value;
-  return `${match[2]}/${match[3]}/${match[1]}`;
+interface CalendarDateParts {
+  year: string;
+  month: string;
+  day: string;
+}
+
+// Parse a canonical ISO date (or timestamp) without Date/locale/timezone
+// conversion. Malformed, non-ISO, and impossible calendar dates are kept as
+// entered so the coordinator can review them rather than receive a guess.
+function parseCanonicalDate(value: string): CalendarDateParts | null {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)?)?$/,
+  );
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > (daysInMonth[month - 1] ?? 0)) return null;
+  return { year: match[1] as string, month: match[2] as string, day: match[3] as string };
+}
+
+/** Retain the unambiguous calendar date for native date controls even when a
+ * payer's text widget needs a different display format. */
+function nativeDateValue(value: string): string | undefined {
+  return parseCanonicalDate(value)
+    ? value.slice(0, 10)
+    : undefined;
+}
+
+function formatDate(value: string, format: "mm/dd/yyyy" | "mm-dd-yyyy" | "dd/mm/yyyy" | "dd-mm-yyyy" | "yyyy/mm/dd" | "yyyy-mm-dd"): string {
+  const date = parseCanonicalDate(value);
+  if (!date) return value;
+  switch (format) {
+    case "mm/dd/yyyy": return `${date.month}/${date.day}/${date.year}`;
+    case "mm-dd-yyyy": return `${date.month}-${date.day}-${date.year}`;
+    case "dd/mm/yyyy": return `${date.day}/${date.month}/${date.year}`;
+    case "dd-mm-yyyy": return `${date.day}-${date.month}-${date.year}`;
+    case "yyyy/mm/dd": return `${date.year}/${date.month}/${date.day}`;
+    case "yyyy-mm-dd": return `${date.year}-${date.month}-${date.day}`;
+  }
+}
+
+function parseUsPhone(value: string): string | null {
+  // Extensions and non-US country codes need payer-specific review.
+  if (/\b(?:ext\.?|extension|x|#)\s*\w*/i.test(value)) return null;
+  const trimmed = value.trim();
+  if (!/^\+?[\d\s().-]+$/.test(trimmed)) return null;
+  let digits = trimmed.replace(/\D/g, "");
+  if (trimmed.startsWith("+") && (digits.length !== 11 || !digits.startsWith("1"))) return null;
+  if (digits.length === 11 && digits.startsWith("1")) digits = digits.slice(1);
+  if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(digits)) return null;
+  return digits;
+}
+
+function formatPhone(value: string, format: "digits" | "dashed" | "country_dashed" | "e164"): string {
+  const digits = parseUsPhone(value);
+  if (!digits) return value;
+  const dashed = `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  switch (format) {
+    case "digits": return digits;
+    case "dashed": return dashed;
+    case "country_dashed": return `(1) ${dashed}`;
+    case "e164": return `+1${digits}`;
+  }
+}
+
+function formatZip5(value: string): string {
+  const match = value.trim().match(/^(\d{5})(?:-?(\d{4}))?$/);
+  return match ? match[1] as string : value;
 }
 
 export function applyTransform(value: string, transform: string | null): string {
@@ -80,7 +146,27 @@ export function applyTransform(value: string, transform: string | null): string 
     case null:
       return value;
     case "date_mmddyyyy":
-      return toMmDdYyyy(value);
+      return formatDate(value, "mm/dd/yyyy");
+    case "date_mmddyyyy_dash":
+      return formatDate(value, "mm-dd-yyyy");
+    case "date_ddmmyyyy":
+      return formatDate(value, "dd/mm/yyyy");
+    case "date_ddmmyyyy_dash":
+      return formatDate(value, "dd-mm-yyyy");
+    case "date_yyyymmdd_slash":
+      return formatDate(value, "yyyy/mm/dd");
+    case "date_yyyymmdd":
+      return formatDate(value, "yyyy-mm-dd");
+    case "zip5":
+      return formatZip5(value);
+    case "phone_digits":
+      return formatPhone(value, "digits");
+    case "phone_dashed":
+      return formatPhone(value, "dashed");
+    case "phone_country_dashed":
+      return formatPhone(value, "country_dashed");
+    case "phone_e164":
+      return formatPhone(value, "e164");
     case "state_abbrev": {
       const trimmed = value.trim();
       if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
@@ -236,13 +322,17 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
 
+    const rawString = String(raw);
+    const canonicalNativeDate = nativeDateValue(rawString);
     staticFills.push({
       mapId: map.id,
       label,
       selector: map.selector,
       selectorFallbacks: map.selectorFallbacks ?? [],
       fieldType: map.fieldType,
-      value: applyTransform(String(raw), map.transform),
+      value: applyTransform(rawString, map.transform),
+      ...(canonicalNativeDate ? { nativeDateValue: canonicalNativeDate } : {}),
+      ...(map.token?.toLowerCase().endsWith("taxonomycode") ? { exactSelectValue: true } : {}),
       pageStep: map.pageStep ?? null,
       ...(map.learnedVia === "nano" ? { pageUrlScope: map.urlPattern ?? "" } : {}),
       kind: "static",

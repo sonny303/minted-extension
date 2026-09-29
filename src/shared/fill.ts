@@ -14,6 +14,11 @@ export interface FillInstruction {
   selectorFallbacks: string[];
   fieldType: PortalFieldType;
   value: string;
+  /** Canonical YYYY-MM-DD source, used only when the resolved portal target is
+   * a native input[type=date]. It stays transient in the fill instruction. */
+  nativeDateValue?: string;
+  /** Taxonomy codes must match the declared option value exactly. */
+  exactSelectValue?: boolean;
   /** Trained wizard page for this map (`portal_field_maps.page_step`). Null
    * means legacy / unnamed — fill still attempts it. Used at apply time to
    * classify exact off-page misses (DYN-PAGE-01). */

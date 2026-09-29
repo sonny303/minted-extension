@@ -52,8 +52,33 @@ const profile: ProviderProfileResponse = {
 };
 
 describe("applyTransform", () => {
-  it("formats dates and state abbreviations; unknown transforms pass through", () => {
+  it("formats canonical dates in each supported payer shape", () => {
     expect(applyTransform("1980-05-04", "date_mmddyyyy")).toBe("05/04/1980");
+    expect(applyTransform("1980-05-04", "date_mmddyyyy_dash")).toBe("05-04-1980");
+    expect(applyTransform("1980-05-04", "date_ddmmyyyy")).toBe("04/05/1980");
+    expect(applyTransform("1980-05-04", "date_ddmmyyyy_dash")).toBe("04-05-1980");
+    expect(applyTransform("1980-05-04", "date_yyyymmdd_slash")).toBe("1980/05/04");
+    expect(applyTransform("1980-05-04", "date_yyyymmdd")).toBe("1980-05-04");
+    expect(applyTransform("2000-02-29T23:59:59.000Z", "date_mmddyyyy")).toBe("02/29/2000");
+  });
+
+  it("trims valid ZIP+4 and reshapes only valid US phone numbers", () => {
+    expect(applyTransform("27608-1110", "zip5")).toBe("27608");
+    expect(applyTransform("02708-1110", "zip5")).toBe("02708");
+    expect(applyTransform("276081110", "zip5")).toBe("27608");
+    expect(applyTransform("2760-81110", "zip5")).toBe("2760-81110");
+    expect(applyTransform("(855) 749-7461", "phone_digits")).toBe("8557497461");
+    expect(applyTransform("1-855-749-7461", "phone_dashed")).toBe("855-749-7461");
+    expect(applyTransform("8557497461", "phone_country_dashed")).toBe("(1) 855-749-7461");
+    expect(applyTransform("855-749-7461", "phone_e164")).toBe("+18557497461");
+  });
+
+  it("preserves impossible, foreign, and extension-bearing values for review", () => {
+    expect(applyTransform("2025-02-29", "date_mmddyyyy")).toBe("2025-02-29");
+    expect(applyTransform("31/12/2025", "date_mmddyyyy")).toBe("31/12/2025");
+    expect(applyTransform("+44 20 7946 0958", "phone_digits")).toBe("+44 20 7946 0958");
+    expect(applyTransform("+4930123456", "phone_e164")).toBe("+4930123456");
+    expect(applyTransform("855-749-7461 ext 20", "phone_digits")).toBe("855-749-7461 ext 20");
     expect(applyTransform("Kansas", "state_abbrev")).toBe("KS");
     expect(applyTransform("ks", "state_abbrev")).toBe("KS");
     expect(applyTransform("Ada", "mystery")).toBe("Ada");
@@ -147,6 +172,7 @@ describe("planFill", () => {
       profile,
     );
     expect(plan.staticFills[0]?.value).toBe("05/04/1980");
+    expect(plan.staticFills[0]?.nativeDateValue).toBe("1980-05-04");
     expect(plan.manual).toEqual([
       {
         label: "DOB",

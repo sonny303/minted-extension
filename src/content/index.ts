@@ -10,7 +10,7 @@
 //
 // Idempotent: all-frames re-injection must not stack duplicate listeners.
 import type { ContentRequest } from "../shared/fill";
-import { applyFill, clearPortalForm, probeFillOnPage } from "./fillEngine";
+import { applyFillSettled, clearPortalForm, probeFillOnPage } from "./fillEngine";
 import { scanCapturableFields } from "./captureScan";
 import { beginUnmappedControlScan, clearUnmappedControlScan } from "./controlScanner";
 import { acceptAiFill, applyAiFill, clearAiFill, finalizeAiFill } from "./aiFillEngine";
@@ -145,16 +145,14 @@ if (!contentGlobal.__mintedPanelContentInstalled) {
         return false;
       }
       if (message?.type === "APPLY_FILL") {
-        try {
-          sendResponse({ ok: true, data: applyFill(message.instructions ?? [], message.requireUniqueTarget === true) });
-        } catch {
-          sendResponse({
+        applyFillSettled(message.instructions ?? [], message.requireUniqueTarget === true)
+          .then((data) => sendResponse({ ok: true, data }))
+          .catch(() => sendResponse({
             ok: false,
             // Page exceptions can embed entered values; report a fixed reason.
             error: "Fill failed on the page",
-          });
-        }
-        return false;
+          }));
+        return true;
       }
       return false;
     },

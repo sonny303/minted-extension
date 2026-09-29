@@ -27,6 +27,7 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // deliberately NOT applied here; see isHiddenControl's own comment.
 import { isHiddenControl } from "./captureScan";
 import { FILLABLE, querySelectorAllDeep, querySelectorDeep } from "./deepDom";
+import { primeFacesSelectMenu } from "./primeFaces";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -36,6 +37,19 @@ function normalize(text: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[\s:*]+$/, "");
+}
+
+function safeNativeDate(value: string): string | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= (daysInMonth[month - 1] ?? 0)
+    ? value
+    : null;
 }
 
 export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -93,11 +107,18 @@ function pruneProbedTargets(): void {
 }
 
 function asFillable(el: Element | null): Fillable | null {
-  return el instanceof HTMLInputElement ||
+  const direct = el instanceof HTMLInputElement ||
     el instanceof HTMLSelectElement ||
     el instanceof HTMLTextAreaElement
     ? el
     : null;
+  if (!direct) return null;
+  return primeFacesSelectMenu(direct)?.select ?? direct;
+}
+
+function isHiddenTarget(el: Fillable): boolean {
+  const menu = el instanceof HTMLSelectElement ? primeFacesSelectMenu(el) : null;
+  return menu ? isHiddenControl(menu.wrapper) : isHiddenControl(el);
 }
 
 function controlForLabel(label: HTMLLabelElement): Fillable | null {
@@ -182,7 +203,7 @@ function resolveTarget(instruction: FillInstruction): TargetResolution {
       if (matches.length > 0) sawUnsupported = true;
       continue;
     }
-    let visible = fillable.filter((control) => !isHiddenControl(control));
+    let visible = [...new Set(fillable)].filter((control) => !isHiddenTarget(control));
     if (visible.length === 0 && instruction.fieldType === "radio" && fillable.every((item) => item instanceof HTMLInputElement && item.type === "radio")) {
       const firstRadio = fillable[0] as HTMLInputElement | undefined;
       if (firstRadio) {
@@ -190,7 +211,7 @@ function resolveTarget(instruction: FillInstruction): TargetResolution {
           ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(firstRadio.name)}"]`, firstRadio.form ?? document)
               .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
           : [firstRadio];
-        const groupVisible = group.filter((radio) => !isHiddenControl(radio));
+        const groupVisible = group.filter((radio) => !isHiddenTarget(radio));
         if (groupVisible.length > 0 && sameRadioGroup(groupVisible)) visible = [firstRadio];
       }
     }
@@ -213,6 +234,17 @@ function resolveTarget(instruction: FillInstruction): TargetResolution {
 // own validation listens for — including composed so listeners outside a
 // shadow root still hear the change.
 function setNativeValue(el: Fillable, value: string): void {
+  if (el instanceof HTMLInputElement && el.closest(".p-datepicker.ui-calendar")) {
+    // PrimeFaces 10's calendar input consumes the next input event only after
+    // keydown marks its internal model ready. This key is deliberately not a
+    // navigation or submission key; dispatch it immediately before the write.
+    el.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Unidentified",
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    }));
+  }
   const proto = Object.getPrototypeOf(el) as object;
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
   if (descriptor?.set) {
@@ -227,6 +259,8 @@ function fireChanged(el: HTMLElement): void {
   const init: EventInit = { bubbles: true, composed: true, cancelable: true };
   el.dispatchEvent(new Event("input", init));
   el.dispatchEvent(new Event("change", init));
+  el.dispatchEvent(new Event("blur", { composed: true, cancelable: false }));
+  el.dispatchEvent(new Event("focusout", { bubbles: true, composed: true, cancelable: false }));
 }
 
 /**
@@ -244,10 +278,11 @@ function fireChanged(el: HTMLElement): void {
  */
 export function clearPortalForm(): number {
   let cleared = 0;
-  const controls = querySelectorAllDeep(FILLABLE);
+  const controls = [...new Set(querySelectorAllDeep(FILLABLE)
+    .map(asFillable)
+    .filter((el): el is Fillable => el !== null))];
   for (const node of controls) {
-    const el = asFillable(node);
-    if (!el) continue;
+    const el = node;
     try {
       if (
         el instanceof HTMLInputElement &&
@@ -340,7 +375,7 @@ function applyRadio(el: HTMLInputElement, value: string, markAttempted: () => vo
   // The visibility guard belongs HERE, not on the resolved element: a radio
   // group is one field made of N controls, and `match` — the one that gets
   // clicked — need not be the one the selector resolved to.
-  if (isHiddenControl(match)) return HIDDEN_OUTCOME;
+  if (isHiddenTarget(match)) return HIDDEN_OUTCOME;
   const changed = !match.checked;
   if (changed) {
     markAttempted();
@@ -363,12 +398,30 @@ function applyCheckbox(el: HTMLInputElement, value: string, markAttempted: () =>
   return { ok: true, attempted: changed, changed, target: el, expectedValue: wantChecked };
 }
 
-function applySelect(el: HTMLSelectElement, value: string, markAttempted: () => void): ApplyOutcome {
+function applySelect(el: HTMLSelectElement, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
+  const value = instruction.value;
+  const menu = primeFacesSelectMenu(el);
+  if (menu && (menu.wrapper.matches(":disabled, .ui-state-disabled") || menu.wrapper.getAttribute("aria-disabled") === "true")) {
+    return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
+  }
   const options = Array.from(el.options);
-  const match =
-    options.find((option) => option.value === value) ??
-    options.find((option) => normalize(option.text) === normalize(value)) ??
-    options.find((option) => normalize(option.value) === normalize(value));
+  const enabled = (option: HTMLOptionElement): boolean =>
+    !option.disabled && option.closest("optgroup")?.disabled !== true;
+  const exactValue = options.filter((option) => option.value === value && enabled(option));
+  const exactLabel = options.filter((option) => normalize(option.text) === normalize(value) && enabled(option));
+  const normalizedValue = options.filter((option) => normalize(option.value) === normalize(value) && enabled(option));
+  const candidates = instruction.exactSelectValue
+    ? exactValue
+    : exactValue.length > 0 ? exactValue : exactLabel.length > 0 ? exactLabel : normalizedValue;
+  if (candidates.length > 1) {
+    return {
+      ok: false,
+      reason: "dropdown: multiple options match the mapped value",
+      outcome: "needs_mapping",
+      reasonCode: "ambiguous_target",
+    };
+  }
+  const match = candidates[0];
   if (!match) {
     return {
       ok: false,
@@ -396,9 +449,9 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   // otherwise take a silent write into a panel nobody reviews before
   // submitting. Radio defers its own check to applyRadio, which knows which
   // group member is actually about to be clicked.
-  if (!isRadio && isHiddenControl(el)) return HIDDEN_OUTCOME;
+  if (!isRadio && isHiddenTarget(el)) return HIDDEN_OUTCOME;
   if (el instanceof HTMLSelectElement)
-    return applySelect(el, instruction.value, markAttempted);
+    return applySelect(el, instruction, markAttempted);
   if (isRadio) {
     return applyRadio(el as HTMLInputElement, instruction.value, markAttempted);
   }
@@ -412,13 +465,34 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   if (el instanceof HTMLInputElement && (el.disabled || el.readOnly)) {
     return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
   }
-  const changed = el.value !== instruction.value;
+  const nativeDate = instruction.nativeDateValue ?? safeNativeDate(instruction.value);
+  if (el instanceof HTMLInputElement && el.type === "date" && !nativeDate) {
+    return {
+      ok: false,
+      reason: "native date value is unavailable in a safe format; review this field on the portal",
+      outcome: "write_rejected",
+      reasonCode: "invalid_format",
+    };
+  }
+  const nextValue = el instanceof HTMLInputElement && el.type === "date"
+    ? nativeDate as string
+    : instruction.value;
+  const changed = el.value !== nextValue;
   markAttempted();
-  setNativeValue(el, instruction.value);
-  if (el.value !== instruction.value) {
+  setNativeValue(el, nextValue);
+  if (el.value !== nextValue) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  return { ok: true, attempted: true, changed, target: el, expectedValue: instruction.value };
+  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.willValidate && !el.validity.valid) {
+    return {
+      ok: false,
+      reason: "form rejected the field format; review it on the portal",
+      outcome: "write_rejected",
+      reasonCode: "invalid_format",
+      target: el,
+    };
+  }
+  return { ok: true, attempted: true, changed, target: el, expectedValue: nextValue };
 }
 
 function installFillStyle(el: Element): void {
@@ -449,7 +523,7 @@ export function applyAiValue(
   el: Fillable,
   value: string,
 ): { ok: true; changed: boolean; target: Fillable; writtenValue: string } | { ok: false; reason: string } {
-  if (isHiddenControl(el) || el.matches(":disabled")) {
+  if (isHiddenTarget(el) || el.matches(":disabled")) {
     return { ok: false, reason: "field is hidden or disabled" };
   }
   if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly) {
@@ -534,7 +608,9 @@ export function restoreAiValue(el: Fillable, previous: string | boolean): void {
 // The page's fillable controls — the denominator for honest coverage
 // reporting ("filled 3 of 24 mapped · ~117 fields on this page").
 function countPageFields(): number {
-  return querySelectorAllDeep(FILLABLE).length;
+  return new Set(querySelectorAllDeep(FILLABLE)
+    .map(asFillable)
+    .filter((el): el is Fillable => el !== null)).size;
 }
 
 function sameRadioGroup(elements: Fillable[]): boolean {
@@ -635,7 +711,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
         if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields };
         continue;
       }
-      let visible = fillable.filter((control) => !isHiddenControl(control));
+      let visible = [...new Set(fillable)].filter((control) => !isHiddenTarget(control));
       let radioGroup = instruction.fieldType === "radio" && sameRadioGroup(visible);
       if (visible.length === 0 && instruction.fieldType === "radio" && fillable.every((item) => item instanceof HTMLInputElement && item.type === "radio")) {
         const firstRadio = fillable[0] as HTMLInputElement | undefined;
@@ -644,7 +720,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
             ? querySelectorAllDeep(`input[type="radio"][name="${CSS.escape(firstRadio.name)}"]`, firstRadio.form ?? document)
                 .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
             : [firstRadio];
-          const groupVisible = group.filter((radio) => !isHiddenControl(radio));
+          const groupVisible = group.filter((radio) => !isHiddenTarget(radio));
           if (groupVisible.length > 0 && sameRadioGroup(groupVisible)) {
             visible = [firstRadio];
             radioGroup = true;
@@ -809,8 +885,8 @@ export function applyFillOnPage(
             ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
           });
         }
-        // R1 knows the setter accepted the write, not that the portal retained
-        // it. Semantic readback arrives in R3.
+        // The production async wrapper settles known masks/date widgets after
+        // this immediate setter check; other controls remain readback-unavailable.
         if (!outcome.attempted) {
           skipped.push({
             label: instruction.label,
@@ -835,7 +911,7 @@ export function applyFillOnPage(
           kind: outcome.kind ?? "skipped",
         });
         if (outcome.outcome && outcome.reasonCode) {
-          recordOutcome(instruction, false, outcome.outcome, outcome.reasonCode);
+          recordOutcome(instruction, writeAttempted, outcome.outcome, outcome.reasonCode);
         }
       }
     } catch {
@@ -855,4 +931,335 @@ export function applyFillOnPage(
     }
   }
   return { filled, attemptedLabels, writes, skipped, pageFields: countPageFields(), fieldOutcomes };
+}
+
+function waitForValue<T>(read: () => T | null, timeoutMs: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const poll = (): void => {
+      let value: T | null;
+      try {
+        value = read();
+      } catch {
+        resolve(null);
+        return;
+      }
+      if (value !== null) {
+        resolve(value);
+      } else if (Date.now() - startedAt >= timeoutMs) {
+        resolve(null);
+      } else {
+        setTimeout(poll, 20);
+      }
+    };
+    poll();
+  });
+}
+
+function primeFacesItems(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>, option: HTMLOptionElement): HTMLElement[] {
+  const panelId = menu.select.id.endsWith("_input")
+    ? `${menu.select.id.slice(0, -"_input".length)}_panel`
+    : `${menu.wrapper.id}_panel`;
+  const panel = document.getElementById(panelId) ?? querySelectorDeep(`#${CSS.escape(panelId)}`);
+  if (!panel) return [];
+  return querySelectorAllDeep(".ui-selectonemenu-item", panel)
+    .filter((item): item is HTMLElement => item instanceof HTMLElement)
+    .filter((item) => {
+      const dataValue = item.getAttribute("data-value");
+      if (dataValue !== null) return dataValue === option.value;
+      const label = item.getAttribute("data-label") ?? item.textContent ?? "";
+      return normalize(label) === normalize(option.text);
+    });
+}
+
+function primeFacesLabel(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>): string {
+  return menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label")?.textContent ?? "";
+}
+
+async function selectPrimeFacesItem(
+  menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>,
+  option: HTMLOptionElement,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  if (!isCurrent()) return false;
+  if (menu.select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text)) return true;
+  const trigger = menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger") ??
+    menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label") ?? menu.wrapper;
+  trigger.click();
+  const items = await waitForValue(() => {
+    if (!isCurrent()) return null;
+    const matches = primeFacesItems(menu, option);
+    return matches.length > 0 ? matches : null;
+  }, 700);
+  if (!items || items.length !== 1 || !isCurrent()) return false;
+  const item = items[0];
+  if (!item || item.matches(":disabled, .ui-state-disabled, [aria-disabled='true']")) return false;
+  item.click();
+  if (!isCurrent()) return false;
+  return (await waitForValue(() =>
+    isCurrent() && menu.select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text)
+      ? true
+      : null,
+  500)) === true;
+}
+
+function selectOptionForInstruction(
+  select: HTMLSelectElement,
+  instruction: FillInstruction,
+): { option: HTMLOptionElement | null; ambiguous: boolean } {
+  const enabled = (option: HTMLOptionElement): boolean =>
+    !option.disabled && option.closest("optgroup")?.disabled !== true;
+  const options = Array.from(select.options).filter(enabled);
+  const tiers = instruction.exactSelectValue
+    ? [options.filter((option) => option.value === instruction.value)]
+    : [
+        options.filter((option) => option.value === instruction.value),
+        options.filter((option) => normalize(option.text) === normalize(instruction.value)),
+        options.filter((option) => normalize(option.value) === normalize(instruction.value)),
+      ];
+  const matches = tiers.find((tier) => tier.length > 0) ?? [];
+  return matches.length === 1
+    ? { option: matches[0] ?? null, ambiguous: false }
+    : { option: null, ambiguous: matches.length > 1 };
+}
+
+function outcomeFor(
+  instruction: FillInstruction,
+  attempted: boolean,
+  outcome: FillEventV2Outcome,
+  reasonCode: FillEventV2ReasonCode | null,
+): FillEventV2FieldOutcome[] {
+  if (!instruction.telemetry) return [];
+  return [{
+    mapId: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instruction.mapId)
+      ? instruction.mapId
+      : null,
+    targetKey: instruction.telemetry.targetKey,
+    frameKey: instruction.telemetry.frameKey,
+    stepKey: instruction.telemetry.stepKey,
+    attempted,
+    outcome,
+    reasonCode,
+  }];
+}
+
+function skippedResult(
+  instruction: FillInstruction,
+  reason: string,
+  kind: ReportedFieldKind,
+  outcome: FillEventV2Outcome,
+  reasonCode: FillEventV2ReasonCode,
+  attempted = false,
+): FillPageResult {
+  return {
+    filled: [],
+    attemptedLabels: [],
+    writes: [],
+    skipped: [{ label: instruction.label, reason, mapId: instruction.mapId, kind }],
+    pageFields: countPageFields(),
+    fieldOutcomes: outcomeFor(instruction, attempted, outcome, reasonCode),
+  };
+}
+
+function rejectPostFill(
+  result: FillPageResult,
+  instruction: FillInstruction,
+  target: Fillable,
+  reason: string,
+  outcome: FillEventV2Outcome,
+  reasonCode: FillEventV2ReasonCode,
+): void {
+  const removeOne = <T>(items: T[] | undefined, matches: (item: T) => boolean): void => {
+    if (!items) return;
+    let index = -1;
+    for (let candidate = items.length - 1; candidate >= 0; candidate -= 1) {
+      if (matches(items[candidate] as T)) {
+        index = candidate;
+        break;
+      }
+    }
+    if (index >= 0) items.splice(index, 1);
+  };
+  removeOne(result.filled, (label) => label === instruction.label);
+  removeOne(result.attemptedLabels, (label) => label === instruction.label);
+  removeOne(result.writes, (write) => write.selector === instruction.selector);
+  target.classList.remove("mp-fill-static", "mp-fill-ai");
+  result.skipped.push({ label: instruction.label, reason, mapId: instruction.mapId, kind: "unverified" });
+  const identity = instruction.telemetry;
+  const field = identity && result.fieldOutcomes?.find((item) =>
+    item.targetKey === identity.targetKey && item.frameKey === identity.frameKey && item.stepKey === identity.stepKey,
+  );
+  if (field) {
+    field.attempted = true;
+    field.outcome = outcome;
+    field.reasonCode = reasonCode;
+  }
+}
+
+/** Apply PrimeFaces menus through their actual visible options. Writing the
+ * aria-hidden backing select first leaves PrimeFaces' internal value stale. */
+async function applyPrimeFacesSelect(
+  instruction: FillInstruction,
+  strictRevalidation: boolean,
+): Promise<FillPageResult> {
+  const pageUrl = typeof location !== "undefined" ? location.href : null;
+  const currentPage = resolveFillPage(pageUrl, [instruction.pageStep]);
+  if (isOtherPageInstruction(instruction, currentPage)) {
+    return skippedResult(instruction, "field belongs to another page", "other_page", "other_page", "other_page");
+  }
+  if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
+    return skippedResult(instruction, "mapping is scoped to a different page", "other_page", "other_page", "other_page");
+  }
+  if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+    return skippedResult(instruction, "current wizard page could not be confirmed", "page_unknown", "page_unknown", "page_unknown");
+  }
+  const resolution = resolveTarget(instruction);
+  if (resolution.status !== "unique" || !(resolution.target instanceof HTMLSelectElement)) {
+    const hidden = resolution.status === "hidden";
+    const ambiguous = resolution.status === "ambiguous";
+    return skippedResult(
+      instruction,
+      hidden ? HIDDEN_REASON : ambiguous ? "multiple visible controls match this mapping" : "mapping does not resolve to one visible dropdown",
+      hidden ? HIDDEN_KIND : ambiguous ? "no_mapping" : "unverified",
+      hidden ? "hidden" : ambiguous ? "needs_mapping" : "unverified",
+      hidden ? "field_hidden" : ambiguous ? "ambiguous_target" : "context_changed",
+    );
+  }
+  const select = resolution.target;
+  const menu = primeFacesSelectMenu(select);
+  if (!menu) return skippedResult(instruction, "mapping does not resolve to one visible dropdown", "unverified", "unsupported", "unsupported_control");
+  if (isHiddenTarget(select)) return skippedResult(instruction, HIDDEN_REASON, HIDDEN_KIND, "hidden", "field_hidden");
+  if (select.disabled || menu.wrapper.matches(":disabled, .ui-state-disabled") || menu.wrapper.getAttribute("aria-disabled") === "true") {
+    return skippedResult(instruction, "field is disabled or read-only", "unverified", "unsupported", "unsupported_control");
+  }
+
+  const probe = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
+  const mutationVersion = currentProbeMutationVersion();
+  if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
+  stopProbeMutationObserverIfUnused();
+  if (strictRevalidation && (
+    !probe || probe.mapId !== instruction.mapId || probe.pageStep !== instruction.pageStep ||
+    probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion
+  )) {
+    return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed");
+  }
+
+  const selection = selectOptionForInstruction(select, instruction);
+  if (!selection.option) {
+    return selection.ambiguous
+      ? skippedResult(instruction, "dropdown: multiple options match the mapped value", "no_mapping", "needs_mapping", "ambiguous_target")
+      : skippedResult(instruction, vocabularyMismatchReason("dropdown"), "skipped", "option_mismatch", "option_missing");
+  }
+  const option = selection.option;
+  const isCurrent = (): boolean => {
+    if (typeof location !== "undefined" && location.href !== pageUrl) return false;
+    const current = resolveTarget(instruction);
+    return current.status === "unique" && current.target === select && select.isConnected &&
+      menu.wrapper.isConnected && !isHiddenTarget(select) && !select.disabled &&
+      !menu.wrapper.matches(":disabled, .ui-state-disabled") &&
+      menu.wrapper.getAttribute("aria-disabled") !== "true";
+  };
+  const unchanged = select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text);
+  if (!unchanged) {
+    let selected: boolean;
+    try {
+      selected = await selectPrimeFacesItem(menu, option, isCurrent);
+    } catch {
+      return skippedResult(instruction, "field could not be applied; review it on the portal", "unverified", "unverified", "context_changed", true);
+    }
+    if (!isCurrent()) {
+      return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed", true);
+    }
+    if (!selected) {
+      return skippedResult(
+        instruction,
+        "dropdown selection did not remain visible; review this field on the portal",
+        "unverified",
+        "write_rejected",
+        "readback_mismatch",
+        true,
+      );
+    }
+  }
+  const writes = unchanged ? [] : [{
+    selector: instruction.selector,
+    kind: instruction.kind ?? "static" as const,
+    ...(instruction.token ? { token: instruction.token } : {}),
+    ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
+  }];
+  if (!unchanged) decorateFill(select, instruction.kind ?? "static", instruction.token);
+  return {
+    filled: [instruction.label],
+    attemptedLabels: unchanged ? [] : [instruction.label],
+    writes,
+    skipped: [],
+    pageFields: countPageFields(),
+    fieldOutcomes: outcomeFor(instruction, !unchanged, unchanged ? "unchanged" : "unverified", unchanged ? "unchanged_value" : "readback_unavailable"),
+  };
+}
+
+/** Production fill path. Generic fields keep the synchronous engine; date
+ * masks get one bounded post-write readback for the whole routed batch. */
+export async function applyFillSettled(
+  instructions: FillInstruction[],
+  strictRevalidation = false,
+): Promise<FillPageResult> {
+  const regular: FillInstruction[] = [];
+  const widgets: FillInstruction[] = [];
+  const dateTargets: Array<{ instruction: FillInstruction; target: Fillable }> = [];
+  for (const instruction of instructions) {
+    const resolution = resolveTarget(instruction);
+    if (resolution.status === "unique" && resolution.target instanceof HTMLSelectElement && primeFacesSelectMenu(resolution.target)) {
+      widgets.push(instruction);
+    } else {
+      regular.push(instruction);
+      if (resolution.status === "unique") {
+        const target = resolution.target;
+        const dateWidget = target instanceof HTMLInputElement && Boolean(target.closest(".p-datepicker.ui-calendar"));
+        if (instruction.nativeDateValue || instruction.fieldType === "date" || dateWidget) {
+          dateTargets.push({ instruction, target });
+        }
+      }
+    }
+  }
+  const result = applyFill(regular, strictRevalidation);
+  for (const instruction of widgets) {
+    let widgetResult: FillPageResult;
+    try {
+      widgetResult = await applyPrimeFacesSelect(instruction, strictRevalidation);
+    } catch {
+      // Keep one misbehaving widget from discarding successful writes to
+      // unrelated fields. Exception text can contain provider data.
+      widgetResult = skippedResult(instruction, "field could not be applied; review it on the portal", "unverified", "unverified", "context_changed", true);
+    }
+    result.filled.push(...widgetResult.filled);
+    result.attemptedLabels?.push(...(widgetResult.attemptedLabels ?? []));
+    result.writes?.push(...(widgetResult.writes ?? []));
+    result.skipped.push(...widgetResult.skipped);
+    result.fieldOutcomes?.push(...(widgetResult.fieldOutcomes ?? []));
+  }
+
+  const writtenDates = dateTargets.filter(({ instruction }) =>
+    !result.skipped.some((field) => field.mapId === instruction.mapId) &&
+    result.filled.includes(instruction.label),
+  );
+  if (writtenDates.length > 0) await new Promise((resolve) => setTimeout(resolve, 125));
+  for (const { instruction, target } of writtenDates) {
+    const currentResolution = resolveTarget(instruction);
+    if (currentResolution.status !== "unique" || currentResolution.target !== target || !target.isConnected || isHiddenTarget(target)) {
+      rejectPostFill(result, instruction, target, "form changed after fill; review this field before submitting", "unverified", "context_changed");
+      continue;
+    }
+    const expected = target instanceof HTMLInputElement && target.type === "date"
+      ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
+      : instruction.value;
+    if (target.value !== expected) {
+      rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
+      continue;
+    }
+    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.willValidate && !target.validity.valid) {
+      rejectPostFill(result, instruction, target, "form rejected the field format; review this field on the portal", "write_rejected", "invalid_format");
+    }
+  }
+  return result;
 }
