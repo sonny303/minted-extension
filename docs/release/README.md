@@ -1,5 +1,8 @@
 # Local staging extension and restricted production release
 
+The [September 28 candidate record](candidate-2026-09-28.md) captures the
+current v0.1.3 local packages, public Store version and open native checks.
+
 The user clones, builds and manually tests staging locally. Production uses a
 separate restricted Chrome Web Store item/release decision. These scripts prepare
 and inspect packages; they do not access a browser, change a listing, upload or
