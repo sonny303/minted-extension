@@ -4,7 +4,7 @@
 // It is deliberately values-only: the worker resolves these values before
 // sending instructions to the content script, and no provider PHI is read.
 
-export const MOCK_FILL_PROFILE_VERSION = 1;
+export const MOCK_FILL_PROFILE_VERSION = 2;
 
 export const MOCK_FILL_VALUES: Readonly<Record<string, string>> = {
   "provider.firstName": "Sample",
@@ -39,6 +39,7 @@ export const MOCK_FILL_VALUES: Readonly<Record<string, string>> = {
   "facility.city": "Sampleville",
   "facility.state": "NC",
   "facility.zip": "27601",
+  "facility.cityStateZip": "Sampleville, NC 27601",
   "user.name": "Sample Operator",
   "user.email": "sample.operator@example.com",
 };
