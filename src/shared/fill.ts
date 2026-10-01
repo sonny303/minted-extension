@@ -109,6 +109,9 @@ export interface ReportedField {
   // event's fields_skipped so the panel can flag the exact broken mapping.
   mapId?: string;
   kind?: ReportedFieldKind;
+  /** Local fix-it destination supplied for the exact unresolved token. This is
+   * rendered as a link only and must be omitted from fill-event telemetry. */
+  recordPath?: string;
 }
 
 // What the content script did with the instructions it was handed.

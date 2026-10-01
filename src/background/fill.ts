@@ -207,8 +207,11 @@ export function sanitizeLegacyFields(fields: ReportedField[]): ReportedField[] {
   return fields.map((field) => {
     const qualifiedMiss = field.kind === "skipped" && field.reason === "field not found on this page";
     const oldReaderNoEvidence = field.kind === "page_unknown" || field.kind === "unverified";
+    const telemetryField = { ...field };
+    // recordPath is a local UI fix-it destination, not fill-event data.
+    delete telemetryField.recordPath;
     return {
-      ...field,
+      ...telemetryField,
       // Old Panel releases only know these recognized no-evidence kinds. Keep
       // local reports truthful, but project unknown/context states into the
       // legacy hidden bucket so they cannot become inferred drift/success.
@@ -267,6 +270,7 @@ export interface FillPlan {
 
 export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
+  const unresolvedByToken = new Map(profile.unresolved.map((entry) => [entry.token, entry]));
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
@@ -312,13 +316,22 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
     if (raw == null || raw === "") {
+      const unresolved = map.source === "token" && map.token != null
+        ? unresolvedByToken.get(map.token)
+        : undefined;
       // user.name resolves from the caller's auth metadata (the server notes
       // the empty in meta.notes, not in unresolved) — tell the user where to
       // fix it rather than the generic no-value line.
-      const reason = "no value in Minted Panel";
+      const reason = unresolved?.reason ?? "no value in Minted Panel";
       // A DATA gap: mapped, but the value is missing on the provider/case —
       // routes to the provider record, not the mapping flow (F4.3.3).
-      manual.push({ label, reason, mapId: map.id, kind: "no_value" });
+      manual.push({
+        label,
+        reason,
+        mapId: map.id,
+        kind: "no_value",
+        ...(unresolved?.recordPath ? { recordPath: unresolved.recordPath } : {}),
+      });
       continue;
     }
 

@@ -7,8 +7,8 @@
 // The panel distinguishes "no mapping" from "no value" (F4.3.3 AC): a field
 // whose map row isn't linked to a Minted Panel token is a MAPPING gap and
 // routes to the train flow; a mapped token with no value on the provider/case
-// is a DATA gap and routes to the provider record — the fix-it action is
-// always the right fix.
+// is a DATA gap and routes to the token's exact owning record when supplied,
+// otherwise to the provider record.
 import type { ReportedField } from "./fill";
 
 export interface GapPartition {
@@ -41,10 +41,75 @@ export function trainFlowPath(portalKey: string, fieldLabel?: string): string {
   return fieldLabel ? `${base}?field=${encodeURIComponent(fieldLabel)}` : base;
 }
 
-/** The data fix for an empty-but-mapped token: the provider record in the
- * webapp. Provider id only — never PHI in a URL. */
+/** Legacy data fix for an empty-but-mapped token without a more specific
+ * server-provided owner record. Provider id only — never PHI in a URL. */
 export function providerFixPath(providerId: string): string {
   return `/providers/${encodeURIComponent(providerId)}`;
+}
+
+/** Return an absolute link only for the exact group-record route emitted by
+ * the Panel. The record path is untrusted response data; reject other paths,
+ * origins, query strings, fragments, and URL normalization before rendering. */
+export function groupRecordFixUrl(recordPath: string | undefined, webBaseUrl: string): string | null {
+  if (!recordPath || !/^\/groups\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(recordPath)) {
+    return null;
+  }
+  try {
+    const base = new URL(webBaseUrl);
+    if ((base.protocol !== "https:" && base.protocol !== "http:") || base.username || base.password) {
+      return null;
+    }
+    const destination = new URL(recordPath, base);
+    if (
+      destination.origin !== base.origin ||
+      destination.pathname !== recordPath ||
+      destination.search !== "" ||
+      destination.hash !== ""
+    ) {
+      return null;
+    }
+    return destination.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer the exact group record when Panel supplies one. Older Panel
+ * responses keep the provider-record fallback. */
+export function dataFixAction(
+  recordPath: string | undefined,
+  providerId: string | null,
+  webBaseUrl: string,
+): { href: string; label: string } | null {
+  const groupRecordUrl = groupRecordFixUrl(recordPath, webBaseUrl);
+  if (groupRecordUrl) return { href: groupRecordUrl, label: "Open group record ↗" };
+  if (providerId == null) return null;
+  try {
+    return {
+      href: new URL(providerFixPath(providerId), webBaseUrl).toString(),
+      label: "Add the data ↗",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Missing profile values are safe partial-fill gaps, but the operator must
+ * see that the portal still needs manual completion before submit. */
+export function partialFillWarning(manual: readonly ReportedField[], skippedCount: number): string | null {
+  const missingValueCount = manual.filter((field) => field.kind === "no_value").length;
+  if (missingValueCount === 0 && skippedCount === 0) return null;
+
+  const items: string[] = [];
+  if (missingValueCount > 0) {
+    items.push(
+      `${missingValueCount} mapped ${missingValueCount === 1 ? "field has" : "fields have"} no Minted Panel value`,
+    );
+  }
+  if (skippedCount > 0) {
+    items.push(`${skippedCount} mapped ${skippedCount === 1 ? "field needs" : "fields need"} review from this fill`);
+  }
+  return `Partial fill: ${items.join("; ")}. Review the lists above and complete them on the portal before you submit.`;
 }
 
 // S4.1 — the drift signal shown on the offer card. The content script reports

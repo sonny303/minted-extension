@@ -73,8 +73,9 @@ import {
 import type { QuickCardCatalogField } from "../shared/apiTypes";
 import {
   countBrokenSelectors,
+  dataFixAction,
+  partialFillWarning,
   partitionGaps,
-  providerFixPath,
   trainFlowPath,
 } from "../shared/fixit";
 import {
@@ -1788,9 +1789,10 @@ function gapActionLink(
   if (gap.kind === "no_mapping" && portalKey != null) {
     href = `${API_BASE_URL}${trainFlowPath(portalKey, gap.label)}`;
     label = "Fix mapping ↗";
-  } else if (gap.kind === "no_value" && providerId != null) {
-    href = `${API_BASE_URL}${providerFixPath(providerId)}`;
-    label = "Add the data ↗";
+  } else if (gap.kind === "no_value") {
+    const action = dataFixAction(gap.recordPath, providerId, API_BASE_URL);
+    href = action?.href ?? null;
+    label = action?.label ?? null;
   }
   if (href == null || label == null) return null;
   const link = document.createElement("a");
@@ -2009,13 +2011,9 @@ function renderFillSummary(
 
   // Only current-run fields belong in the gap count. Planner items cover maps
   // across every step, so their page presence was not checked in this run.
-  const gapCount = summary.skipped.length;
-  gapFlag.hidden = gapCount === 0;
-  if (gapCount > 0) {
-    gapFlag.textContent =
-      `${gapCount} mapped ${gapCount === 1 ? "field needs" : "fields need"} review from this fill - ` +
-      "review the lists above and complete them on the portal before you submit.";
-  }
+  const warning = partialFillWarning(summary.manual, summary.skipped.length);
+  gapFlag.hidden = warning == null;
+  gapFlag.textContent = warning ?? "";
 
   const hasCase = (lastFill?.caseId ?? selectedCaseId()) != null;
   if (!hasCase) {

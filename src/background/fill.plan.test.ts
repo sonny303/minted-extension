@@ -130,6 +130,74 @@ describe("planFill", () => {
     ]);
   });
 
+  it("partially fills an authorized Contract profile without substituting signer or submitter", () => {
+    const contractProfile: ProviderProfileResponse = {
+      provider: { id: "p1" },
+      contract_context: {
+        contract_id: "contract-1",
+        assignment_id: "assignment-1",
+        context_version: 4,
+        sop_template_id: "sop-1",
+        sop_version: 2,
+      },
+      tokens: [
+        { token: "group.contractingContactName", value: null },
+        { token: "group.contractingContactEmail", value: "contracts@example.com" },
+        { token: "group.contractSignerName", value: "Do Not Substitute" },
+        { token: "user.name", value: "Coordinator" },
+      ],
+      unresolved: [{
+        token: "group.contractingContactName",
+        reason: "This Contract group's contracting contact value is missing.",
+        recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+      }],
+      facilities: [],
+      selected_facility_id: null,
+    };
+    const plan = planFill(
+      [
+        map({ id: "contract-contact", selector: "label:Contact", token: "group.contractingContactName" }),
+        map({ id: "contract-email", selector: "#email", token: "group.contractingContactEmail" }),
+        map({ id: "signer", selector: "#signer", token: "group.contractSignerName" }),
+        map({ id: "submitter", selector: "#submitter", token: "user.name" }),
+      ],
+      contractProfile,
+    );
+
+    expect(plan.staticFills.map(({ mapId, value }) => ({ mapId, value }))).toEqual([
+      { mapId: "contract-email", value: "contracts@example.com" },
+      { mapId: "signer", value: "Do Not Substitute" },
+      { mapId: "submitter", value: "Coordinator" },
+    ]);
+    expect(plan.manual).toEqual([{
+      label: "Contact",
+      reason: "This Contract group's contracting contact value is missing.",
+      mapId: "contract-contact",
+      kind: "no_value",
+      recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+    }]);
+    expect(sanitizeLegacyFields(plan.manual)[0]).not.toHaveProperty("recordPath");
+  });
+
+  it("keeps Contract-only contact data out of an Enrollment configuration plan", () => {
+    const enrollmentProfile: ProviderProfileResponse = {
+      ...profile,
+      tokens: [{ token: "provider.firstName", value: "Ada" }],
+    };
+    const plan = planFill(
+      [map({
+        id: "enrollment-name",
+        selector: "#provider-name",
+        portalKey: "aetna_enrollment",
+        token: "provider.firstName",
+      })],
+      enrollmentProfile,
+    );
+
+    expect(plan.staticFills.map((field) => field.mapId)).toEqual(["enrollment-name"]);
+    expect(plan.manual).toEqual([]);
+  });
+
   it("carries trained pageStep onto each instruction (DYN-PAGE-01)", () => {
     const plan = planFill(
       [map({ id: "a", selector: "label:First Name", pageStep: "credentials" })],
