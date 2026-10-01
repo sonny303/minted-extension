@@ -29,6 +29,32 @@ export const ACTIVE_WORK_KEY = "minted.activeWork.v2";
 export const ACTIVE_WORK_BLOCK_KEY = "minted.activeWork.v2.blocked";
 export const ACTIVE_WORK_UPDATED = { type: "ACTIVE_WORK_UPDATED" } as const;
 export const EXACT_WORK_TAB_CAPABILITY = "exact-work-tab-v2" as const;
+const CREATED_TAB_COMMIT_TIMEOUT_MS = 10_000;
+const CREATED_TAB_COMMIT_POLL_MS = 50;
+
+interface NavigationMark {
+  href: string | null;
+  sequence: number;
+}
+
+interface CreatedTabNavigationMarks {
+  before: NavigationMark | null;
+  committed: NavigationMark | null;
+}
+
+type CreatedTabNavigation = CreatedTabNavigationMarks | null;
+
+interface CreatedTabNavigationObserver {
+  current(tabId: number): CreatedTabNavigation;
+  dispose(): void;
+}
+
+class WorkTabBindingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkTabBindingError";
+  }
+}
 
 export type ActiveWorkAck =
   | {
@@ -189,10 +215,171 @@ function contextStillCurrent(
     !isActiveWorkExpired(current, Date.now());
 }
 
-async function closeCreatedTabIfStillAtOrigin(tabId: number, origin: string): Promise<void> {
+function isTransientBlankUrl(value: string | undefined): boolean {
+  return value == null || value === "" || value === "about:blank";
+}
+
+function isExactCanonicalUrl(value: string | undefined, canonicalHref: string): boolean {
+  if (typeof value !== "string" || value === "") return false;
+  try {
+    return new URL(value).href === canonicalHref;
+  } catch {
+    return false;
+  }
+}
+
+/** `tabs.Tab.url` and `pendingUrl` are hidden unless the extension has host
+ * access to the page. The manifest already grants webNavigation, which exposes
+ * the exact main-frame URL without broadening host permissions. */
+async function getMainFrameUrl(tabId: number): Promise<string | undefined> {
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    return typeof frame?.url === "string" ? frame.url : undefined;
+  } catch {
+    throw new WorkTabBindingError("Chrome could not verify the portal tab's main-frame URL.");
+  }
+}
+
+function createCreatedTabNavigationObserver(): CreatedTabNavigationObserver {
+  const states = new Map<number, CreatedTabNavigationMarks & { sequence: number }>();
+  const stateFor = (tabId: number) => {
+    let state = states.get(tabId);
+    if (!state) {
+      state = { before: null, committed: null, sequence: 0 };
+      states.set(tabId, state);
+    }
+    return state;
+  };
+  const normalizedHref = (value: string): string | null => {
+    try {
+      return new URL(value).href;
+    } catch {
+      return null;
+    }
+  };
+  const beforeNavigate = (details: chrome.webNavigation.WebNavigationBaseCallbackDetails) => {
+    if (details.frameId !== 0) return;
+    const state = stateFor(details.tabId);
+    state.before = { href: normalizedHref(details.url), sequence: ++state.sequence };
+  };
+  const committed = (details: chrome.webNavigation.WebNavigationTransitionCallbackDetails) => {
+    if (details.frameId !== 0) return;
+    const state = stateFor(details.tabId);
+    state.committed = { href: normalizedHref(details.url), sequence: ++state.sequence };
+  };
+  chrome.webNavigation.onBeforeNavigate.addListener(beforeNavigate);
+  chrome.webNavigation.onCommitted.addListener(committed);
+  return {
+    current: (tabId) => {
+      const state = states.get(tabId);
+      return state == null ? null : { before: state.before, committed: state.committed };
+    },
+    dispose: () => {
+      chrome.webNavigation.onBeforeNavigate.removeListener(beforeNavigate);
+      chrome.webNavigation.onCommitted.removeListener(committed);
+    },
+  };
+}
+
+async function getCreatedTabIfCurrent(
+  tabId: number,
+  expectedWindowId: number,
+): Promise<chrome.tabs.Tab> {
+  let tab: chrome.tabs.Tab;
+  let activeTabs: chrome.tabs.Tab[];
+  try {
+    [tab, activeTabs] = await Promise.all([
+      chrome.tabs.get(tabId),
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }),
+    ]);
+  } catch {
+    throw new WorkTabBindingError("The newly created portal tab closed before it was ready.");
+  }
+  if (
+    tab.id !== tabId || tab.windowId !== expectedWindowId ||
+    activeTabs[0]?.id !== tabId || activeTabs[0]?.windowId !== expectedWindowId
+  ) {
+    throw new WorkTabBindingError("The active tab or window changed before the portal tab was ready.");
+  }
+  return tab;
+}
+
+async function waitForCreatedTabCommit(
+  tabId: number,
+  expectedWindowId: number,
+  canonicalHref: string,
+  navigation: CreatedTabNavigationObserver,
+  epoch: number,
+): Promise<chrome.tabs.Tab> {
+  const deadline = Date.now() + CREATED_TAB_COMMIT_TIMEOUT_MS;
+  while (true) {
+    if (epoch !== activeWorkEpoch) throw new Error("The Work launch was superseded.");
+    const tab = await getCreatedTabIfCurrent(tabId, expectedWindowId);
+    if (epoch !== activeWorkEpoch) throw new Error("The Work launch was superseded.");
+    const frameUrl = await getMainFrameUrl(tabId);
+    if (epoch !== activeWorkEpoch) throw new Error("The Work launch was superseded.");
+    const observed = navigation.current(tabId);
+    if (!isTransientBlankUrl(frameUrl) && !isExactCanonicalUrl(frameUrl, canonicalHref)) {
+      throw new WorkTabBindingError("The new tab did not commit the validated portal form URL.");
+    }
+    if (observed?.before != null && !isExactCanonicalUrl(observed.before.href ?? undefined, canonicalHref)) {
+      throw new WorkTabBindingError("The new tab began navigating away from the validated portal form URL.");
+    }
+    if (observed?.before != null && observed.committed != null &&
+        observed.committed.sequence > observed.before.sequence &&
+        isExactCanonicalUrl(observed.committed.href ?? undefined, canonicalHref) &&
+        isExactCanonicalUrl(frameUrl, canonicalHref)) {
+      return tab;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new WorkTabBindingError("The validated portal form URL did not commit before timeout.");
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(CREATED_TAB_COMMIT_POLL_MS, remaining)));
+  }
+}
+
+async function assertCreatedTabCommittedAndCurrent(
+  tabId: number,
+  expectedWindowId: number,
+  formOrigin: string,
+  formPath: string,
+  canonicalHref: string,
+  navigation: CreatedTabNavigationObserver,
+): Promise<chrome.tabs.Tab> {
+  const tab = await getCreatedTabIfCurrent(tabId, expectedWindowId);
+  const frameUrl = await getMainFrameUrl(tabId);
+  const observed = navigation.current(tabId);
+  if (!workFormUrlMatchesPage(frameUrl, formOrigin, formPath) ||
+      !isExactCanonicalUrl(frameUrl, canonicalHref) ||
+      observed?.before == null || observed.committed == null ||
+      observed.committed.sequence <= observed.before.sequence ||
+      !isExactCanonicalUrl(observed.before.href ?? undefined, canonicalHref) ||
+      !isExactCanonicalUrl(observed.committed.href ?? undefined, canonicalHref)) {
+    throw new WorkTabBindingError("The new tab left the validated portal form before Work was bound.");
+  }
+  return tab;
+}
+
+async function closeCreatedTabIfStillUnboundAtCanonicalUrl(
+  tabId: number,
+  expectedWindowId: number,
+  canonicalHref: string,
+  navigation: CreatedTabNavigationObserver,
+): Promise<void> {
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (tab.url && new URL(tab.url).origin === origin) await chrome.tabs.remove(tabId);
+    if (tab.id !== tabId || tab.windowId !== expectedWindowId) return;
+    const frameUrl = await getMainFrameUrl(tabId);
+    const observed = navigation.current(tabId);
+    const stillPending = isTransientBlankUrl(frameUrl) && observed?.before != null &&
+      (observed.committed == null || observed.committed.sequence < observed.before.sequence) &&
+      isExactCanonicalUrl(observed.before.href ?? undefined, canonicalHref);
+    const stillCommitted = isExactCanonicalUrl(frameUrl, canonicalHref) && observed?.before != null &&
+      observed.committed != null && observed.committed.sequence > observed.before.sequence &&
+      isExactCanonicalUrl(observed.before.href ?? undefined, canonicalHref) &&
+      isExactCanonicalUrl(observed.committed.href ?? undefined, canonicalHref);
+    if (stillPending || stillCommitted) await chrome.tabs.remove(tabId);
   } catch {
     // Already gone or no longer our unbound portal tab.
   }
@@ -216,6 +403,11 @@ export async function handleExternalSetActiveWork(
   const requestedTuple = tupleFromSetActiveWorkMessage(parsed.message);
   let createdTabId: number | null = null;
   let targetOrigin: string | null = null;
+  let targetPath: string | null = null;
+  let canonicalHref: string | null = null;
+  let createdWindowId: number | null = null;
+  let navigation: CreatedTabNavigationObserver | null = null;
+  let recordPersisted = false;
   let launchSucceeded = false;
   try {
     const revoked = await serializeActiveWorkMutation(async () => {
@@ -245,43 +437,60 @@ export async function handleExternalSetActiveWork(
     if (!didCommitSelection || epoch !== activeWorkEpoch) return { ok: false, code: "SUPERSEDED" };
     const form = new URL(validation.formUrl);
     targetOrigin = form.origin;
-    const formPath = form.pathname;
+    targetPath = form.pathname;
+    canonicalHref = form.href;
+    navigation = createCreatedTabNavigationObserver();
     const tab = await chrome.tabs.create({
       url: validation.formUrl,
       active: true,
       ...(Number.isInteger(senderTabWindowId) ? { windowId: senderTabWindowId } : {}),
     });
     if (!Number.isSafeInteger(tab.id) || typeof tab.id !== "number" || tab.id <= 0) {
-      return { ok: false, code: "TAB_BIND_FAILED" };
+      throw new WorkTabBindingError("Chrome did not return the newly created portal tab id.");
     }
     createdTabId = tab.id;
-    if (epoch !== activeWorkEpoch) {
-      await closeCreatedTabIfStillAtOrigin(tab.id, targetOrigin);
-      return { ok: false, code: "SUPERSEDED" };
+    createdWindowId = Number.isSafeInteger(senderTabWindowId) ? senderTabWindowId! : tab.windowId ?? null;
+    if (!Number.isSafeInteger(createdWindowId) || createdWindowId == null || tab.windowId !== createdWindowId) {
+      throw new WorkTabBindingError("Chrome created the portal tab in a different window.");
     }
-    const currentTab = await chrome.tabs.get(tab.id);
-    if (currentTab.id !== tab.id || !workFormUrlMatchesPage(currentTab.url, targetOrigin, formPath)) {
-      await closeCreatedTabIfStillAtOrigin(tab.id, targetOrigin);
-      return { ok: false, code: "TAB_BIND_FAILED" };
-    }
+    await waitForCreatedTabCommit(tab.id, createdWindowId, canonicalHref, navigation, epoch);
+    if (epoch !== activeWorkEpoch) return { ok: false, code: "SUPERSEDED" };
     const now = new Date().toISOString();
     const record: ActiveWorkRecord = {
       tuple,
       boundTabId: tab.id,
       formOrigin: targetOrigin,
-      formPath,
+      formPath: targetPath,
       caseType: validation.caseType,
       createdAt: now,
       lastActivityAt: now,
     };
     const didPersist = await serializeActiveWorkMutation(async () => {
       if (epoch !== activeWorkEpoch) return false;
+      await assertCreatedTabCommittedAndCurrent(tab.id!, createdWindowId!, targetOrigin!, targetPath!, canonicalHref!, navigation!);
+      if (epoch !== activeWorkEpoch) return false;
       await chrome.storage.session.set({ [ACTIVE_WORK_KEY]: record });
+      recordPersisted = true;
+      if (epoch !== activeWorkEpoch) return false;
       await chrome.storage.session.remove(ACTIVE_WORK_BLOCK_KEY);
-      return true;
+      return epoch === activeWorkEpoch;
     });
     if (!didPersist || epoch !== activeWorkEpoch) {
-      await closeCreatedTabIfStillAtOrigin(tab.id, targetOrigin);
+      if (!recordPersisted && canonicalHref != null) {
+        await closeCreatedTabIfStillUnboundAtCanonicalUrl(tab.id, createdWindowId!, canonicalHref, navigation!);
+      }
+      await removeRecordIfCurrent(parsed.message.launchReceiptId);
+      return { ok: false, code: "SUPERSEDED" };
+    }
+    try {
+      await assertCreatedTabCommittedAndCurrent(tab.id, createdWindowId, targetOrigin, targetPath, canonicalHref!, navigation!);
+    } catch (error) {
+      if (epoch === activeWorkEpoch) await clearActiveWork();
+      else await removeRecordIfCurrent(parsed.message.launchReceiptId);
+      if (error instanceof WorkTabBindingError) return { ok: false, code: "TAB_BIND_FAILED" };
+      throw error;
+    }
+    if (epoch !== activeWorkEpoch) {
       await removeRecordIfCurrent(parsed.message.launchReceiptId);
       return { ok: false, code: "SUPERSEDED" };
     }
@@ -297,12 +506,17 @@ export async function handleExternalSetActiveWork(
       portalUrl: validation.formUrl,
     };
   } catch (error) {
-    if (createdTabId != null && targetOrigin != null) {
-      await closeCreatedTabIfStillAtOrigin(createdTabId, targetOrigin);
+    if (recordPersisted) {
+      await removeRecordIfCurrent(parsed.message.launchReceiptId);
+    } else if (createdTabId != null && canonicalHref != null) {
+      if (createdWindowId != null && navigation != null) {
+        await closeCreatedTabIfStillUnboundAtCanonicalUrl(createdTabId, createdWindowId, canonicalHref, navigation);
+      }
     }
     if (epoch !== activeWorkEpoch || (error instanceof Error && error.name === "AbortError")) {
       return { ok: false, code: "SUPERSEDED" };
     }
+    if (error instanceof WorkTabBindingError) return { ok: false, code: "TAB_BIND_FAILED" };
     return {
       ok: false,
       code: error instanceof Error && /Work context|mapping changed|organization changed/i.test(error.message)
@@ -310,6 +524,7 @@ export async function handleExternalSetActiveWork(
         : "VALIDATION_FAILED",
     };
   } finally {
+    navigation?.dispose();
     if (pendingLaunch === controller) pendingLaunch = null;
     // The prior receipt is revoked before validation. Publish the settled
     // state after a failed current launch so an open panel drops stale UI;
@@ -337,14 +552,13 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
     await clearActiveWork();
     throw new Error("This Work context is bound to a different portal tab.");
   }
-  let tab: chrome.tabs.Tab;
   try {
-    tab = await chrome.tabs.get(record.boundTabId);
+    await chrome.tabs.get(record.boundTabId);
   } catch {
     await clearActiveWork();
     throw new Error("The bound Work tab closed. Reopen the task from Minted Panel.");
   }
-  if (!workFormUrlMatchesPage(tab.url, record.formOrigin, record.formPath)) {
+  if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) {
     await clearActiveWork();
     throw new Error("The bound Work tab changed pages. Reopen the task from Minted Panel.");
   }
@@ -372,8 +586,8 @@ export async function revalidateActiveWork(
       new URL(validation.formUrl).pathname !== expected.formPath) {
     throw new Error("The Work context changed during validation. Reopen the task from Minted Panel.");
   }
-  const tab = await chrome.tabs.get(expected.boundTabId);
-  if (!workFormUrlMatchesPage(tab.url, expected.formOrigin, expected.formPath)) {
+  await chrome.tabs.get(expected.boundTabId);
+  if (!workFormUrlMatchesPage(await getMainFrameUrl(expected.boundTabId), expected.formOrigin, expected.formPath)) {
     throw new Error("The bound Work tab changed pages. Reopen the task from Minted Panel.");
   }
   return validation;
@@ -466,8 +680,8 @@ export async function reconcileActiveWorkTab(): Promise<void> {
     return;
   }
   try {
-    const tab = await chrome.tabs.get(record.boundTabId);
-    if (!workFormUrlMatchesPage(tab.url, record.formOrigin, record.formPath)) await clearActiveWork();
+    await chrome.tabs.get(record.boundTabId);
+    if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) await clearActiveWork();
   } catch {
     await clearActiveWork();
   }
@@ -479,9 +693,12 @@ function ignoreTabFailure(operation: Promise<unknown>): void {
 
 export function registerActiveWorkListeners(): void {
   chrome.tabs?.onActivated?.addListener((info) => ignoreTabFailure(onActiveWorkTabActivated(info.tabId)));
-  chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
-    if (changeInfo.url != null) ignoreTabFailure(onActiveWorkTabUpdated(tabId, changeInfo.url));
-  });
+  const checkMainFrame = (details: chrome.webNavigation.WebNavigationBaseCallbackDetails) => {
+    if (details.frameId === 0) ignoreTabFailure(onActiveWorkTabUpdated(details.tabId, details.url));
+  };
+  chrome.webNavigation?.onBeforeNavigate?.addListener(checkMainFrame);
+  chrome.webNavigation?.onCommitted?.addListener(checkMainFrame);
+  chrome.webNavigation?.onHistoryStateUpdated?.addListener(checkMainFrame);
   chrome.tabs?.onRemoved?.addListener((tabId) => ignoreTabFailure(onActiveWorkTabRemoved(tabId)));
   void reconcileActiveWorkTab().catch(() => {});
 }

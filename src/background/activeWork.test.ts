@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
 import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
-vi.mock("./api", () => ({
+vi.mock("./api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./api")>(),
   validateWorkContext: vi.fn(),
 }));
 
@@ -36,7 +37,7 @@ function validationResult(input: SetActiveWorkMessage = message) {
   return {
     tuple: tuple as CanonicalWorkContextTuple,
     caseType: "enrollment" as const,
-    formUrl: "https://portal.example.com/enroll",
+    formUrl: input.portalUrl,
     requiresExplicitSelection: true,
     mappingGeneration: input.mappingGeneration,
     effectiveMappingFingerprint: input.effectiveMappingFingerprint,
@@ -50,14 +51,70 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function setupWebNavigationHarness() {
+  const frames = new Map<number, string | undefined>();
+  const beforeListeners = new Set<(details: chrome.webNavigation.WebNavigationBaseCallbackDetails) => void>();
+  const committedListeners = new Set<(details: chrome.webNavigation.WebNavigationTransitionCallbackDetails) => void>();
+  const historyListeners = new Set<(details: chrome.webNavigation.WebNavigationTransitionCallbackDetails) => void>();
+  const baseCreate = chrome.tabs.create.bind(chrome.tabs);
+  const getFrame = vi.fn(async (details: chrome.webNavigation.GetFrameDetails) => {
+    if (typeof details.tabId !== "number") return null;
+    const url = frames.get(details.tabId);
+    return url == null ? null : { url } as chrome.webNavigation.GetFrameResultDetails;
+  });
+  const makeEvent = <T>(listeners: Set<T>) => ({
+    addListener: (listener: T) => listeners.add(listener),
+    removeListener: (listener: T) => listeners.delete(listener),
+  });
+  Object.assign(chrome.webNavigation, {
+    getFrame,
+    onBeforeNavigate: makeEvent(beforeListeners),
+    onCommitted: makeEvent(committedListeners),
+    onHistoryStateUpdated: makeEvent(historyListeners),
+  });
+  const emitBefore = (tabId: number, url: string) => {
+    const details = { tabId, frameId: 0, url } as chrome.webNavigation.WebNavigationBaseCallbackDetails;
+    for (const listener of beforeListeners) listener(details);
+  };
+  const emitCommitted = (tabId: number, url: string) => {
+    frames.set(tabId, url);
+    const details = { tabId, frameId: 0, url } as chrome.webNavigation.WebNavigationTransitionCallbackDetails;
+    for (const listener of committedListeners) listener(details);
+  };
+  vi.spyOn(chrome.tabs, "create").mockImplementation(async (properties) => {
+    const tab = await baseCreate(properties);
+    if (tab.id != null) {
+      const url = properties.url ?? "about:blank";
+      emitBefore(tab.id, url);
+      emitCommitted(tab.id, url);
+    }
+    return tab;
+  });
+  return {
+    frames,
+    getFrame,
+    emitBefore,
+    emitCommitted,
+    baseCreate,
+  };
+}
+
+let navigationHarness: ReturnType<typeof setupWebNavigationHarness>;
+
 beforeEach(async () => {
   stub.reset();
   vi.resetAllMocks();
+  navigationHarness = setupWebNavigationHarness();
   registerValidatedWorkSelectionCommitter(async () => {});
   vi.mocked(validateWorkContext).mockImplementation(async (tuple) => validationResult({
     ...message,
     ...tuple,
   }));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("SET_ACTIVE_WORK exact tab binding", () => {
@@ -103,6 +160,125 @@ describe("SET_ACTIVE_WORK exact tab binding", () => {
     });
     expect(stub.createdTabs).toHaveLength(1);
     expect(stub.createdTabs[0]?.id).toBe(700);
+  });
+
+  it("waits for webNavigation main-frame commit evidence before ACK", async () => {
+    // The tab starts at about:blank and commits only when the test explicitly
+    // emits the browser navigation event.
+    vi.mocked(chrome.tabs.create).mockImplementation(async (properties) => {
+      const tab = await navigationHarness.baseCreate(properties);
+      if (tab.id != null) {
+        navigationHarness.frames.set(tab.id, "about:blank");
+        navigationHarness.emitBefore(tab.id, message.portalUrl);
+      }
+      return tab;
+    });
+
+    const launch = handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    await vi.waitFor(() => expect(navigationHarness.getFrame).toHaveBeenCalled());
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
+    navigationHarness.frames.set(700, message.portalUrl);
+    navigationHarness.emitCommitted(700, message.portalUrl);
+    const ack = await launch;
+
+    expect(ack.ok).toBe(true);
+    expect(navigationHarness.getFrame).toHaveBeenCalledWith({ tabId: 700, frameId: 0 });
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 700 });
+  });
+
+  it("times out on blank tab and removes only the still-canonical pending tab", async () => {
+    vi.useFakeTimers();
+    vi.mocked(chrome.tabs.create).mockImplementation(async (properties) => {
+      const tab = await navigationHarness.baseCreate(properties);
+      if (tab.id != null) {
+        navigationHarness.frames.set(tab.id, "about:blank");
+        navigationHarness.emitBefore(tab.id, message.portalUrl);
+      }
+      return tab;
+    });
+    const launch = handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    for (let i = 0; i < 40 && stub.tabQueries.length === 0; i += 1) await Promise.resolve();
+    expect(stub.tabQueries.length).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(launch).resolves.toEqual({ ok: false, code: "TAB_BIND_FAILED" });
+    await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
+  });
+
+  it("accepts the exact canonical query URL", async () => {
+    const queryMessage = { ...message, portalUrl: "https://portal.example.com/enroll?payer=A" };
+    vi.mocked(validateWorkContext).mockResolvedValueOnce(validationResult(queryMessage));
+    const ack = await handleExternalSetActiveWork(queryMessage, APP_ORIGIN, 1);
+    expect(ack).toMatchObject({ ok: true, portalUrl: queryMessage.portalUrl });
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 700 });
+  });
+
+  it("rejects a committed query mismatch and leaves the navigated tab alone", async () => {
+    const queryMessage = { ...message, portalUrl: "https://portal.example.com/enroll?payer=A" };
+    const wrongQuery = "https://portal.example.com/enroll?payer=B";
+    vi.mocked(validateWorkContext).mockResolvedValueOnce(validationResult(queryMessage));
+    vi.mocked(chrome.tabs.create).mockImplementation(async (properties) => {
+      const tab = await navigationHarness.baseCreate(properties);
+      if (tab.id != null) {
+        navigationHarness.emitBefore(tab.id, wrongQuery);
+        navigationHarness.emitCommitted(tab.id, wrongQuery);
+      }
+      return tab;
+    });
+    await expect(handleExternalSetActiveWork(queryMessage, APP_ORIGIN, 1))
+      .resolves.toEqual({ ok: false, code: "TAB_BIND_FAILED" });
+    await expect(chrome.tabs.get(700)).resolves.toBeDefined();
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
+  });
+
+  it("rejects a blank tab with a pending query mismatch and leaves it open", async () => {
+    const queryMessage = { ...message, portalUrl: "https://portal.example.com/enroll?payer=A" };
+    const wrongQuery = "https://portal.example.com/enroll?payer=B";
+    vi.mocked(validateWorkContext).mockResolvedValueOnce(validationResult(queryMessage));
+    vi.mocked(chrome.tabs.create).mockImplementation(async (properties) => {
+      const tab = await navigationHarness.baseCreate(properties);
+      if (tab.id != null) {
+        navigationHarness.frames.set(tab.id, "about:blank");
+        navigationHarness.emitBefore(tab.id, wrongQuery);
+      }
+      return tab;
+    });
+    await expect(handleExternalSetActiveWork(queryMessage, APP_ORIGIN, 1))
+      .resolves.toEqual({ ok: false, code: "TAB_BIND_FAILED" });
+    await expect(chrome.tabs.get(700)).resolves.toBeDefined();
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
+  });
+
+  it("fails closed if Chrome closes the created tab before commit", async () => {
+    const getTab = chrome.tabs.get.bind(chrome.tabs);
+    vi.spyOn(chrome.tabs, "get").mockImplementation(async (tabId) => {
+      if (tabId === 700) {
+        await chrome.tabs.remove(700);
+        throw new Error("No tab with id");
+      }
+      return getTab(tabId);
+    });
+
+    await expect(handleExternalSetActiveWork(message, APP_ORIGIN, 1))
+      .resolves.toEqual({ ok: false, code: "TAB_BIND_FAILED" });
+    await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
+  });
+
+  it.each([1, 2] as const)("rejects when focus changes to window %s", async (activeWindowId) => {
+    const queryTabs = chrome.tabs.query.bind(chrome.tabs);
+    vi.spyOn(chrome.tabs, "query").mockImplementation(async (query) => {
+      if (query?.active === true && query.lastFocusedWindow === true) {
+        return [{ id: 701, windowId: activeWindowId, url: "https://other.example.com", active: true } as chrome.tabs.Tab];
+      }
+      return queryTabs(query);
+    });
+
+    await expect(handleExternalSetActiveWork(message, APP_ORIGIN, 1))
+      .resolves.toEqual({ ok: false, code: "TAB_BIND_FAILED" });
+    await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
   });
 
   it("rejects update-required clients and URL hints that differ from the server", async () => {
@@ -177,6 +353,24 @@ describe("SET_ACTIVE_WORK exact tab binding", () => {
     expect(stub.createdTabs).toHaveLength(0);
     expect((await getActiveWorkState()).status).toBe("none");
   });
+
+  it("supersedes while waiting for commit and cleans up only the matching pending tab", async () => {
+    vi.mocked(chrome.tabs.create).mockImplementation(async (properties) => {
+      const tab = await navigationHarness.baseCreate(properties);
+      if (tab.id != null) {
+        navigationHarness.frames.set(tab.id, "about:blank");
+        navigationHarness.emitBefore(tab.id, message.portalUrl);
+      }
+      return tab;
+    });
+    const launch = handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    await vi.waitFor(() => expect(stub.tabQueries.length).toBeGreaterThan(0));
+    await clearActiveWork({ allowLegacyFallback: true });
+
+    await expect(launch).resolves.toEqual({ ok: false, code: "SUPERSEDED" });
+    await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
+    expect((await getActiveWorkState()).status).toBe("none");
+  });
 });
 
 describe("exact tab lifecycle", () => {
@@ -194,6 +388,9 @@ describe("exact tab lifecycle", () => {
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
     });
+    navigationHarness.getFrame.mockImplementation(async (details: chrome.webNavigation.GetFrameDetails) => ({
+      url: details.tabId === 32 ? message.portalUrl : "https://other.example.com",
+    } as chrome.webNavigation.GetFrameResultDetails));
     await reconcileActiveWorkTab();
     expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 32 });
     expect(stub.tabQueries).toHaveLength(0);
@@ -239,5 +436,51 @@ describe("exact tab lifecycle", () => {
     await onActiveWorkTabUpdated(53, "https://portal.example.com/admin");
     expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
     expect((await getActiveWorkState()).status).toBe("blocked");
+  });
+
+  it("uses webNavigation frame URL when Chrome hides tabs.Tab.url", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    const originalGet = chrome.tabs.get.bind(chrome.tabs);
+    vi.spyOn(chrome.tabs, "get").mockImplementation(async (tabId) => {
+      const tab = await originalGet(tabId);
+      return { id: tab.id, windowId: tab.windowId, active: tab.active } as chrome.tabs.Tab;
+    });
+    navigationHarness.frames.set(700, message.portalUrl);
+
+    await expect(requireActiveWorkForTab(700)).resolves.toMatchObject({ boundTabId: 700 });
+    expect(navigationHarness.getFrame).toHaveBeenCalledWith({ tabId: 700, frameId: 0 });
+  });
+
+  it("revalidates an exact Work fill through webNavigation when tabs.Tab.url is hidden", async () => {
+    const tabId = 71;
+    stub.setQueryTabs([{ id: tabId, windowId: 1, active: true } as chrome.tabs.Tab]);
+    const tuple = tupleFromSetActiveWorkMessage(message);
+    const now = new Date().toISOString();
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      tuple,
+      boundTabId: tabId,
+      formOrigin: "https://portal.example.com",
+      formPath: "/enroll",
+      caseType: "enrollment",
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    stub.sessionStore.set("minted.activeOrgId", message.orgId);
+    stub.sessionStore.set("minted.selectedProviderId", message.providerId);
+    stub.sessionStore.set(`minted.selectedCaseId.${message.providerId}`, message.ownerId);
+    navigationHarness.frames.set(tabId, message.portalUrl);
+
+    const { handleRequest } = await import("./index");
+    await expect(handleRequest({
+      type: "PREPARE_AI_FILL",
+      tabId,
+      providerId: message.providerId,
+      caseId: message.ownerId,
+      portalKey: message.portalKey,
+      state: "CO",
+      facilityId: null,
+    })).rejects.toThrow(/Could not reach the enrollment form/);
+    expect(navigationHarness.getFrame).toHaveBeenCalledWith({ tabId, frameId: 0 });
+    expect(navigationHarness.getFrame.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 });

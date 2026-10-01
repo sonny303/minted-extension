@@ -384,6 +384,14 @@ function workTupleMatchesFillRequest(
     (tuple.ownerKind === "case" ? request.caseId === tuple.ownerId : request.caseId == null);
 }
 
+async function currentWorkTabUrl(tabId: number): Promise<string> {
+  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+  if (typeof frame?.url !== "string" || frame.url === "") {
+    throw new Error("The active Work tab has no readable main-frame URL.");
+  }
+  return frame.url;
+}
+
 async function createWorkFillGuard(
   request: { tabId: number; providerId: string; caseId?: string | null; portalKey: string; facilityId: string | null; groupId?: string | null },
   work: ActiveWorkRecord,
@@ -409,9 +417,8 @@ async function createWorkFillGuard(
   ) {
     throw new Error("The selected provider, owner, location, or organization changed. Reopen the Work from Minted Panel.");
   }
-  const firstTab = await chrome.tabs.get(request.tabId);
-  const tabUrl = typeof firstTab.url === "string" ? firstTab.url : "";
-  if (!tabUrl) throw new Error("The active portal tab has no readable URL.");
+  await chrome.tabs.get(request.tabId);
+  const tabUrl = await currentWorkTabUrl(request.tabId);
   const initialValidation = await revalidateActiveWork(work, epoch);
   const validate = async (): Promise<void> => {
     if (
@@ -421,7 +428,7 @@ async function createWorkFillGuard(
     ) {
       throw new Error("The form or Work context changed. Run Fill again.");
     }
-    const [currentOrg, currentTab, activeTabs, currentRevision, providerId, caseId, facilityId] = await Promise.all([
+    const [currentOrg, currentTab, activeTabs, currentRevision, providerId, caseId, facilityId, currentTabUrl] = await Promise.all([
       readActiveOrgId(),
       chrome.tabs.get(request.tabId),
       chrome.tabs.query({ active: true, currentWindow: true }),
@@ -429,12 +436,13 @@ async function createWorkFillGuard(
       readSessionString(SELECTED_PROVIDER_KEY),
       readSessionString(SELECTED_CASE_PREFIX + work.tuple.providerId),
       readSessionString(SELECTED_FACILITY_PREFIX + work.tuple.providerId),
+      currentWorkTabUrl(request.tabId),
     ]);
     if (
       currentOrg !== work.tuple.orgId || currentRevision !== selectionRevision ||
       providerId !== work.tuple.providerId ||
       (caseId === AD_HOC_CASE_SELECTION ? null : caseId) !== (work.tuple.ownerKind === "case" ? work.tuple.ownerId : null) ||
-      facilityId !== work.tuple.facilityId || currentTab.url !== tabUrl || activeTabs[0]?.id !== request.tabId
+      facilityId !== work.tuple.facilityId || currentTab.id !== request.tabId || currentTabUrl !== tabUrl || activeTabs[0]?.id !== request.tabId
     ) {
       throw new Error("The form or Work context changed. Run Fill again.");
     }

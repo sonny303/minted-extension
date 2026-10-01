@@ -488,12 +488,33 @@ function orgResolved(): boolean {
   return orgs.length === 1 || (orgs.length > 1 && activeOrgId != null);
 }
 
-function activeWorkRecordForTab(tab: Pick<chrome.tabs.Tab, "id" | "url"> | null): ActiveWorkRecord | null {
+function activeWorkRecordForTab(
+  tab: Pick<chrome.tabs.Tab, "id"> | null,
+  pageUrl: string | null,
+): ActiveWorkRecord | null {
   if (activeWorkState.status !== "active" || tab?.id == null) return null;
   const record = activeWorkState.record;
-  return record.boundTabId === tab.id && workFormUrlMatchesPage(tab.url, record.formOrigin, record.formPath)
+  return record.boundTabId === tab.id && workFormUrlMatchesPage(pageUrl ?? undefined, record.formOrigin, record.formPath)
     ? record
     : null;
+}
+
+/** Tabs only expose URL fields after host access is granted. Work already has
+ * webNavigation permission, so use its main-frame URL for the exact bound-tab
+ * path; legacy recognition keeps its existing tabs.url behavior. */
+async function activePageUrlForTab(
+  tab: Pick<chrome.tabs.Tab, "id" | "url"> | null,
+  useWorkFrameUrl: boolean,
+): Promise<string | null> {
+  if (tab == null) return null;
+  if (!useWorkFrameUrl) return tab.url ?? null;
+  if (tab.id == null) return null;
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 });
+    return typeof frame?.url === "string" && frame.url !== "" ? frame.url : null;
+  } catch {
+    return null;
+  }
 }
 
 function activeWorkStateIdentity(state: ActiveWorkState): string {
@@ -1676,7 +1697,8 @@ function currentSelectionAllowsCaseWork(): boolean {
 function isFillReady(): boolean {
   const portalOpen = portal != null && portalTabId != null;
   const visibleWorkRecord = activeWorkRecordForTab(
-    portalTabId == null ? null : { id: portalTabId, url: detectedPageUrl ?? undefined },
+    portalTabId == null ? null : { id: portalTabId },
+    detectedPageUrl,
   );
   const tabMatchesWork = visibleWorkRecord != null && portal?.key === visibleWorkRecord.tuple.portalKey;
   const workBlocksLegacy = activeWorkState.status !== "none" && !tabMatchesWork;
@@ -1711,7 +1733,8 @@ function updateFillReady(): void {
   syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
   const visibleWorkRecord = activeWorkRecordForTab(
-    portalTabId == null ? null : { id: portalTabId, url: detectedPageUrl ?? undefined },
+    portalTabId == null ? null : { id: portalTabId },
+    detectedPageUrl,
   );
   portalStatus.textContent = activeWorkState.status === "blocked"
     ? "The exact Work context ended. Re-launch it or make a manual selection before filling."
@@ -2809,16 +2832,18 @@ async function detectPortal(): Promise<void> {
     return;
   }
   const tab = await queryActiveTab();
-  const workRecord = activeWorkRecordForTab(tab);
-  const nextPortal = activeWorkState.status !== "none"
+  const hasWorkContext = activeWorkState.status !== "none";
+  const pageUrl = await activePageUrlForTab(tab, hasWorkContext);
+  const workRecord = activeWorkRecordForTab(tab, pageUrl);
+  const nextPortal = hasWorkContext
     ? workRecord == null ? null : matchedActiveWorkPortal(workRecord)
-    : matchPortalByUrl(tab?.url, portalRows);
+    : matchPortalByUrl(pageUrl, portalRows);
   const nextIdentity = nextPortal == null
     ? null
     : `${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
   if (portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
-      detectedPageUrl !== (tab?.url ?? null) || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
-  detectedPageUrl = tab?.url ?? null;
+      detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
+  detectedPageUrl = pageUrl;
   detectedPortalIdentity = nextIdentity;
   portal = nextPortal;
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
@@ -3249,7 +3274,12 @@ fillBtn.addEventListener("click", () => {
     if (!isFillCurrent()) return;
     const tab = await queryActiveTab();
     if (!isFillCurrent()) return;
-    const clickPortal = matchPortalByUrl(tab?.url, portalRows);
+    const hasWorkContext = activeWorkState.status !== "none";
+    const originalUrl = await activePageUrlForTab(tab, hasWorkContext);
+    const workRecord = activeWorkRecordForTab(tab, originalUrl);
+    const clickPortal = hasWorkContext
+      ? workRecord == null ? null : matchedActiveWorkPortal(workRecord)
+      : matchPortalByUrl(tab?.url, portalRows);
     portal = clickPortal;
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
     updateFillReady();
@@ -3265,7 +3295,6 @@ fillBtn.addEventListener("click", () => {
     fillBtn.textContent = "Filling…";
     fillBtn.classList.add("filling");
     fillNote.hidden = false;
-    const originalUrl = tab.url ?? "";
     let response: Awaited<ReturnType<typeof sendToBackground<"FILL">>>;
     try {
       let aiScanId: string | undefined;
@@ -3304,10 +3333,15 @@ fillBtn.addEventListener("click", () => {
       // A delayed local prompt never gets to apply to another active tab or a
       // new document. The worker repeats this binding check before writes.
       const currentTab = await queryActiveTab();
+      const currentPageUrl = await activePageUrlForTab(currentTab, hasWorkContext);
+      const currentWorkRecord = activeWorkRecordForTab(currentTab, currentPageUrl);
+      const currentPortal = hasWorkContext
+        ? currentWorkRecord == null ? null : matchedActiveWorkPortal(currentWorkRecord)
+        : matchPortalByUrl(currentTab?.url, portalRows);
       if (
         !isFillCurrent() || currentTab?.id !== tab.id ||
-        (currentTab.url ?? "") !== originalUrl ||
-        matchPortalByUrl(currentTab.url, portalRows)?.key !== clickPortal.key
+        currentPageUrl !== originalUrl ||
+        currentPortal?.key !== clickPortal.key
       ) {
         setError(mainError, "The portal page changed during AI review. Run Fill again.");
         return;
