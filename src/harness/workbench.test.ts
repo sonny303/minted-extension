@@ -1726,6 +1726,234 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     })).toBeNull();
   });
 
+  it("keeps approved local decisions on a same-generation page recapture", async () => {
+    const { handleRequest } = await import("../background/index");
+    scanPayload = [{ label: "Member ID", selector: "#member-id", fieldType: "text", formSection: null }];
+    await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      ...captureTarget,
+      pageStep: "member-details",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    });
+    await handleRequest({
+      type: "SET_CAPTURE_CHOICE",
+      selector: "#member-id",
+      token: "provider.npi",
+      ...captureTarget,
+    });
+
+    scanPayload = [{ label: "Member identification number", selector: "#member-id", fieldType: "text", formSection: null }];
+    const recaptured = await handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      ...captureTarget,
+      pageStep: "member-details",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    }) as import("../shared/capture").CaptureSession;
+
+    expect(recaptured.mappingGeneration).toBe(captureTarget.mappingGeneration);
+    expect(recaptured.rows).toMatchObject([{
+      selector: "#member-id",
+      label: "Member identification number",
+      chosenToken: "provider.npi",
+    }]);
+  });
+
+  it("sends the exact pinned key and generation with shared-map and proof writes", async () => {
+    const { handleRequest } = await import("../background/index");
+    const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (init?.method === "POST" &&
+          ["/api/shared-field-maps", "/api/shared-portals/prove"].includes(url.pathname)) {
+        writes.push({ path: url.pathname, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      scanPayload = [{ label: "Provider number", selector: "#provider-number", fieldType: "text", formSection: null }];
+      await handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        ...captureTarget,
+        pageStep: "provider-details",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      });
+      await handleRequest({ type: "SEND_CAPTURE", ...captureTarget });
+      await handleRequest({ type: "MARK_PORTAL_PROVEN", ...captureTarget });
+
+      expect(writes.find((write) => write.path === "/api/shared-field-maps")?.body).toMatchObject({
+        portal_key: captureTarget.portalKey,
+        expected_mapping_generation: captureTarget.mappingGeneration,
+        selector: "#provider-number",
+      });
+      expect(writes.find((write) => write.path === "/api/shared-portals/prove")?.body).toEqual({
+        portalKey: captureTarget.portalKey,
+        expected_mapping_generation: captureTarget.mappingGeneration,
+      });
+      expect(JSON.stringify(writes)).not.toMatch(/provider value|123-45-6789/i);
+    } finally {
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
+  it("clears the matching draft and returns refresh guidance on a stale generation 409", async () => {
+    const { handleRequest } = await import("../background/index");
+    const fetchBefore = globalThis.fetch;
+    let body: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === "/api/shared-field-maps" && init?.method === "POST") {
+        body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          data: null,
+          error: "The form mapping changed. Reload the configuration before capturing fields again.",
+          meta: null,
+        }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      scanPayload = [{ label: "Plan ID", selector: "#plan-id", fieldType: "text", formSection: null }];
+      await handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        ...captureTarget,
+        pageStep: "provider-details",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      });
+      expect(stub.sessionStore.has("capture.session")).toBe(true);
+
+      await expect(handleRequest({ type: "SEND_CAPTURE", ...captureTarget })).rejects.toMatchObject({
+        status: 409,
+        message: "This form configuration's mapping generation changed. Refresh Train forms, select its current generation, and recapture before continuing.",
+      });
+      expect(body).toMatchObject({
+        portal_key: captureTarget.portalKey,
+        expected_mapping_generation: captureTarget.mappingGeneration,
+      });
+      expect(stub.sessionStore.has("capture.session")).toBe(false);
+    } finally {
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
+  it("clears the matching draft when the proof write is rejected as stale", async () => {
+    const { handleRequest } = await import("../background/index");
+    const fetchBefore = globalThis.fetch;
+    let body: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === "/api/shared-portals/prove" && init?.method === "POST") {
+        body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          data: null,
+          error: "The form mapping changed. Reload the configuration before marking it proven.",
+          meta: null,
+        }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      scanPayload = [{ label: "Provider number", selector: "#provider-number", fieldType: "text", formSection: null }];
+      await handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        ...captureTarget,
+        pageStep: "provider-details",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      });
+      expect(stub.sessionStore.has("capture.session")).toBe(true);
+
+      await expect(handleRequest({ type: "MARK_PORTAL_PROVEN", ...captureTarget })).rejects.toMatchObject({
+        status: 409,
+        message: "This form configuration's mapping generation changed. Refresh Train forms, select its current generation, and recapture before continuing.",
+      });
+      expect(body).toEqual({
+        portalKey: captureTarget.portalKey,
+        expected_mapping_generation: captureTarget.mappingGeneration,
+      });
+      expect(stub.sessionStore.has("capture.session")).toBe(false);
+    } finally {
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
+  it("does not clear the new A draft when a stale A write returns after A→B→A", async () => {
+    const { handleRequest } = await import("../background/index");
+    let announceWrite!: () => void;
+    let releaseWrite!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { announceWrite = resolve; });
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === "/api/shared-field-maps" && init?.method === "POST") {
+        announceWrite();
+        await writeGate;
+        return new Response(JSON.stringify({
+          data: null,
+          error: "The form mapping changed. Reload the configuration before capturing fields again.",
+          meta: null,
+        }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      scanPayload = [{ label: "Old A field", selector: "#old-a", fieldType: "text", formSection: null }];
+      await handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        ...captureTarget,
+        pageStep: "provider-details",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      });
+      const staleSend = handleRequest({ type: "SEND_CAPTURE", ...captureTarget });
+      await writeStarted;
+
+      await handleRequest({ type: "SET_TRAIN_TARGET", portalKey: "same-url-sibling", mappingGeneration: 1 });
+      const nextA = await handleRequest({
+        type: "SET_TRAIN_TARGET",
+        portalKey: captureTarget.portalKey,
+        mappingGeneration: captureTarget.mappingGeneration,
+      }) as import("../shared/trainTarget").TrainTargetState;
+      const nextATarget = { ...captureTarget, targetRevision: nextA.revision };
+      scanPayload = [{ label: "New A field", selector: "#new-a", fieldType: "text", formSection: null }];
+      await handleRequest({
+        type: "START_CAPTURE",
+        tabId: 1,
+        ...nextATarget,
+        pageStep: "provider-details",
+        pageUrlTail: "step1",
+        captureMode: "auto",
+      });
+
+      releaseWrite();
+      await expect(staleSend).rejects.toMatchObject({ status: 409 });
+      expect(stub.sessionStore.get("capture.session")).toMatchObject({
+        portalKey: captureTarget.portalKey,
+        mappingGeneration: captureTarget.mappingGeneration,
+        rows: [{ selector: "#new-a", label: "New A field" }],
+      });
+      expect(stub.sessionStore.get("capture.trainTarget")).toMatchObject({ revision: nextA.revision });
+    } finally {
+      releaseWrite();
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
   it("rejects a scan result that arrives after the exact target changes", async () => {
     const { handleRequest } = await import("../background/index");
     let announceScan!: () => void;

@@ -4773,6 +4773,16 @@ function clearTrainTargetLocalState(): void {
   renderCapture();
 }
 
+const STALE_TRAIN_GENERATION_MESSAGE =
+  "This form configuration's mapping generation changed. Refresh Train forms, select its current generation, and recapture before continuing.";
+
+function discardStaleTrainCaptureFromResponse(response: { ok: boolean; code?: number; error?: string }): boolean {
+  if (response.ok || response.code !== 409 || response.error !== STALE_TRAIN_GENERATION_MESSAGE) return false;
+  clearTrainTargetLocalState();
+  void loadSharedRegistry();
+  return true;
+}
+
 /**
  * Pin the worker to one exact configuration. Requests are queued so a fast
  * A→B→A picker sequence cannot leave an older SET_TRAIN_TARGET as the worker's
@@ -5416,6 +5426,7 @@ async function testCaptureSelector(selector: string): Promise<void> {
   });
   if (!isCurrentTrainTargetRequest(target)) return;
   if (!response.ok) {
+    discardStaleTrainCaptureFromResponse(response);
     setPickStatus(response.error, true);
     return;
   }
@@ -5450,6 +5461,7 @@ async function addFieldByPicking(): Promise<void> {
   pickInFlight = false;
   captureAddField.disabled = false;
   if (!response.ok) {
+    discardStaleTrainCaptureFromResponse(response);
     setPickStatus(response.error, true);
     return;
   }
@@ -5492,6 +5504,7 @@ async function repointLibraryField(entry: CaptureListRow): Promise<void> {
   if (!isCurrentTrainTargetRequest(target)) return;
   pickInFlight = false;
   if (!response.ok) {
+    discardStaleTrainCaptureFromResponse(response);
     setPickStatus(response.error, true);
     renderCapture();
     return;
@@ -5591,6 +5604,7 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   captureStart.disabled = false;
   captureNextPage.disabled = false;
   if (!response.ok) {
+    discardStaleTrainCaptureFromResponse(response);
     captureStart.textContent = captureSession
       ? "Re-capture"
       : "Capture this form";
@@ -5635,6 +5649,7 @@ captureSend.addEventListener("click", () => {
     captureSend.textContent = "Send for approval";
     if (!response.ok) {
       captureSend.disabled = false;
+      discardStaleTrainCaptureFromResponse(response);
       setError(mainError, response.error);
       return;
     }
@@ -6239,6 +6254,7 @@ runMockDryRunBtn.addEventListener("click", () => {
       recognitionRevision !== trainRecognitionRevision
     ) return;
     if (!response.ok) {
+      discardStaleTrainCaptureFromResponse(response);
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();
       clearMockDryRunDetail();
@@ -6281,6 +6297,7 @@ markPortalProvenBtn.addEventListener("click", () => {
       recognitionRevision !== trainRecognitionRevision
     ) return;
     if (!response.ok) {
+      discardStaleTrainCaptureFromResponse(response);
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();
       mockDryRunStatus.hidden = false;

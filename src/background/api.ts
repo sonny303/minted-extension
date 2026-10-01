@@ -260,6 +260,8 @@ export async function listSharedPortals(portalKey?: string): Promise<PortalRegis
 
 export async function proposeSharedFieldMap(input: {
   portal_key: string;
+  /** The Train target's pinned generation. Omitted only for legacy generation-1 callers. */
+  expected_mapping_generation?: number;
   selector: string;
   field_label?: string | null;
   form_section?: string | null;
@@ -316,11 +318,17 @@ export async function postSharedTestFill(body: {
 
 // POST /api/shared-portals/prove — the manual proven_at action. A dry-run
 // result never calls this endpoint.
-export async function proveSharedPortal(input: { portalKey: string } | { id: string }): Promise<void> {
+export async function proveSharedPortal(input: {
+  portalKey: string;
+  expectedMappingGeneration: number;
+}): Promise<void> {
   await apiFetch("/api/shared-portals/prove", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      portalKey: input.portalKey,
+      expected_mapping_generation: input.expectedMappingGeneration,
+    }),
   });
 }
 
