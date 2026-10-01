@@ -15,6 +15,7 @@ export interface ChromeStub {
   sessionStore: Map<string, unknown>;
   broadcasts: unknown[];
   tabQueries: chrome.tabs.QueryInfo[];
+  createdTabs: chrome.tabs.Tab[];
   /** One-shot hooks consumed in order by storage.session.set. Tests use these
    * to hold or fail a specific persistence step without changing production. */
   queueSessionSet(hook: (items: Record<string, unknown>) => Promise<void>): void;
@@ -32,8 +33,10 @@ export function installChromeStub(): ChromeStub {
   const sessionStore = new Map<string, unknown>();
   const broadcasts: unknown[] = [];
   const tabQueries: chrome.tabs.QueryInfo[] = [];
+  const createdTabs: chrome.tabs.Tab[] = [];
   const sessionSetHooks: Array<(items: Record<string, unknown>) => Promise<void>> = [];
   let queryTabs: chrome.tabs.Tab[] = [];
+  let nextTabId = 700;
   const events = {
     messageExternal: eventSurface(),
     tabUpdated: eventSurface(),
@@ -82,6 +85,27 @@ export function installChromeStub(): ChromeStub {
             (queryInfo.active == null || tab.active === queryInfo.active),
         );
       },
+      create: async (properties: chrome.tabs.CreateProperties) => {
+        if (properties.active !== false) queryTabs = queryTabs.map((tab) => ({ ...tab, active: false }));
+        const created = {
+          id: nextTabId++,
+          windowId: properties.windowId ?? 1,
+          url: properties.url,
+          active: properties.active !== false,
+        } as chrome.tabs.Tab;
+        queryTabs.push(created);
+        createdTabs.push(created);
+        return created;
+      },
+      get: async (tabId: number) => {
+        const tab = queryTabs.find((candidate) => candidate.id === tabId);
+        if (!tab) throw new Error("No tab with id");
+        return tab;
+      },
+      remove: async (tabId: number | number[]) => {
+        const ids = Array.isArray(tabId) ? tabId : [tabId];
+        queryTabs = queryTabs.filter((tab) => !ids.includes(tab.id ?? -1));
+      },
       sendMessage: async () => {
         throw new Error("no content script in the harness");
       },
@@ -99,19 +123,22 @@ export function installChromeStub(): ChromeStub {
     sessionStore,
     broadcasts,
     tabQueries,
+    createdTabs,
     queueSessionSet(hook) {
       sessionSetHooks.push(hook);
     },
     setQueryTabs(tabs) {
-      queryTabs = tabs;
+      queryTabs = [...tabs];
     },
     events,
     reset() {
       sessionStore.clear();
       broadcasts.length = 0;
       tabQueries.length = 0;
+      createdTabs.length = 0;
       sessionSetHooks.length = 0;
       queryTabs = [];
+      nextTabId = 700;
     },
   };
 }

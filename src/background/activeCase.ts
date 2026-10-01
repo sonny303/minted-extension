@@ -4,6 +4,10 @@
 // The stored record holds identifiers and URL only — no profile or token values.
 import { PANEL_MODE_KEY } from "./mode";
 import {
+  handleExternalSetActiveWork,
+  revokeActiveWorkForLegacyLaunch,
+} from "./activeWork";
+import {
   activeCaseReceiptKey,
   isAllowedHandoffOrigin,
   isPortalOriginUrl,
@@ -12,6 +16,7 @@ import {
   type ActiveCaseRecord,
   type ActiveCaseState,
 } from "../shared/handoff";
+import { parseSetActiveWork } from "../shared/workContext";
 
 export const ACTIVE_CASE_KEY = "minted.activeCase";
 export const APPLIED_HANDOFF_KEY = "minted.appliedHandoffReceipt";
@@ -363,6 +368,10 @@ export async function handleExternalMessage(
   if (parsed == null) return { ok: false };
   const receiptId = crypto.randomUUID();
   const stored = await mutateActiveCase(async () => {
+    // Reserve the case queue before awaiting Work-v2 cleanup. A portal tab
+    // event during cleanup must wait behind this receipt instead of observing
+    // an empty state and losing its bind.
+    await revokeActiveWorkForLegacyLaunch();
     const now = new Date().toISOString();
     try {
       const record: ActiveCaseRecord = {
@@ -530,7 +539,7 @@ export function registerActiveCaseListeners(): void {
   chrome.runtime.onMessageExternal?.addListener(
     (message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (r: unknown) => void) => {
       let replied = false;
-      const replyOnce = (response: { ok: boolean }): void => {
+      const replyOnce = (response: unknown): void => {
         if (replied) return;
         replied = true;
         try {
@@ -540,15 +549,28 @@ export function registerActiveCaseListeners(): void {
           // final; retrying could double-deliver to a reused callback.
         }
       };
-      void handleExternalMessage(
-        message,
-        sender.origin,
-        sender.tab?.id,
-        sender.tab?.windowId,
-      ).then(
-        replyOnce,
-        () => replyOnce({ ok: false }),
-      );
+      if (message != null && typeof message === "object" && (message as { type?: unknown }).type === "SET_ACTIVE_WORK") {
+        if (!isAllowedHandoffOrigin(sender.origin) || !parseSetActiveWork(message).ok) {
+          void handleExternalSetActiveWork(message, sender.origin, sender.tab?.windowId).then(
+            replyOnce,
+            () => replyOnce({ ok: false, code: "VALIDATION_FAILED" }),
+          );
+        } else {
+          void clearActiveCase()
+            .then(() => handleExternalSetActiveWork(message, sender.origin, sender.tab?.windowId))
+            .then(replyOnce, () => replyOnce({ ok: false, code: "VALIDATION_FAILED" }));
+        }
+      } else {
+        void handleExternalMessage(
+          message,
+          sender.origin,
+          sender.tab?.id,
+          sender.tab?.windowId,
+        ).then(
+          replyOnce,
+          () => replyOnce({ ok: false }),
+        );
+      }
       return true; // keep the channel open for the async response
     },
   );

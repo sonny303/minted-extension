@@ -83,6 +83,8 @@ describe("fill selection safety", () => {
   ])("checks explicit ad hoc choice %s, group %s, location %s", (choice, group, location, ready) => {
     const scope: Context = createContext({
       portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "none" }, activeWorkRecordForTab: () => null,
       orgResolved: () => true, selectedProviderId: () => "provider",
       facilitiesLoaded: true, needsFacility: false,
       selectedFacilityId: () => location, selectedGroupId: group,
@@ -91,6 +93,42 @@ describe("fill selection safety", () => {
     });
     runInContext(code(["isFillReady"]), scope);
     expect(runInContext("isFillReady()", scope)).toBe(ready);
+  });
+
+  it("allows an exact Contract Work tab without borrowing a selected case", () => {
+    const workRecord = {
+      tuple: { ownerKind: "contract", portalKey: "portal" },
+      boundTabId: 7,
+    };
+    const scope: Context = createContext({
+      portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "active", record: workRecord },
+      activeWorkRecordForTab: () => workRecord,
+      orgResolved: () => true, selectedProviderId: () => "provider",
+      facilitiesLoaded: true, needsFacility: false,
+      selectedFacilityId: () => "location", selectedGroupId: null,
+      caseSelect: { value: "" }, AD_HOC_CASE_SELECTION: "__ad_hoc__",
+      selectedCaseId: () => null, activeCaseStatus: "none", activeCase: null,
+    });
+    runInContext(code(["isFillReady"]), scope);
+    expect(runInContext("isFillReady()", scope)).toBe(true);
+  });
+
+  it("blocks legacy URL recognition while an exact Work context is revoked", () => {
+    const scope: Context = createContext({
+      portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "blocked", orgId: "org" },
+      activeWorkRecordForTab: () => null,
+      orgResolved: () => true, selectedProviderId: () => "provider",
+      facilitiesLoaded: true, needsFacility: false,
+      selectedFacilityId: () => "location", selectedGroupId: "group",
+      caseSelect: { value: "case-id" }, AD_HOC_CASE_SELECTION: "__ad_hoc__",
+      selectedCaseId: () => "case-id", activeCaseStatus: "none", activeCase: null,
+    });
+    runInContext(code(["isFillReady"]), scope);
+    expect(runInContext("isFillReady()", scope)).toBe(false);
   });
 
   it.each([false, true])("discards a delayed fill after changing group (return to original: %s)", async (returnToOriginal) => {
