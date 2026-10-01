@@ -160,6 +160,20 @@ async function poll(read, accept, label, timeoutMs = 15_000) {
   );
 }
 
+async function stopChrome(chrome) {
+  if (!chrome || chrome.exitCode !== null || chrome.signalCode !== null) return;
+  await new Promise((resolveClosed) => {
+    const forceKill = setTimeout(() => chrome.kill("SIGKILL"), 5_000);
+    const giveUp = setTimeout(resolveClosed, 10_000);
+    chrome.once("close", () => {
+      clearTimeout(forceKill);
+      clearTimeout(giveUp);
+      resolveClosed();
+    });
+    chrome.kill("SIGTERM");
+  });
+}
+
 async function evaluate(devtools, expression, sessionId) {
   const response = await devtools.send(
     "Runtime.evaluate",
@@ -716,8 +730,13 @@ async function main() {
     );
   } finally {
     devtools?.close();
-    if (chrome && chrome.exitCode == null) chrome.kill("SIGTERM");
-    await rm(profileDir, { recursive: true, force: true });
+    await stopChrome(chrome);
+    await rm(profileDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   }
 }
 
