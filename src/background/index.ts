@@ -531,6 +531,8 @@ async function createAiFillGuard(request: {
 // to protect: captureScan never reads one.
 const CAPTURE_KEY = "capture.session";
 const TRAIN_TARGET_KEY = "capture.trainTarget";
+const STALE_TRAIN_GENERATION_MESSAGE =
+  "This form configuration's mapping generation changed. Refresh Train forms, select its current generation, and recapture before continuing.";
 let captureMutationTail: Promise<void> = Promise.resolve();
 
 function serializeCaptureMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -623,7 +625,8 @@ async function exactTrainPortal(request: VersionedTrainTarget & { tabUrl?: strin
   if (!row) throw new Error("The selected form configuration is no longer available.");
   const portal = toMatchedPortal(row);
   if (portal.mappingGeneration !== request.mappingGeneration) {
-    throw new Error("This form's mappings changed. Refresh the selection before continuing.");
+    await invalidateCaptureForCurrentTrainTarget(request);
+    throw new ApiError(409, STALE_TRAIN_GENERATION_MESSAGE);
   }
   if (request.tabUrl != null && !portalKeyEligibleForUrl(portal.key, request.tabUrl, rows)) {
     throw new Error("This page does not match the selected form configuration.");
@@ -643,6 +646,35 @@ async function readCaptureSession(): Promise<CaptureSession | null> {
 
 async function writeCaptureSession(session: CaptureSession): Promise<void> {
   await chrome.storage.session.set({ [CAPTURE_KEY]: session });
+}
+
+function isStaleTrainGenerationError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409 &&
+    /mapping_generation_(?:stale|token_required)|expected_mapping_generation|mapping changed/i.test(error.message);
+}
+
+async function invalidateCaptureForCurrentTrainTarget(
+  request: VersionedTrainTarget,
+): Promise<boolean> {
+  return serializeCaptureMutation(async () => {
+    const current = await readTrainTargetState();
+    // A late A→B→A response must not erase the new A draft: its revision is
+    // different even when key and generation happen to match again.
+    if (!trainTargetRequestMatches(current, request)) return false;
+    await chrome.storage.session.remove(CAPTURE_KEY);
+    return true;
+  });
+}
+
+async function throwWithStaleTrainCaptureInvalidated(
+  error: unknown,
+  request: VersionedTrainTarget,
+): Promise<never> {
+  if (isStaleTrainGenerationError(error) &&
+      await invalidateCaptureForCurrentTrainTarget(request)) {
+    throw new ApiError(409, STALE_TRAIN_GENERATION_MESSAGE);
+  }
+  throw error;
 }
 
 function fillReportKey(providerId: string, portalKey: string): string {
@@ -1460,23 +1492,28 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           rows.push(row);
           continue;
         }
-        await proposeSharedFieldMap({
-          portal_key: current.portalKey,
-          selector: row.selector,
-          // The payer's own captured text is what `field_label` means, and a
-          // rename must NOT overwrite it (E6.9 keeps the admin's name in
-          // `display_label`, which the panel's field registry edits by row id).
-          // The ONE exception is a field the portal never labelled at all —
-          // then the trainer's name is the only name there is, and sending an
-          // empty label instead would propose a row nobody can identify.
-          field_label:
-            row.label.trim() || (row.displayLabel ?? "").trim() || null,
-          form_section: row.formSection,
-          page_step: row.pageStep ?? null,
-          field_type: row.fieldType,
-          sort_order: row.sortOrder ?? null,
-          control_options: row.options,
-        });
+        try {
+          await proposeSharedFieldMap({
+            portal_key: current.portalKey,
+            expected_mapping_generation: current.mappingGeneration,
+            selector: row.selector,
+            // The payer's own captured text is what `field_label` means, and a
+            // rename must NOT overwrite it (E6.9 keeps the admin's name in
+            // `display_label`, which the panel's field registry edits by row id).
+            // The ONE exception is a field the portal never labelled at all —
+            // then the trainer's name is the only name there is, and sending an
+            // empty label instead would propose a row nobody can identify.
+            field_label:
+              row.label.trim() || (row.displayLabel ?? "").trim() || null,
+            form_section: row.formSection,
+            page_step: row.pageStep ?? null,
+            field_type: row.fieldType,
+            sort_order: row.sortOrder ?? null,
+            control_options: row.options,
+          });
+        } catch (error) {
+          await throwWithStaleTrainCaptureInvalidated(error, targetRequest);
+        }
         await exactTrainPortal(targetRequest);
         // The shared path returns the row itself, not a learned suggestion —
         // suggestions are org-scoped memory (field_dictionary) and training
@@ -1536,7 +1573,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         targetRevision: request.targetRevision,
       };
       await exactTrainPortal(targetRequest);
-      await proveSharedPortal({ portalKey: request.portalKey });
+      try {
+        await proveSharedPortal({
+          portalKey: request.portalKey,
+          expectedMappingGeneration: request.mappingGeneration,
+        });
+      } catch (error) {
+        await throwWithStaleTrainCaptureInvalidated(error, targetRequest);
+      }
       await exactTrainPortal(targetRequest);
       return null;
     }
