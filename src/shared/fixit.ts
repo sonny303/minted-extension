@@ -47,13 +47,17 @@ export function providerFixPath(providerId: string): string {
   return `/providers/${encodeURIComponent(providerId)}`;
 }
 
+/** Check the exact group-record path shape before it enters a local fill
+ * summary. It is not a general Panel URL sanitizer. */
+export function isExactGroupRecordPath(recordPath: string | undefined): recordPath is string {
+  return !!recordPath && /^\/groups\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(recordPath);
+}
+
 /** Return an absolute link only for the exact group-record route emitted by
  * the Panel. The record path is untrusted response data; reject other paths,
  * origins, query strings, fragments, and URL normalization before rendering. */
 export function groupRecordFixUrl(recordPath: string | undefined, webBaseUrl: string): string | null {
-  if (!recordPath || !/^\/groups\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(recordPath)) {
-    return null;
-  }
+  if (!isExactGroupRecordPath(recordPath)) return null;
   try {
     const base = new URL(webBaseUrl);
     if ((base.protocol !== "https:" && base.protocol !== "http:") || base.username || base.password) {

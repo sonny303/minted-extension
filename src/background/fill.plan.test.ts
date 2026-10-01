@@ -145,12 +145,20 @@ describe("planFill", () => {
         { token: "group.contractingContactEmail", value: "contracts@example.com" },
         { token: "group.contractSignerName", value: "Do Not Substitute" },
         { token: "user.name", value: "Coordinator" },
+        { token: "provider.caqhId", value: null },
       ],
-      unresolved: [{
-        token: "group.contractingContactName",
-        reason: "This Contract group's contracting contact value is missing.",
-        recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
-      }],
+      unresolved: [
+        {
+          token: "group.contractingContactName",
+          reason: "internal resolver detail includes sensitive@example.com",
+          recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+        },
+        {
+          token: "provider.caqhId",
+          reason: "private diagnostic for caqh@example.com",
+          recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+        },
+      ],
       facilities: [],
       selected_facility_id: null,
     };
@@ -160,6 +168,7 @@ describe("planFill", () => {
         map({ id: "contract-email", selector: "#email", token: "group.contractingContactEmail" }),
         map({ id: "signer", selector: "#signer", token: "group.contractSignerName" }),
         map({ id: "submitter", selector: "#submitter", token: "user.name" }),
+        map({ id: "caqh", selector: "#caqh", token: "provider.caqhId" }),
       ],
       contractProfile,
     );
@@ -169,14 +178,65 @@ describe("planFill", () => {
       { mapId: "signer", value: "Do Not Substitute" },
       { mapId: "submitter", value: "Coordinator" },
     ]);
+    expect(plan.manual).toEqual([
+      {
+        label: "Contact",
+        reason: "Contracting contact is missing from the selected Contract group; complete it manually.",
+        mapId: "contract-contact",
+        kind: "no_value",
+        recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+      },
+      {
+        label: "#caqh",
+        reason: "no value in Minted Panel",
+        mapId: "caqh",
+        kind: "no_value",
+      },
+    ]);
+    const telemetry = sanitizeLegacyFields(plan.manual);
+    expect(JSON.stringify(plan.manual)).not.toContain("sensitive@example.com");
+    expect(JSON.stringify(plan.manual)).not.toContain("private diagnostic");
+    expect(JSON.stringify(telemetry)).not.toContain("/groups/");
+    expect(JSON.stringify(telemetry)).not.toContain("sensitive@example.com");
+
+    const invalidPathPlan = planFill(
+      [map({ id: "contact-invalid-path", selector: "label:Contact", token: "group.contractingContactName" })],
+      {
+        ...contractProfile,
+        unresolved: [{
+          token: "group.contractingContactName",
+          reason: "untrusted server text",
+          recordPath: "/providers/private-record",
+        }],
+      },
+    );
+    expect(invalidPathPlan.manual[0]).not.toHaveProperty("recordPath");
+  });
+
+  it("keeps ordinary CAQH unresolved details out of the fill summary and telemetry", () => {
+    const privateReason = "empty on provider; internal note: caqh@example.com";
+    const ordinaryProfile: ProviderProfileResponse = {
+      ...profile,
+      tokens: [{ token: "provider.caqhId", value: null }],
+      unresolved: [{
+        token: "provider.caqhId",
+        reason: privateReason,
+        recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
+      }],
+    };
+    const plan = planFill(
+      [map({ id: "caqh", selector: "#caqh", token: "provider.caqhId" })],
+      ordinaryProfile,
+    );
+
     expect(plan.manual).toEqual([{
-      label: "Contact",
-      reason: "This Contract group's contracting contact value is missing.",
-      mapId: "contract-contact",
+      label: "#caqh",
+      reason: "no value in Minted Panel",
+      mapId: "caqh",
       kind: "no_value",
-      recordPath: "/groups/123e4567-e89b-12d3-a456-426614174000",
     }]);
-    expect(sanitizeLegacyFields(plan.manual)[0]).not.toHaveProperty("recordPath");
+    expect(JSON.stringify(plan.manual)).not.toContain(privateReason);
+    expect(JSON.stringify(sanitizeLegacyFields(plan.manual))).not.toContain(privateReason);
   });
 
   it("keeps Contract-only contact data out of an Enrollment configuration plan", () => {

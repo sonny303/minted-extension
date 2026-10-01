@@ -51,6 +51,15 @@ import {
   type FillEventV2FieldOutcome,
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
+import { isExactGroupRecordPath } from "../shared/fixit";
+
+const CONTRACT_CONTACT_TOKENS = new Set([
+  "group.contractingContactName",
+  "group.contractingContactTitle",
+  "group.contractingContactEmail",
+]);
+const CONTRACT_CONTACT_MISSING_REASON =
+  "Contracting contact is missing from the selected Contract group; complete it manually.";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -316,13 +325,16 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
     if (raw == null || raw === "") {
-      const unresolved = map.source === "token" && map.token != null
+      const unresolved = map.source !== "hardcoded" && map.token != null
         ? unresolvedByToken.get(map.token)
         : undefined;
-      // user.name resolves from the caller's auth metadata (the server notes
-      // the empty in meta.notes, not in unresolved) — tell the user where to
-      // fix it rather than the generic no-value line.
-      const reason = unresolved?.reason ?? "no value in Minted Panel";
+      // Do not echo arbitrary profile-service detail into the fill report.
+      // The only contextual override is a fixed, client-owned message for an
+      // unresolved Contract contact from an authorized Contract profile.
+      const isContractContact = profile.contract_context != null &&
+        map.token != null && CONTRACT_CONTACT_TOKENS.has(map.token) && unresolved != null;
+      const reason = isContractContact ? CONTRACT_CONTACT_MISSING_REASON : "no value in Minted Panel";
+      const recordPath = unresolved?.recordPath;
       // A DATA gap: mapped, but the value is missing on the provider/case —
       // routes to the provider record, not the mapping flow (F4.3.3).
       manual.push({
@@ -330,7 +342,9 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
         reason,
         mapId: map.id,
         kind: "no_value",
-        ...(unresolved?.recordPath ? { recordPath: unresolved.recordPath } : {}),
+        ...(isContractContact && isExactGroupRecordPath(recordPath)
+          ? { recordPath }
+          : {}),
       });
       continue;
     }
