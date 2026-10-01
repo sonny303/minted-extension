@@ -369,10 +369,13 @@ async function main() {
       () =>
         evaluate(
           devtools,
-          "document.readyState === 'complete' && document.title === 'Minted Panel Workbench'",
+          "JSON.stringify({url:location.href,readyState:document.readyState,title:document.title})",
           pageSession,
         ),
-      Boolean,
+      (value) => {
+        const page = JSON.parse(value ?? "null");
+        return page?.readyState === "complete" && page.title === "Minted Panel Workbench";
+      },
       "built side panel page",
     );
     assert(pageReady, "Built side panel did not load.");
