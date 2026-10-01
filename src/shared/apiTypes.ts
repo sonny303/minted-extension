@@ -108,6 +108,19 @@ export interface ProfileToken {
 export interface UnresolvedToken {
   token: string;
   reason: string;
+  /** Exact owner record that can resolve this token, when the Panel knows it. */
+  recordPath?: string;
+}
+
+/** Complete selectors echoed from an authorized Contract form-context tuple.
+ * A caller must not construct these from a Contract id or portal URL alone. */
+export interface AuthorizedContractProfileSelectors {
+  contractId: string;
+  assignmentId: string;
+  contextVersion: number;
+  sopTemplateId: string;
+  sopVersion: number;
+  stepIdentity: string;
 }
 
 // The provider's resolvable facility set, carried on the profile response so
@@ -136,6 +149,15 @@ export interface ProviderProfileResponse {
   // The facility the facility.*/assignment.* tokens were resolved from:
   // the ?facilityId when sent, else the provider's sole facility, else null.
   selected_facility_id: string | null;
+  /** Present only when the Panel resolved the profile from an authorized
+   * Contract owner/assignment tuple. */
+  contract_context?: {
+    contract_id: string;
+    assignment_id: string;
+    context_version: number;
+    sop_template_id: string;
+    sop_version: number;
+  };
 }
 
 // GET /api/me/orgs — the caller's own memberships (user-scoped; works BEFORE

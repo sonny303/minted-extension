@@ -7,6 +7,7 @@ import { API_BASE_URL } from "../shared/config";
 import type {
   ApiEnvelope,
   ApiMeta,
+  AuthorizedContractProfileSelectors,
   BatchLearnPortalFieldMapsRequest,
   BatchLearnPortalFieldMapsResponse,
   CaseContext,
@@ -390,19 +391,58 @@ export async function getPortalFieldMaps(portalKey: string): Promise<PortalField
   return (await getPortalFieldMapsWithMeta(portalKey)).maps;
 }
 
+export type ProviderProfileRequestOptions =
+  | {
+      state?: string;
+      facilityId?: string | null;
+      groupId?: string | null;
+      caseId?: string | null;
+      contractContext?: undefined;
+    }
+  | {
+      /** Contract profile group/state derive from owner validation; these
+       * selectors cannot be supplied independently of the full tuple. A
+       * selected facility may accompany that tuple and is membership-checked
+       * by the Panel. */
+      state?: never;
+      facilityId?: string;
+      groupId?: never;
+      caseId?: undefined;
+      contractContext: AuthorizedContractProfileSelectors;
+    };
+
+/** Build only the selectors supported by the Panel route. The Contract arm
+ * accepts a complete authorized tuple; partial identifiers cannot be sent. */
+export function providerProfileSearchParams(options: ProviderProfileRequestOptions = {}): URLSearchParams {
+  const params = new URLSearchParams();
+  if (options.state) params.set("state", options.state);
+  if (options.facilityId) params.set("facilityId", options.facilityId);
+  if (options.groupId) params.set("groupId", options.groupId);
+  if (options.contractContext) {
+    // The typed tuple is supplied only after authorized form-context
+    // selection. M56 still owns tab binding; this query seam alone does not
+    // authorize a live Contract fill or handoff.
+    params.set("contractId", options.contractContext.contractId);
+    params.set("assignmentId", options.contractContext.assignmentId);
+    params.set("contextVersion", String(options.contractContext.contextVersion));
+    params.set("sopTemplateId", options.contractContext.sopTemplateId);
+    params.set("sopVersion", String(options.contractContext.sopVersion));
+    params.set("stepIdentity", options.contractContext.stepIdentity);
+  } else if (options.caseId) {
+    params.set("caseId", options.caseId);
+  }
+  return params;
+}
+
 // PHI-dense payload (unmasked by design for form fill). Never log it.
 // `facilityId` pins the facility.*/assignment.* token source; without it the
 // server auto-resolves a sole facility or flags meta.needs_facility when the
 // provider has several. Meta is returned so callers can read that flag.
 export async function getProviderProfile(
   providerId: string,
-  options: { state?: string; facilityId?: string | null; groupId?: string | null; caseId?: string | null } = {},
+  options: ProviderProfileRequestOptions = {},
 ): Promise<{ profile: ProviderProfileResponse; meta: ApiMeta | null }> {
-  const params = new URLSearchParams();
-  if (options.state) params.set("state", options.state);
-  if (options.facilityId) params.set("facilityId", options.facilityId);
-  if (options.groupId) params.set("groupId", options.groupId);
-  if (options.caseId) params.set("caseId", options.caseId);
+  const params = providerProfileSearchParams(options);
   const qs = params.toString();
   const query = qs ? `?${qs}` : "";
   const { data, meta } = await apiFetch<ProviderProfileResponse>(

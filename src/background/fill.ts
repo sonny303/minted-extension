@@ -51,6 +51,15 @@ import {
   type FillEventV2FieldOutcome,
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
+import { isExactGroupRecordPath } from "../shared/fixit";
+
+const CONTRACT_CONTACT_TOKENS = new Set([
+  "group.contractingContactName",
+  "group.contractingContactTitle",
+  "group.contractingContactEmail",
+]);
+const CONTRACT_CONTACT_MISSING_REASON =
+  "Contracting contact is missing from the selected Contract group; complete it manually.";
 
 const STATE_ABBREVS: Record<string, string> = {
   alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
@@ -207,8 +216,11 @@ export function sanitizeLegacyFields(fields: ReportedField[]): ReportedField[] {
   return fields.map((field) => {
     const qualifiedMiss = field.kind === "skipped" && field.reason === "field not found on this page";
     const oldReaderNoEvidence = field.kind === "page_unknown" || field.kind === "unverified";
+    const telemetryField = { ...field };
+    // recordPath is a local UI fix-it destination, not fill-event data.
+    delete telemetryField.recordPath;
     return {
-      ...field,
+      ...telemetryField,
       // Old Panel releases only know these recognized no-evidence kinds. Keep
       // local reports truthful, but project unknown/context states into the
       // legacy hidden bucket so they cannot become inferred drift/success.
@@ -267,6 +279,7 @@ export interface FillPlan {
 
 export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
+  const unresolvedByToken = new Map(profile.unresolved.map((entry) => [entry.token, entry]));
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
@@ -312,13 +325,27 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
     if (raw == null || raw === "") {
-      // user.name resolves from the caller's auth metadata (the server notes
-      // the empty in meta.notes, not in unresolved) — tell the user where to
-      // fix it rather than the generic no-value line.
-      const reason = "no value in Minted Panel";
+      const unresolved = map.source !== "hardcoded" && map.token != null
+        ? unresolvedByToken.get(map.token)
+        : undefined;
+      // Do not echo arbitrary profile-service detail into the fill report.
+      // The only contextual override is a fixed, client-owned message for an
+      // unresolved Contract contact from an authorized Contract profile.
+      const isContractContact = profile.contract_context != null &&
+        map.token != null && CONTRACT_CONTACT_TOKENS.has(map.token) && unresolved != null;
+      const reason = isContractContact ? CONTRACT_CONTACT_MISSING_REASON : "no value in Minted Panel";
+      const recordPath = unresolved?.recordPath;
       // A DATA gap: mapped, but the value is missing on the provider/case —
       // routes to the provider record, not the mapping flow (F4.3.3).
-      manual.push({ label, reason, mapId: map.id, kind: "no_value" });
+      manual.push({
+        label,
+        reason,
+        mapId: map.id,
+        kind: "no_value",
+        ...(isContractContact && isExactGroupRecordPath(recordPath)
+          ? { recordPath }
+          : {}),
+      });
       continue;
     }
 
