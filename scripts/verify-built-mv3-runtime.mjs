@@ -355,7 +355,7 @@ async function main() {
 
     const pageTargetId = (
       await devtools.send("Target.createTarget", {
-        url: `chrome-extension://${extensionId}/sidepanel.html`,
+        url: "about:blank",
         browserContextId: worker.browserContextId,
       })
     ).targetId;
@@ -367,6 +367,15 @@ async function main() {
     ).sessionId;
     await devtools.send("Page.enable", {}, pageSession);
     await devtools.send("Runtime.enable", {}, pageSession);
+    const pageNavigation = await devtools.send(
+      "Page.navigate",
+      { url: `chrome-extension://${extensionId}/sidepanel.html` },
+      pageSession,
+    );
+    assert(
+      !pageNavigation.errorText,
+      `Built side panel navigation failed: ${pageNavigation.errorText}`,
+    );
     const pageReady = await poll(
       () =>
         evaluate(
