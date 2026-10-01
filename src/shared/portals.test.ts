@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { matchPortalByUrl, portalOriginPatterns } from "./portals";
+import {
+  bestPortalCandidatesByUrl,
+  matchPortalByUrl,
+  portalCandidatesByUrl,
+  portalKeyEligibleForUrl,
+  portalOriginPatterns,
+} from "./portals";
 import type { PortalRegistryRow } from "./apiTypes";
 
 function row(overrides: Partial<PortalRegistryRow>): PortalRegistryRow {
@@ -85,6 +91,25 @@ describe("matchPortalByUrl", () => {
       rows,
     );
     expect(hit?.key).toBe("enroll");
+  });
+
+  it("keeps all equal-URL candidates and orders specific paths first", () => {
+    const rows = [
+      row({ portalKey: "host", formUrl: "https://provider.example.com/" }),
+      row({ portalKey: "contract", formUrl: "https://provider.example.com/enroll", caseType: "contract" }),
+      row({ portalKey: "enrollment", formUrl: "https://provider.example.com/enroll", caseType: "enrollment" }),
+    ];
+    const all = portalCandidatesByUrl("https://provider.example.com/enroll/step2?x=1", rows);
+    expect(all.map((candidate) => candidate.key)).toEqual(["contract", "enrollment", "host"]);
+    expect(bestPortalCandidatesByUrl("https://provider.example.com/enroll/step2", rows).map((x) => x.key)).toEqual([
+      "contract",
+      "enrollment",
+    ]);
+  });
+
+  it("enforces a path boundary for candidate eligibility", () => {
+    const rows = [row({ portalKey: "enroll", formUrl: "https://provider.example.com/enroll" })];
+    expect(portalKeyEligibleForUrl("enroll", "https://provider.example.com/enrollment", rows)).toBe(false);
   });
 });
 

@@ -25,6 +25,8 @@ function portal(over: Partial<PortalRegistryRow> = {}): PortalRegistryRow {
     name: "National Health Plan join",
     payerId: "payer-1",
     payerName: "National Health Plan",
+    caseType: null,
+    mappingGeneration: null,
     formUrl: "https://payer.example/enroll/start",
     isVerified: false,
     lastVerifiedAt: null,
@@ -147,6 +149,40 @@ describe("recognizeForm", () => {
     if (result.kind === "existing") expect(result.portal.key).toBe("national_join");
   });
 
+  it("reports same-URL configurations as ambiguous rather than choosing by row order", () => {
+    const rows = [
+      portal({ portalKey: "contract", name: "Aetna Contract", caseType: "contract" }),
+      portal({ id: "p2", portalKey: "enrollment", name: "Aetna Enrollment", caseType: "enrollment" }),
+    ];
+    const result = recognizeForm("https://payer.example/enroll/start", rows, "National Health Plan");
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind === "ambiguous") {
+      expect(result.candidates.map((candidate) => candidate.key)).toEqual(["contract", "enrollment"]);
+    }
+    expect(recognizeForm("https://payer.example/enroll/start", [...rows].reverse(), "National Health Plan")).toEqual(result);
+  });
+
+  it("keeps overlapping URL prefixes ambiguous even when one is more specific", () => {
+    const broad = portal({ portalKey: "aetna_contract", formUrl: "https://payer.example/enroll" });
+    const narrow = portal({
+      id: "p2",
+      portalKey: "aetna_enrollment",
+      formUrl: "https://payer.example/enroll/provider",
+    });
+    const url = "https://payer.example/enroll/provider/start";
+    const result = recognizeForm(url, [broad, narrow], "National Health Plan");
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind === "ambiguous") {
+      // Specificity is display ordering only; it does not discard the broad
+      // configuration whose URL rule also permits this page.
+      expect(result.candidates.map((candidate) => candidate.key)).toEqual([
+        "aetna_enrollment",
+        "aetna_contract",
+      ]);
+    }
+    expect(recognizeForm(url, [narrow, broad], "National Health Plan")).toEqual(result);
+  });
+
   it("greets an unmatched page as new, with a candidate name", () => {
     const result = recognizeForm("https://other.example/apply", rows, "Example Insurance Co.");
     expect(result).toEqual({ kind: "new", candidateName: "Example Insurance Co. form" });
@@ -249,10 +285,10 @@ describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", 
     expect(view).toMatchObject({
       status: "mismatch",
       portal: null,
-      selectedName: "National Health Plan join",
+      selectedName: "National Health Plan join · Unclassified · national_join",
     });
     if (view.status !== "mismatch") throw new Error("expected mismatch");
-    expect(view.recognitionText).toBe(trainMismatchRecognitionText("National Health Plan join"));
+    expect(view.recognitionText).toBe(trainMismatchRecognitionText(view.selectedName));
     expect(view.recognitionText).not.toMatch(/New form/i);
     expect(view.recognitionText).not.toMatch(/form 2/i);
     expect(view.hintText).toBe(TRAIN_MISMATCH_HINT);
@@ -271,6 +307,102 @@ describe("resolveTrainRecognition — TRAIN-DUAL D-TD.1 C amended + D-TD.3 C1", 
       expect(view.recognitionText).toContain("New form");
       expect(view.portal).toBeNull();
     }
+  });
+
+  it("requires a choice for same-URL candidates and allows the exact selection in any order", () => {
+    const contract = portal({ portalKey: "aetna_contract", name: "Aetna Contract", caseType: "contract" });
+    const enrollment = portal({
+      id: "p2",
+      portalKey: "aetna_enrollment",
+      name: "Aetna Enrollment",
+      caseType: "enrollment",
+      mappingGeneration: 4,
+    });
+    const url = "https://payer.example/enroll/start";
+    const ambiguous = resolveTrainRecognition({ url, rows: [contract, enrollment], payerName: null, selectedPortalKey: "" });
+    expect(ambiguous.status).toBe("ambiguous");
+    if (ambiguous.status === "ambiguous") expect(ambiguous.candidates).toHaveLength(2);
+
+    const selected = resolveTrainRecognition({ url, rows: [enrollment, contract], payerName: null, selectedPortalKey: "aetna_contract" });
+    expect(selected).toMatchObject({ status: "matched", selected: true, portal: { key: "aetna_contract", caseType: "contract", mappingGeneration: 1 } });
+
+    const invalid = resolveTrainRecognition({
+      url: "https://payer.example/enrollment/start",
+      rows: [contract, enrollment],
+      payerName: null,
+      selectedPortalKey: "aetna_contract",
+    });
+    expect(invalid.status).toBe("mismatch");
+  });
+
+  it("requires an exact choice for overlapping paths but accepts either eligible key", () => {
+    const broad = portal({
+      portalKey: "aetna_contract",
+      name: "Aetna Contract",
+      caseType: "contract",
+      formUrl: "https://payer.example/enroll",
+    });
+    const narrow = portal({
+      id: "p2",
+      portalKey: "aetna_enrollment",
+      name: "Aetna Enrollment",
+      caseType: "enrollment",
+      formUrl: "https://payer.example/enroll/provider",
+    });
+    const url = "https://payer.example/enroll/provider/start";
+    const ambiguous = resolveTrainRecognition({
+      url,
+      rows: [broad, narrow],
+      payerName: null,
+      selectedPortalKey: "",
+    });
+    expect(ambiguous.status).toBe("ambiguous");
+    if (ambiguous.status === "ambiguous") {
+      expect(ambiguous.candidates.map((candidate) => candidate.key)).toEqual([
+        "aetna_enrollment",
+        "aetna_contract",
+      ]);
+    }
+
+    const selectedBroad = resolveTrainRecognition({
+      url,
+      rows: [narrow, broad],
+      payerName: null,
+      selectedPortalKey: "aetna_contract",
+    });
+    expect(selectedBroad).toMatchObject({
+      status: "matched",
+      selected: true,
+      portal: { key: "aetna_contract", caseType: "contract" },
+    });
+    const selectedNarrow = resolveTrainRecognition({
+      url,
+      rows: [broad, narrow],
+      payerName: null,
+      selectedPortalKey: "aetna_enrollment",
+    });
+    expect(selectedNarrow).toMatchObject({
+      status: "matched",
+      selected: true,
+      portal: { key: "aetna_enrollment", caseType: "enrollment" },
+    });
+  });
+
+  it("limits unselected URL candidates to the selected payer", () => {
+    const national = portal({ portalKey: "national_join", payerName: "National Health Plan" });
+    const aetna = portal({
+      id: "p2",
+      portalKey: "aetna_join",
+      payerName: "Aetna",
+      caseType: "enrollment",
+    });
+    const view = resolveTrainRecognition({
+      url: "https://payer.example/enroll/start",
+      rows: [aetna, national],
+      payerName: "Aetna",
+      selectedPortalKey: "",
+    });
+    expect(view).toMatchObject({ status: "matched", portal: { key: "aetna_join" } });
   });
 
   it("asks for a tab when there is no URL", () => {
@@ -317,6 +449,16 @@ describe("captureKeyAgreesWithTabUrl — shared-library invariant", () => {
       captureKeyAgreesWithTabUrl("national_other", "https://payer.example/enroll/start", two),
     ).toBe(false);
   });
+
+  it("requires explicit selection when URL prefixes overlap, while allowing either selected key", () => {
+    const two = [
+      portal({ portalKey: "host", formUrl: "https://payer.example/" }),
+      portal({ id: "p2", portalKey: "specific", formUrl: "https://payer.example/enroll" }),
+    ];
+    expect(captureKeyAgreesWithTabUrl("host", "https://payer.example/enroll/start", two)).toBe(true);
+    expect(captureKeyAgreesWithTabUrl("specific", "https://payer.example/enroll/start", two)).toBe(true);
+    expect(capturePortalKeyForUrl("https://payer.example/enroll/start", two)).toBeNull();
+  });
 });
 
 describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
@@ -330,7 +472,7 @@ describe("decideCaptureStart — click-time START_CAPTURE gate", () => {
         tabUrl: "https://payer.example/enroll/start",
         rows,
       }),
-    ).toEqual({ ok: true, tabId: 42, portalKey: "national_join" });
+    ).toEqual({ ok: true, tabId: 42, portalKey: "national_join", mappingGeneration: 1 });
   });
 
   it("rejects a mismatched tab without authorizing START_CAPTURE", () => {

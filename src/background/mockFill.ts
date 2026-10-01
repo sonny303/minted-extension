@@ -86,10 +86,14 @@ export async function fillMockPortal(input: {
   tabId: number;
   portalKey: string;
   orgId: string | null;
+  /** Revalidates the exact Train/Test target across asynchronous boundaries. */
+  validateTarget?: () => Promise<void>;
 }): Promise<MockDryRunSummary> {
   const startedAt = new Date().toISOString();
   const fillSessionId = crypto.randomUUID();
+  await input.validateTarget?.();
   const { maps, fillEventV2 } = await listSharedFieldMapsWithMeta(input.portalKey);
+  await input.validateTarget?.();
   const plan = planMockFill(maps);
 
   try {
@@ -116,6 +120,7 @@ export async function fillMockPortal(input: {
     );
   }
 
+  await input.validateTarget?.();
   let pageResult: FillPageResult;
   try {
     // Always capture local truth; only serialization is capability-gated.
@@ -131,6 +136,7 @@ export async function fillMockPortal(input: {
     );
   }
 
+  await input.validateTarget?.();
   const completedAt = new Date().toISOString();
   const notChecked = pageResult.skipped.filter((field) => ["other_page", "page_unknown", "hidden", "unverified"].includes(String(field.kind)));
   const skipped = pageResult.skipped.filter((field) => !notChecked.includes(field));
@@ -152,6 +158,7 @@ export async function fillMockPortal(input: {
   let resultId: string | null = null;
   try {
     if (fillEventV2 && !telemetry) throw new Error(logError ?? "Fill telemetry validation failed; telemetry was not recorded.");
+    await input.validateTarget?.();
     resultId = await postSharedTestFill({
       id: fillSessionId,
       portalKey: input.portalKey,
@@ -168,6 +175,7 @@ export async function fillMockPortal(input: {
       ? FILL_EVENT_V2_LIMIT_ERROR
       : "Mock fill ran, but telemetry could not be recorded.";
   }
+  await input.validateTarget?.();
   // R1 has no semantic readback, so a setter-accepted synthetic run cannot be
   // called passed even when the V2 server capability is absent.
   const pass = localVerified > 0 && plan.gaps.length === 0 && skipped.length === 0;

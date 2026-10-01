@@ -156,6 +156,8 @@ export function applyRowEdit(
 
 export interface CaptureSession {
   portalKey: string;
+  /** Exact M52 current-map generation at capture start (legacy = generation 1). */
+  mappingGeneration: number;
   /** The SOP template step this capture was started from, when it was. */
   templateStepId: string | null;
   startedAt: string;
@@ -213,6 +215,14 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
   if (raw == null || typeof raw !== "object") return null;
   const s = raw as Record<string, unknown>;
   if (typeof s.portalKey !== "string" || !s.portalKey) return null;
+  const rawGeneration = s.mappingGeneration;
+  const mappingGeneration =
+    rawGeneration == null
+      ? 1
+      : Number.isSafeInteger(rawGeneration) && typeof rawGeneration === "number" && rawGeneration > 0
+        ? rawGeneration
+        : null;
+  if (mappingGeneration == null) return null;
   if (!Array.isArray(s.rows)) return null;
   const rows: CaptureRow[] = [];
   for (const item of s.rows) {
@@ -241,10 +251,22 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
   }
   return {
     portalKey: s.portalKey,
+    mappingGeneration,
     templateStepId: typeof s.templateStepId === "string" ? s.templateStepId : null,
     startedAt: typeof s.startedAt === "string" ? s.startedAt : new Date(0).toISOString(),
     rows,
   };
+}
+
+export function captureSessionMatchesTarget(
+  session: Pick<CaptureSession, "portalKey" | "mappingGeneration"> | null | undefined,
+  target: { portalKey: string | null; mappingGeneration: number | null },
+): boolean {
+  return session != null &&
+    target.portalKey != null &&
+    target.mappingGeneration != null &&
+    session.portalKey === target.portalKey &&
+    session.mappingGeneration === target.mappingGeneration;
 }
 
 /** What a restored session tells the user it recovered (S5.2: "restored state

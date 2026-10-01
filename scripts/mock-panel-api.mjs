@@ -524,6 +524,9 @@ export async function createMockPanelApi(options = {}) {
         name: "National Health Plan — Request to Join",
         payerId: "payer-national",
         payerName: "National Health Plan",
+        caseType: null,
+        mappingGeneration: null,
+        requiresExplicitSelection: false,
         formUrl: "https://portal.example.com/national/join/start",
         isVerified: false,
         lastVerifiedAt: null,
@@ -909,9 +912,22 @@ export async function createMockPanelApi(options = {}) {
     if (/^\/api\/shared-portals\/?$/.test(url.pathname)) {
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
       state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
-      return envelope(res, 200, state.sharedPortals, null, {
-        total: state.sharedPortals.length,
-      });
+      const selection = url.searchParams.get("selection");
+      if (selection != null && selection !== "explicit") {
+        return envelope(res, 422, null, "selection must be explicit when provided");
+      }
+      const requestedKey = url.searchParams.get("portal_key");
+      if (selection === "explicit" && requestedKey != null) {
+        if (!requestedKey.trim()) return envelope(res, 422, null, "portal_key must be a non-empty configuration key");
+        const exact = state.sharedPortals.filter((row) => row.portalKey === requestedKey);
+        if (exact.length === 0) return envelope(res, 404, null, "Form configuration not found");
+        if (exact.length > 1) return envelope(res, 409, null, "Form configuration key is ambiguous");
+        return envelope(res, 200, exact, null, { total: exact.length });
+      }
+      const rows = selection === "explicit"
+        ? state.sharedPortals
+        : state.sharedPortals.filter((row) => row.requiresExplicitSelection !== true);
+      return envelope(res, 200, rows, null, { total: rows.length });
     }
     if (/^\/api\/shared-portals\/prove\/?$/.test(url.pathname)) {
       state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
@@ -940,6 +956,16 @@ export async function createMockPanelApi(options = {}) {
       state.sharedOrgHeaders.push(req.headers["x-org-id"] ?? null);
       if (method === "GET") {
         const portalKey = url.searchParams.get("portal_key");
+        const selection = url.searchParams.get("selection");
+        if (selection != null && selection !== "explicit") {
+          return envelope(res, 422, null, "selection must be explicit when provided");
+        }
+        if (selection === "explicit" && !portalKey) {
+          return envelope(res, 422, null, "portal_key is required for explicit selection");
+        }
+        if (selection === "explicit" && !state.sharedPortals.some((row) => row.portalKey === portalKey)) {
+          return envelope(res, 404, null, "Form configuration not found");
+        }
         let rows = state.sharedMaps;
         if (portalKey) rows = rows.filter((r) => r.portalKey === portalKey);
         return envelope(res, 200, rows, null, { total: rows.length });

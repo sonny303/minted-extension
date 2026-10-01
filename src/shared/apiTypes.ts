@@ -159,6 +159,14 @@ export interface PortalRegistryRow {
   portalKey: string;
   name: string;
   payerId: string | null;
+  /** Business purpose from the exact shared configuration. Legacy rows are
+   * unclassified; never infer their type from the name or registry position. */
+  caseType?: "contract" | "enrollment" | "recredentialing" | null;
+  /** Current server mapping generation. NULL/absent is legacy generation 1. */
+  mappingGeneration?: number | null;
+  /** True when this shared configuration is visible only to clients that
+   * explicitly select its exact portal key. */
+  requiresExplicitSelection?: boolean;
   /** The payer's display name, embedded by the /api projection (E6.9) so the
    * Train-forms picker can group by payer without a payer endpoint of its own.
    * Optional: a server that predates it degrades to an ungrouped list. */
