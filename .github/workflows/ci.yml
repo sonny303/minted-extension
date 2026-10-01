@@ -19,4 +19,12 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
-      - run: npm run test:runtime
+      - name: Install Chrome for Testing
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+      - name: Verify built MV3 runtime
+        run: npm run test:runtime
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
