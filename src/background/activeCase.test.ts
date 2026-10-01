@@ -9,6 +9,7 @@ import {
   SET_ACTIVE_CASE_MESSAGE_FIXTURE,
 } from "../testFixtures/extensionHandoff";
 import {
+  ACTIVE_CASE_KEY,
   assertCaseWriteMatchesActiveCase,
   assertFillMatchesActiveCase,
   clearActiveCase,
@@ -115,6 +116,59 @@ describe("P06 receiver persistence and reply truth", () => {
       ),
     ).toBe(true);
     await vi.waitFor(() => expect(replies).toEqual([{ ok: false }]));
+  });
+});
+
+describe("active-case Chrome tab listener failures", () => {
+  it("contains rejected storage work from update, activation, and removal events", async () => {
+    const timestamp = new Date().toISOString();
+    stub.sessionStore.set(ACTIVE_CASE_KEY, {
+      caseId: CASE_A,
+      providerId: "cb9d11d7-8b1d-4db0-a83b-0b6db10a50b2",
+      orgId: ORG_ID,
+      portalUrl: "https://portal.example/login",
+      portalKey: "regional_enrollment",
+      facilityId: FACILITY_ID,
+      source: "handoff",
+      boundTabId: 41,
+      tabClosedAt: null,
+      createdAt: timestamp,
+      lastActivityAt: timestamp,
+    });
+    registerActiveCaseListeners();
+
+    const cases = [
+      {
+        getListener: () => stub.events.tabUpdated.listeners.at(-1),
+        fire: (listener: ((...args: unknown[]) => unknown) | undefined) =>
+          listener?.(41, { url: "https://portal.example/login" }, {}),
+      },
+      {
+        getListener: () => stub.events.tabActivated.listeners.at(-1),
+        fire: (listener: ((...args: unknown[]) => unknown) | undefined) =>
+          listener?.({ tabId: 41, windowId: 7 }),
+      },
+      {
+        getListener: () => stub.events.tabRemoved.listeners.at(-1),
+        fire: (listener: ((...args: unknown[]) => unknown) | undefined) => listener?.(41),
+      },
+    ];
+
+    for (const [index, listenerCase] of cases.entries()) {
+      let storageAttempted!: () => void;
+      const attempted = new Promise<void>((resolve) => {
+        storageAttempted = resolve;
+      });
+      stub.queueSessionSet(async () => {
+        storageAttempted();
+        throw new Error(`synthetic session write failure ${index}`);
+      });
+      listenerCase.fire(listenerCase.getListener());
+      await attempted;
+      // Let Node/Vitest process the rejected listener promise. An unhandled
+      // rejection fails the test; handled best-effort tab events stay quiet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   });
 });
 
