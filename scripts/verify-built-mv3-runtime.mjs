@@ -156,7 +156,7 @@ async function poll(read, accept, label, timeoutMs = 15_000) {
     await delay(100);
   }
   throw new Error(
-    `Timed out waiting for ${label}${last ? ` (${String(last)})` : ""}.`,
+    `Timed out waiting for ${label}${last ? ` (${last instanceof Error ? last.message : JSON.stringify(last)})` : ""}.`,
   );
 }
 
