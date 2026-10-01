@@ -555,7 +555,7 @@ async function main() {
       const encoded = JSON.stringify(JSON.stringify(message));
       const result = await evaluate(
         devtools,
-        `JSON.stringify(await chrome.runtime.sendMessage(JSON.parse(${encoded})))`,
+        `chrome.runtime.sendMessage(JSON.parse(${encoded})).then(result => JSON.stringify(result))`,
         pageSession,
       );
       return JSON.parse(result);
