@@ -260,6 +260,7 @@ async function main() {
       manifest.background?.type === "module",
     "Built package has no MV3 module service worker.",
   );
+  assert(existsSync(join(DIST, "sidepanel.html")), "Built side panel page is missing.");
 
   const chromePath = findChrome();
   const profileDir = await mkdtemp(join(tmpdir(), "minted-m22-chrome-"));
@@ -355,6 +356,7 @@ async function main() {
     const pageTargetId = (
       await devtools.send("Target.createTarget", {
         url: `chrome-extension://${extensionId}/sidepanel.html`,
+        browserContextId: worker.browserContextId,
       })
     ).targetId;
     const pageSession = (
