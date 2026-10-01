@@ -33,6 +33,7 @@ import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
 import type { SelectorMatchReport } from "./selectorMatch";
+import type { TrainTargetState } from "./trainTarget";
 
 // Distinct from an unselected/loading case; never sent to the Panel API.
 export const AD_HOC_CASE_SELECTION = "__ad_hoc__";
@@ -58,16 +59,18 @@ export type BgRequest =
   // call already in flight.
   | { type: "GET_PANEL_MODE" }
   | { type: "SET_PANEL_MODE"; mode: PanelMode }
+  | { type: "GET_TRAIN_TARGET" }
+  | { type: "SET_TRAIN_TARGET"; portalKey: string | null; mappingGeneration: number | null }
   | { type: "LIST_PROVIDERS" }
   // S3.2: the DB-driven portal registry (own-org + global rows) — page
   // recognition and the PROVEN chip read from these, never a bundled list.
   | { type: "LIST_PORTALS" }
   // E6.9 F6.9.9: the SHARED (global) registry + one form's shared field maps.
   // Train forms has no org, so it cannot use the org-scoped reads above.
-  | { type: "LIST_SHARED_PORTALS" }
-  | { type: "LIST_SHARED_FIELD_MAPS"; portalKey: string }
-  | { type: "RUN_MOCK_DRY_RUN"; tabId: number; portalKey: string }
-  | { type: "MARK_PORTAL_PROVEN"; portalKey: string }
+  | { type: "LIST_SHARED_PORTALS"; portalKey?: string }
+  | { type: "LIST_SHARED_FIELD_MAPS"; portalKey: string; mappingGeneration: number; targetRevision: number }
+  | { type: "RUN_MOCK_DRY_RUN"; tabId: number; portalKey: string; mappingGeneration: number; targetRevision: number }
+  | { type: "MARK_PORTAL_PROVEN"; portalKey: string; mappingGeneration: number; targetRevision: number }
   | { type: "LIST_CASES"; providerId: string }
   // E4.3 F4.3.5: the unified standalone search — the worker queries
   // GET /api/cases?q= and GET /api/providers?search= CONCURRENTLY and returns
@@ -81,7 +84,7 @@ export type BgRequest =
   // selectors ONLY) and asks the server what it already knows about each
   // label; SEND proposes the undecided rows; the session survives a worker
   // restart in chrome.storage.session (nothing PHI-bearing is ever in it).
-  | { type: "GET_CAPTURE" }
+  | { type: "GET_CAPTURE"; portalKey: string; mappingGeneration: number; targetRevision: number }
   // E6.9 F6.9.8 / BITE-CAP-05: `pageStep` is the CANDIDATE name for a new
   // page (from derivePageStep); the background may reuse an existing page
   // instead via identifyCapturePage. `pageUrlTail` and `captureMode` are
@@ -91,12 +94,14 @@ export type BgRequest =
       type: "START_CAPTURE";
       tabId: number;
       portalKey: string;
+      mappingGeneration: number;
+      targetRevision: number;
       templateStepId?: string | null;
       pageStep?: string | null;
       pageUrlTail?: string | null;
       captureMode?: "auto" | "next-page";
     }
-  | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null }
+  | { type: "SET_CAPTURE_CHOICE"; selector: string; token: string | null; portalKey: string; mappingGeneration: number; targetRevision: number }
   // 2026-08-19 manual mapping. A scan only sees what is on the page at that
   // moment and wired well enough to recognise, so these let a trainer add and
   // correct fields by hand rather than discard the capture. All of them work
@@ -108,6 +113,9 @@ export type BgRequest =
   | {
       type: "PICK_CAPTURE_FIELD";
       tabId: number;
+      portalKey: string;
+      mappingGeneration: number;
+      targetRevision: number;
       pageStep?: string | null;
       displayLabel?: string | null;
     }
@@ -120,19 +128,25 @@ export type BgRequest =
   | {
       type: "EDIT_CAPTURE_ROW";
       selector: string;
+      portalKey: string;
+      mappingGeneration: number;
+      targetRevision: number;
       displayLabel?: string | null;
       fieldType?: PortalFieldType;
       newSelector?: string;
     }
-  | { type: "REMOVE_CAPTURE_ROW"; selector: string }
+  | { type: "REMOVE_CAPTURE_ROW"; selector: string; portalKey: string; mappingGeneration: number; targetRevision: number }
   // Bulk delete is ONE write, not N: a partial failure mid-loop would leave
   // the panel's list and the stored session disagreeing.
-  | { type: "REMOVE_CAPTURE_ROWS"; selectors: string[] }
+  | { type: "REMOVE_CAPTURE_ROWS"; selectors: string[]; portalKey: string; mappingGeneration: number; targetRevision: number }
   // `highlight` also flashes the matches green on the page.
   | {
       type: "TEST_CAPTURE_SELECTOR";
       tabId: number;
       selector: string;
+      portalKey: string;
+      mappingGeneration: number;
+      targetRevision: number;
       highlight?: boolean;
     }
   // US-5.3 — reset the portal form. Sandbox-only at the UI (the button does
@@ -152,8 +166,8 @@ export type BgRequest =
       state: string | null;
       facilityId: string | null;
     }
-  | { type: "SEND_CAPTURE" }
-  | { type: "CLEAR_CAPTURE" }
+  | { type: "SEND_CAPTURE"; portalKey: string; mappingGeneration: number; targetRevision: number }
+  | { type: "CLEAR_CAPTURE"; portalKey: string; mappingGeneration: number; targetRevision: number }
   // S4.3: tick one SOP step complete. The server enforces the ordering rule
   // and returns a 409 naming the blocker — the panel never re-derives it.
   | { type: "COMPLETE_TASK_STEP"; taskId: string; stepId: string }
@@ -369,6 +383,8 @@ export interface BgResponseMap {
   SET_ACTIVE_ORG_FOR_HANDOFF: boolean;
   GET_PANEL_MODE: PanelMode;
   SET_PANEL_MODE: null;
+  GET_TRAIN_TARGET: TrainTargetState;
+  SET_TRAIN_TARGET: TrainTargetState;
   LIST_PROVIDERS: ProviderListItem[];
   LIST_PORTALS: PortalRegistryRow[];
   LIST_SHARED_PORTALS: PortalRegistryRow[];

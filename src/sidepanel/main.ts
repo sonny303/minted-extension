@@ -33,6 +33,8 @@ import { formatDisplayDate, looksLikeIsoDate } from "../shared/detailFields";
 import {
   matchPortalByUrl,
   portalOriginPatterns,
+  portalKeyEligibleForUrl,
+  toMatchedPortal,
   type MatchedPortal,
 } from "../shared/portals";
 import type {
@@ -82,6 +84,7 @@ import {
 } from "../shared/caqh";
 import {
   canSendCapture,
+  captureSessionMatchesTarget,
   captureCounts,
   CAPTURE_FIELD_TYPES,
   isNamedRow,
@@ -119,6 +122,7 @@ import {
   derivePageStep,
   formCaptureState,
   pageUrlTail,
+  portalTargetLabel,
   resolveTrainRecognition,
 } from "../shared/trainForms";
 import {
@@ -375,7 +379,14 @@ let sharedPortalRows: PortalRegistryRow[] = [];
 // The shared field maps of the recognized form, for the "what this form
 // already has" read-out. Empty for a form nothing has captured yet.
 let trainFormMaps: PortalFieldMap[] = [];
-let lastMockDryRunPortalKey: string | null = null;
+let lastMockDryRunTarget: string | null = null;
+let trainTargetIdentity: string | null = null;
+let trainTargetRevision: number | null = null;
+let desiredTrainTargetIdentity: string | null = null;
+let trainTargetSyncTail: Promise<void> = Promise.resolve();
+let trainRecognitionRevision = 0;
+let trainRegistryRevision = 0;
+let trainUrlCandidates: MatchedPortal[] = [];
 let lastFill: LastFill | null = null;
 // SOP task to close via "Mark submitted", matched from portalTasks on the case
 // against the current page's portal. null = no match (or user chose none).
@@ -4574,6 +4585,119 @@ let pickInFlight = false;
 // selection the trainer made.
 const batchSelection = new Set<string>();
 
+function trainTargetIdentityFor(portal: Pick<MatchedPortal, "key" | "mappingGeneration"> | null): string | null {
+  return portal == null ? null : `${portal.key}\u0000${portal.mappingGeneration}`;
+}
+
+function clearTrainTargetLocalState(): void {
+  captureSession = null;
+  captureAddedPage = false;
+  batchSelection.clear();
+  editingSelector = null;
+  selectorTestResult = null;
+  rowDraft = null;
+  pickInFlight = false;
+  trainFormMaps = [];
+  lastMockDryRunTarget = null;
+  portal = null;
+  portalTabId = null;
+  trainUrlCandidates = [];
+  mockDryRunStatus.hidden = true;
+  clearMockDryRunDetail();
+  captureRestored.hidden = true;
+  captureStart.disabled = false;
+  captureNextPage.disabled = false;
+  captureStart.textContent = "Capture this form";
+  captureSend.disabled = false;
+  captureSend.textContent = "Send for approval";
+  trainRecognition.textContent = "Looking up the selected form…";
+  trainHint.textContent = "";
+  renderTrainDryRun();
+  renderCapture();
+}
+
+/**
+ * Pin the worker to one exact configuration. Requests are queued so a fast
+ * A→B→A picker sequence cannot leave an older SET_TRAIN_TARGET as the worker's
+ * final selection. A key OR generation change clears the local proof/capture.
+ */
+async function syncTrainTarget(
+  target: Pick<MatchedPortal, "key" | "mappingGeneration"> | null,
+): Promise<number | null> {
+  const identity = trainTargetIdentityFor(target);
+  if (desiredTrainTargetIdentity === identity && trainTargetRevision != null) {
+    return trainTargetRevision;
+  }
+  if (desiredTrainTargetIdentity !== identity || trainTargetRevision == null) {
+    if (trainTargetIdentity !== identity) clearTrainTargetLocalState();
+    trainTargetIdentity = identity;
+    trainTargetRevision = null;
+    desiredTrainTargetIdentity = identity;
+  }
+
+  const work = trainTargetSyncTail.then(async () => {
+    if (desiredTrainTargetIdentity !== identity) return null;
+    const response = await sendToBackground({
+      type: "SET_TRAIN_TARGET",
+      portalKey: target?.key ?? null,
+      mappingGeneration: target?.mappingGeneration ?? null,
+    });
+    if (desiredTrainTargetIdentity !== identity) return null;
+    if (!response.ok) {
+      trainTargetRevision = null;
+      setError(mainError, response.error);
+      return null;
+    }
+    trainTargetIdentity = identity;
+    trainTargetRevision = response.data.revision;
+    return trainTargetRevision;
+  });
+  trainTargetSyncTail = work.then(() => undefined, () => undefined);
+  return work;
+}
+
+interface TrainTargetRequestContext {
+  portalKey: string;
+  mappingGeneration: number;
+  targetRevision: number;
+}
+
+function selectedTrainTargetRequest(): TrainTargetRequestContext | null {
+  if (
+    panelMode !== "train" || trainTargetRevision == null ||
+    trainTargetIdentity == null || trainTargetIdentity !== desiredTrainTargetIdentity
+  ) return null;
+  const separator = trainTargetIdentity.lastIndexOf("\u0000");
+  if (separator <= 0) return null;
+  const portalKey = trainTargetIdentity.slice(0, separator);
+  const mappingGeneration = Number(trainTargetIdentity.slice(separator + 1));
+  if (!Number.isSafeInteger(mappingGeneration) || mappingGeneration <= 0) return null;
+  return {
+    portalKey,
+    mappingGeneration,
+    targetRevision: trainTargetRevision,
+  };
+}
+
+function currentTrainTargetRequest(): TrainTargetRequestContext | null {
+  const selected = selectedTrainTargetRequest();
+  if (selected == null || portal == null) return null;
+  return trainTargetIdentityFor(portal) === trainTargetIdentity ? selected : null;
+}
+
+function captureSessionMatchesTrainTarget(
+  session: CaptureSession | null,
+  target: TrainTargetRequestContext | null,
+): session is CaptureSession {
+  return target != null && captureSessionMatchesTarget(session, target);
+}
+
+function isCurrentTrainTargetRequest(target: TrainTargetRequestContext): boolean {
+  return trainTargetRevision === target.targetRevision &&
+    trainTargetIdentity === `${target.portalKey}\u0000${target.mappingGeneration}` &&
+    desiredTrainTargetIdentity === trainTargetIdentity;
+}
+
 // Sandbox mode active (test provider, no case). Panel-only state: it is a way of
 // WORKING, not a stored selection, and it must never survive into a real case
 // (switching provider or case leaves it, below).
@@ -4593,7 +4717,12 @@ function localToday(): string {
 function renderCapture(): void {
   // Capture UI is Train-forms only.
   const training = isCaptureMode(panelMode);
-  captureSection.hidden = !training || portal == null || portalTabId == null;
+  const target = currentTrainTargetRequest();
+  const captureMatchesTarget =
+    target != null && captureSessionMatchesTrainTarget(captureSession, target);
+  captureSection.hidden =
+    !training || portal == null || portalTabId == null || target == null ||
+    (captureSession != null && !captureMatchesTarget);
   if (captureSection.hidden) return;
 
   const counts = captureCounts(captureSession);
@@ -5013,6 +5142,8 @@ function renderBatchBar(): void {
 }
 
 async function deleteSelectedCaptureRows(): Promise<void> {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   const selectors = [...batchSelection];
   if (selectors.length === 0) return;
   const plural = selectors.length === 1 ? "field" : "fields";
@@ -5038,11 +5169,14 @@ async function deleteSelectedCaptureRows(): Promise<void> {
   const response = await sendToBackground({
     type: "REMOVE_CAPTURE_ROWS",
     selectors,
+    ...target,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   if (!response.ok) {
     setPickStatus(response.error, true);
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   captureSession = response.data;
   batchSelection.clear();
   editingSelector = null;
@@ -5060,15 +5194,20 @@ async function editCaptureRow(
     newSelector?: string;
   },
 ): Promise<void> {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   const response = await sendToBackground({
     type: "EDIT_CAPTURE_ROW",
     selector: row.selector,
     ...patch,
+    ...target,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   if (!response.ok) {
     setPickStatus(response.error, true);
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
@@ -5078,14 +5217,19 @@ async function editCaptureRow(
 }
 
 async function removeCaptureRow(row: CaptureRow): Promise<void> {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   const response = await sendToBackground({
     type: "REMOVE_CAPTURE_ROW",
     selector: row.selector,
+    ...target,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   if (!response.ok) {
     setPickStatus(response.error, true);
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   captureSession = response.data;
   editingSelector = null;
   selectorTestResult = null;
@@ -5094,6 +5238,8 @@ async function removeCaptureRow(row: CaptureRow): Promise<void> {
 }
 
 async function testCaptureSelector(selector: string): Promise<void> {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   if (portalTabId == null) {
     setPickStatus("Open the portal tab to test this field.", true);
     return;
@@ -5106,10 +5252,12 @@ async function testCaptureSelector(selector: string): Promise<void> {
     type: "TEST_CAPTURE_SELECTOR",
     tabId: portalTabId,
     selector,
+    ...target,
     // Flash the matches on the page: a count alone cannot tell the trainer
     // they matched the WRONG control, which is the failure that matters.
     highlight: true,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   if (!response.ok) {
     setPickStatus(response.error, true);
     return;
@@ -5129,7 +5277,8 @@ function setPickStatus(message: string | null, isError = false): void {
  * click the control the scan missed. The panel stays responsive throughout;
  * the pick resolves when they click or press Escape. */
 async function addFieldByPicking(): Promise<void> {
-  if (portalTabId == null || captureSession == null) return;
+  const target = currentTrainTargetRequest();
+  if (portalTabId == null || captureSession == null || !target) return;
   const tabId = portalTabId;
   pickInFlight = true;
   captureAddField.disabled = true;
@@ -5138,13 +5287,16 @@ async function addFieldByPicking(): Promise<void> {
     type: "PICK_CAPTURE_FIELD",
     tabId,
     pageStep: currentCapturePage(),
+    ...target,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   pickInFlight = false;
   captureAddField.disabled = false;
   if (!response.ok) {
     setPickStatus(response.error, true);
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   const before = captureSession?.rows.length ?? 0;
   captureSession = response.data;
   const added = captureSession.rows.length - before;
@@ -5167,7 +5319,8 @@ async function addFieldByPicking(): Promise<void> {
  * says what actually happened instead of implying the library was repaired.
  */
 async function repointLibraryField(entry: CaptureListRow): Promise<void> {
-  if (portalTabId == null || captureSession == null) return;
+  const target = currentTrainTargetRequest();
+  if (portalTabId == null || captureSession == null || !target) return;
   const tabId = portalTabId;
   pickInFlight = true;
   renderCapture();
@@ -5177,13 +5330,16 @@ async function repointLibraryField(entry: CaptureListRow): Promise<void> {
     tabId,
     pageStep: currentCapturePage(),
     displayLabel: entry.name,
+    ...target,
   });
+  if (!isCurrentTrainTargetRequest(target)) return;
   pickInFlight = false;
   if (!response.ok) {
     setPickStatus(response.error, true);
     renderCapture();
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   const before = captureSession?.rows.length ?? 0;
   captureSession = response.data;
   const added = captureSession.rows.length - before;
@@ -5211,14 +5367,17 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
   // Re-query the active tab after awaits so a mid-click tab switch cannot pair
   // a fresh URL with a stale tab id (TRAIN-DUAL review).
   const activePortal = portal;
-  if (portalTabId == null || activePortal == null) return;
+  const target = currentTrainTargetRequest();
+  if (portalTabId == null || activePortal == null || target == null) return;
+  const recognitionRevision = trainRecognitionRevision;
   const generation = loadGeneration;
   captureStart.disabled = true;
   captureNextPage.disabled = true;
   captureStart.textContent = "Reading the form…";
   const tab = await queryActiveTab();
+  if (!isCurrentTrainTargetRequest(target)) return;
   const tabUrl = tab?.url ?? null;
-  const registry = panelMode === "train" ? sharedPortalRows : portalRows;
+  const registry = sharedPortalRows;
   const decision = decideCaptureStart({
     portalKey: activePortal.key,
     tabId: tab?.id ?? null,
@@ -5239,6 +5398,16 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     setError(mainError, CAPTURE_TAB_MISMATCH_ERROR);
     return;
   }
+  if (
+    decision.portalKey !== target.portalKey ||
+    decision.mappingGeneration !== target.mappingGeneration ||
+    recognitionRevision !== trainRecognitionRevision
+  ) {
+    captureStart.disabled = false;
+    captureNextPage.disabled = false;
+    captureStart.textContent = captureSession ? "Re-capture" : "Capture this form";
+    return;
+  }
   // Always send a fresh, collision-free pageStep candidate via derivePageStep;
   // the background decides whether to reuse it via
   // identifyCapturePage after the scan. CAP-HEAD: tab.title is not a wizard
@@ -5255,13 +5424,15 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     type: "START_CAPTURE",
     tabId: decision.tabId,
     portalKey: decision.portalKey,
+    mappingGeneration: decision.mappingGeneration,
+    targetRevision: target.targetRevision,
     pageStep: candidate,
     pageUrlTail: pageUrlTail(tabUrl),
     captureMode: mode,
   });
+  if (!isCurrent(generation) || !isCurrentTrainTargetRequest(target)) return;
   captureStart.disabled = false;
   captureNextPage.disabled = false;
-  if (!isCurrent(generation)) return;
   if (!response.ok) {
     captureStart.textContent = captureSession
       ? "Re-capture"
@@ -5269,6 +5440,7 @@ async function startCapture(mode: "auto" | "next-page"): Promise<void> {
     setError(mainError, response.error);
     return;
   }
+  if (!captureSessionMatchesTrainTarget(response.data, target)) return;
   captureSession = response.data;
   captureAddedPage =
     hadSession && usedPageNames(captureSession).length > pagesBefore;
@@ -5295,26 +5467,36 @@ captureNextPage.addEventListener("click", () => {
 });
 
 captureSend.addEventListener("click", () => {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   const generation = loadGeneration;
   captureSend.disabled = true;
   captureSend.textContent = "Sending…";
   void (async () => {
-    const response = await sendToBackground({ type: "SEND_CAPTURE" });
+    const response = await sendToBackground({ type: "SEND_CAPTURE", ...target });
+    if (!isCurrent(generation) || !isCurrentTrainTargetRequest(target)) return;
     captureSend.textContent = "Send for approval";
-    if (!isCurrent(generation)) return;
     if (!response.ok) {
       captureSend.disabled = false;
       setError(mainError, response.error);
       return;
     }
+    if (!captureSessionMatchesTrainTarget(response.data, target)) return;
     captureSession = response.data;
     renderCapture();
   })();
 });
 
 captureClear.addEventListener("click", () => {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
   void (async () => {
-    await sendToBackground({ type: "CLEAR_CAPTURE" });
+    const response = await sendToBackground({ type: "CLEAR_CAPTURE", ...target });
+    if (!isCurrentTrainTargetRequest(target)) return;
+    if (!response.ok) {
+      setPickStatus(response.error, true);
+      return;
+    }
     captureSession = null;
     captureAddedPage = false;
     captureRestored.hidden = true;
@@ -5325,12 +5507,22 @@ captureClear.addEventListener("click", () => {
 // Restore in-flight capture session after a worker restart / panel reopen,
 // and SAY what came back (labels and counts; there are no values to restore).
 async function restoreCapture(): Promise<void> {
-  const response = await sendToBackground({ type: "GET_CAPTURE" });
+  const target = selectedTrainTargetRequest();
+  if (target == null) {
+    captureSession = null;
+    captureRestored.hidden = true;
+    renderCapture();
+    return;
+  }
+  const response = await sendToBackground({ type: "GET_CAPTURE", ...target });
+  if (!isCurrentTrainTargetRequest(target)) return;
   captureSession = response.ok ? response.data : null;
   captureAddedPage = false;
   if (captureSession) {
     captureRestored.hidden = false;
     captureRestored.textContent = restoredSummary(captureSession);
+  } else {
+    captureRestored.hidden = true;
   }
   renderCapture();
 }
@@ -5592,16 +5784,70 @@ modeTrainBtn.addEventListener("click", () => void setPanelMode("train"));
 /** The trained-form library: every payer's shared portals, plus what the open
  * page is recognized as. */
 async function loadSharedRegistry(): Promise<void> {
+  if (panelMode !== "train") return;
+  const registryRevision = ++trainRegistryRevision;
+  trainRecognitionRevision += 1;
+  portal = null;
+  portalTabId = null;
+  trainFormMaps = [];
+  trainUrlCandidates = [];
+  renderTrainDryRun();
+  renderCapture();
   trainRecognition.textContent = "Looking up this form…";
-  const response = await sendToBackground({ type: "LIST_SHARED_PORTALS" });
+  const [response, targetResponse] = await Promise.all([
+    sendToBackground({ type: "LIST_SHARED_PORTALS" }),
+    sendToBackground({ type: "GET_TRAIN_TARGET" }),
+  ]);
+  if (registryRevision !== trainRegistryRevision || panelMode !== "train") return;
   if (!response.ok) {
     sharedPortalRows = [];
+    trainPayer.value = "";
+    trainPortal.value = "";
+    await syncTrainTarget(null);
     trainRecognition.textContent = response.error;
+    trainHint.textContent = "Choose the form again after the shared registry is available.";
+    renderTrainPayers();
+    renderTrainPortals();
+    renderTrainDryRun();
+    renderCapture();
     return;
   }
   // Coerce to [] — null data crashes `for…of` during render and blanks the panel.
   sharedPortalRows = Array.isArray(response.data) ? response.data : [];
   renderTrainPayers();
+
+  const savedTarget = targetResponse.ok ? targetResponse.data : null;
+  const savedRow = savedTarget?.portalKey == null
+    ? null
+    : sharedPortalRows.find((row) => row.portalKey === savedTarget.portalKey) ?? null;
+  const savedPortal = savedRow ? toMatchedPortal(savedRow) : null;
+  if (
+    savedTarget && savedRow && savedPortal &&
+    savedPortal.mappingGeneration === savedTarget.mappingGeneration
+  ) {
+    trainTargetIdentity = trainTargetIdentityFor(savedPortal);
+    desiredTrainTargetIdentity = trainTargetIdentity;
+    trainTargetRevision = savedTarget.revision;
+    trainPayer.value = (savedRow.payerName ?? "").trim();
+    trainPortal.value = savedRow.portalKey;
+  } else if (savedTarget && savedTarget.portalKey == null) {
+    trainTargetIdentity = null;
+    desiredTrainTargetIdentity = null;
+    trainTargetRevision = savedTarget.revision;
+    trainPortal.value = "";
+  } else {
+    // The API's current generation no longer agrees with the worker's saved
+    // target. Explicitly clear the stale target before recognition resumes.
+    trainTargetIdentity = savedTarget?.portalKey == null
+      ? null
+      : `${savedTarget.portalKey}\u0000${savedTarget.mappingGeneration}`;
+    desiredTrainTargetIdentity = trainTargetIdentity;
+    trainTargetRevision = savedTarget?.revision ?? null;
+    trainPortal.value = "";
+    await syncTrainTarget(null);
+  }
+  if (registryRevision !== trainRegistryRevision || panelMode !== "train") return;
+  renderTrainPortals();
   await refreshTrainRecognition();
 }
 
@@ -5619,7 +5865,6 @@ function renderTrainPayers(): void {
   const previous = trainPayer.value;
   trainPayer.replaceChildren();
   const placeholder = new Option("Select a payer…", "", true, previous === "");
-  placeholder.disabled = names.length > 0;
   trainPayer.add(placeholder);
   for (const name of names) {
     trainPayer.add(new Option(name, name, false, name === previous));
@@ -5630,22 +5875,39 @@ function renderTrainPayers(): void {
 /** Portals for the selected payer — manual pick when the open tab is not the form. */
 function renderTrainPortals(): void {
   const payerName = trainPayer.value;
-  const rows = sharedPortalRows.filter(
-    (r) => (r.payerName ?? "") === payerName,
-  );
-  trainPortalField.hidden = payerName === "" || rows.length === 0;
   const previous = trainPortal.value;
+  const ambiguousChoices = previous === "" ? trainUrlCandidates : [];
+  const rows = ambiguousChoices.length > 1
+    ? ambiguousChoices.flatMap((candidate) => {
+      const row = sharedPortalRows.find((item) => item.portalKey === candidate.key);
+      return row ? [row] : [];
+    })
+    : sharedPortalRows.filter((row) => (row.payerName ?? "") === payerName);
+  trainPortalField.hidden = rows.length === 0;
   trainPortal.replaceChildren();
+  trainPortal.add(new Option(
+    ambiguousChoices.length > 1
+      ? "Choose the exact matching form…"
+      : "Select a form configuration…",
+    "",
+    true,
+    previous === "",
+  ));
   for (const row of rows) {
     trainPortal.add(
-      new Option(row.name, row.portalKey, false, row.portalKey === previous),
+      new Option(
+        portalTargetLabel(toMatchedPortal(row)),
+        row.portalKey,
+        false,
+        row.portalKey === previous,
+      ),
     );
   }
 }
 
 function renderTrainDryRun(): void {
   const recognized =
-    panelMode === "train" && portal != null && portalTabId != null;
+    currentTrainTargetRequest() != null && portal != null && portalTabId != null;
   trainDryRunSection.hidden = !recognized;
   runMockDryRunBtn.disabled = !recognized;
   markPortalProvenBtn.disabled = !recognized;
@@ -5671,47 +5933,85 @@ function clearMockDryRunDetail(): void {
   mockDryRunGaps.replaceChildren();
 }
 
-/**
- * What is the open page, and what does the system already know about it?
- *
- * Capture binds to URL match, not dropdown selection. The dropdown is
- * sticky navigation/messaging — it never sets `portal`. A RECOGNIZED form
- * shows pages/fields already mapped; re-capture is the user's choice. When a
- * form is selected but the tab does not match (login / SSO / wizard redirect),
- * copy says so and capture stays off — it must not claim a "new form".
- */
+/** What the open page and the exact Train/Test target are. */
 async function refreshTrainRecognition(): Promise<void> {
+  if (panelMode !== "train") return;
+  const recognitionRevision = ++trainRecognitionRevision;
+  const selectedAtStart = sharedPortalRows.find(
+    (row) => row.portalKey === trainPortal.value,
+  ) ?? null;
+  const targetAtStart = selectedAtStart ? toMatchedPortal(selectedAtStart) : null;
+  const targetSyncAtStart = syncTrainTarget(targetAtStart);
   const tab = await queryActiveTab();
+  if (recognitionRevision !== trainRecognitionRevision || panelMode !== "train") return;
   const view = resolveTrainRecognition({
     url: tab?.url,
     rows: sharedPortalRows,
     payerName: trainPayer.value || null,
     selectedPortalKey: trainPortal.value,
   });
+  trainUrlCandidates = view.status === "ambiguous" ? view.candidates : [];
+
+  // Preserve a unique legacy match as an exact target choice. Equal matches
+  // remain blank until the trainer chooses one by its full label and key.
+  if (view.status === "matched" && !view.selected && trainPortal.value === "") {
+    const row = sharedPortalRows.find((candidate) => candidate.portalKey === view.portal.key);
+    if (row) {
+      trainPayer.value = (row.payerName ?? "").trim();
+      trainPortal.value = row.portalKey;
+    }
+  }
+
+  const selectedRow = sharedPortalRows.find((row) => row.portalKey === trainPortal.value) ?? null;
+  const target = selectedRow ? toMatchedPortal(selectedRow) : null;
+  const targetRevision = trainTargetIdentityFor(target) === trainTargetIdentityFor(targetAtStart)
+    ? await targetSyncAtStart
+    : await syncTrainTarget(target);
+  if (
+    recognitionRevision !== trainRecognitionRevision ||
+    trainTargetRevision !== targetRevision ||
+    panelMode !== "train"
+  ) return;
 
   if (view.status === "matched") {
     portal = view.portal;
     portalTabId = tab?.id ?? null;
+    const request = currentTrainTargetRequest();
+    if (request == null || request.portalKey !== view.portal.key) {
+      portal = null;
+      portalTabId = null;
+      trainRecognition.textContent = "Select the exact form configuration before continuing.";
+      trainHint.textContent = "Capture, mock testing, and proof belong to one selected configuration.";
+      renderTrainPortals();
+      renderTrainDryRun();
+      renderCapture();
+      return;
+    }
     const maps = await sendToBackground({
       type: "LIST_SHARED_FIELD_MAPS",
-      portalKey: view.portal.key,
+      ...request,
     });
+    if (
+      recognitionRevision !== trainRecognitionRevision ||
+      !isCurrentTrainTargetRequest(request)
+    ) return;
     trainFormMaps = maps.ok ? maps.data : [];
     const state = formCaptureState(trainFormMaps);
-    trainRecognition.textContent = `${view.portal.label} — already trained: ${captureStateSummary(state)}.`;
+    trainRecognition.textContent = `${portalTargetLabel(view.portal)} — already trained: ${captureStateSummary(state)}.`;
     trainHint.textContent =
       state.undecided > 0
         ? `${state.undecided} captured ${state.undecided === 1 ? "field is" : "fields are"} still waiting for a decision in the web app. Re-capture only if the form itself changed.`
         : "Re-capture only if the form changed — nothing here changes a mapping on its own.";
-    if (lastMockDryRunPortalKey !== view.portal.key) {
-      lastMockDryRunPortalKey = null;
+    const identity = trainTargetIdentityFor(view.portal);
+    if (lastMockDryRunTarget !== identity) {
+      lastMockDryRunTarget = null;
       mockDryRunStatus.hidden = true;
     }
   } else {
     portal = null;
     portalTabId = null;
     trainFormMaps = [];
-    lastMockDryRunPortalKey = null;
+    lastMockDryRunTarget = null;
     mockDryRunStatus.hidden = true;
     trainRecognition.textContent = view.recognitionText;
     trainHint.textContent = view.hintText;
@@ -5723,13 +6023,19 @@ async function refreshTrainRecognition(): Promise<void> {
 }
 
 trainPayer.addEventListener("change", () => {
+  // A payer change starts a new target choice. Never leave the prior payer's
+  // form key selected behind the filtered options.
+  trainPortal.value = "";
   renderTrainPortals();
   void refreshTrainRecognition();
 });
 trainPortal.addEventListener("change", () => {
   const row = sharedPortalRows.find((r) => r.portalKey === trainPortal.value);
+  if (row) trainPayer.value = (row.payerName ?? "").trim();
+  else lastMockDryRunTarget = null;
   // Sticky selection updates mismatch/match copy immediately; opening the
-  // form is how the trainer reaches the registered URL for capture bind.
+  // form is how the trainer reaches the selected configuration's URL.
+  renderTrainPortals();
   void refreshTrainRecognition();
   if (!row?.formUrl) return;
   void chrome.tabs.create({ url: row.formUrl });
@@ -5738,7 +6044,9 @@ trainPortal.addEventListener("change", () => {
 runMockDryRunBtn.addEventListener("click", () => {
   const activePortal = portal;
   const activeTabId = portalTabId;
-  if (activePortal == null || activeTabId == null) return;
+  const target = currentTrainTargetRequest();
+  if (activePortal == null || activeTabId == null || target == null) return;
+  const recognitionRevision = trainRecognitionRevision;
   const generation = loadGeneration;
   runMockDryRunBtn.disabled = true;
   markPortalProvenBtn.disabled = true;
@@ -5747,8 +6055,10 @@ runMockDryRunBtn.addEventListener("click", () => {
     "Filling the live form with synthetic Sample values…";
   void (async () => {
     const tab = await queryActiveTab();
-    const currentPortal = matchPortalByUrl(tab?.url, sharedPortalRows);
-    if (tab?.id == null || currentPortal?.key !== activePortal.key) {
+    if (
+      tab?.id == null || tab.id !== activeTabId ||
+      !portalKeyEligibleForUrl(activePortal.key, tab.url, sharedPortalRows)
+    ) {
       await refreshTrainRecognition();
       if (isCurrent(generation)) {
         mockDryRunStatus.hidden = false;
@@ -5757,12 +6067,20 @@ runMockDryRunBtn.addEventListener("click", () => {
       }
       return;
     }
+    if (
+      !isCurrentTrainTargetRequest(target) ||
+      recognitionRevision !== trainRecognitionRevision
+    ) return;
     const response = await sendToBackground({
       type: "RUN_MOCK_DRY_RUN",
       tabId: tab.id,
-      portalKey: activePortal.key,
+      ...target,
     });
-    if (!isCurrent(generation)) return;
+    if (
+      !isCurrent(generation) ||
+      !isCurrentTrainTargetRequest(target) ||
+      recognitionRevision !== trainRecognitionRevision
+    ) return;
     if (!response.ok) {
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();
@@ -5770,7 +6088,7 @@ runMockDryRunBtn.addEventListener("click", () => {
       mockDryRunStatus.hidden = false;
       return;
     }
-    lastMockDryRunPortalKey = activePortal.key;
+    lastMockDryRunTarget = trainTargetIdentityFor(activePortal);
     const { filled, skipped, gaps, pass } = response.data;
     mockDryRunStatus.textContent = response.data.fieldsAttempted != null
       ? `Mock dry run attempted ${response.data.fieldsAttempted} setter write${response.data.fieldsAttempted === 1 ? "" : "s"}; semantic verification is not available. Review the live form before marking it proven.`
@@ -5788,7 +6106,9 @@ runMockDryRunBtn.addEventListener("click", () => {
 
 markPortalProvenBtn.addEventListener("click", () => {
   const activePortal = portal;
-  if (activePortal == null) return;
+  const target = currentTrainTargetRequest();
+  if (activePortal == null || target == null) return;
+  const recognitionRevision = trainRecognitionRevision;
   const generation = loadGeneration;
   markPortalProvenBtn.disabled = true;
   mockDryRunStatus.hidden = false;
@@ -5796,9 +6116,13 @@ markPortalProvenBtn.addEventListener("click", () => {
   void (async () => {
     const response = await sendToBackground({
       type: "MARK_PORTAL_PROVEN",
-      portalKey: activePortal.key,
+      ...target,
     });
-    if (!isCurrent(generation)) return;
+    if (
+      !isCurrent(generation) ||
+      !isCurrentTrainTargetRequest(target) ||
+      recognitionRevision !== trainRecognitionRevision
+    ) return;
     if (!response.ok) {
       mockDryRunStatus.textContent = response.error;
       renderTrainDryRun();

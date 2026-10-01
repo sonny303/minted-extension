@@ -240,8 +240,10 @@ export async function proposeFieldMap(input: {
 // GET /api/shared-portals — the GLOBAL registry only (E6.9 F6.9.9). Training
 // has no org, so the org-scoped /api/portals cannot serve it; this runs on the
 // panel's user-scoped guard and returns the shared library the trainer adds to.
-export async function listSharedPortals(): Promise<PortalRegistryRow[]> {
-  const { data } = await apiFetch<PortalRegistryRow[]>("/api/shared-portals");
+export async function listSharedPortals(portalKey?: string): Promise<PortalRegistryRow[]> {
+  const params = new URLSearchParams({ selection: "explicit" });
+  if (portalKey != null) params.set("portal_key", portalKey);
+  const { data } = await apiFetch<PortalRegistryRow[]>(`/api/shared-portals?${params.toString()}`);
   return data;
 }
 
@@ -269,7 +271,7 @@ export async function proposeSharedFieldMap(input: {
 // no org.
 export async function listSharedFieldMapsWithMeta(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
   const { data, meta } = await apiFetch<PortalFieldMap[]>(
-    `/api/shared-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
+    `/api/shared-field-maps?selection=explicit&portal_key=${encodeURIComponent(portalKey)}`,
   );
   return { maps: data, fillEventV2: isFillEventV2Advertised(meta) };
 }

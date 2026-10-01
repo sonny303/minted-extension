@@ -13,6 +13,16 @@ import type {
 import type { FillReportRecord } from "../shared/fill";
 import type { AiLearningSummary } from "../shared/fill";
 import type { QuickCardCatalogField } from "../shared/apiTypes";
+import { portalKeyEligibleForUrl, toMatchedPortal } from "../shared/portals";
+import {
+  EMPTY_TRAIN_TARGET,
+  parseTrainTargetState,
+  trainTargetRequestMatches,
+  transitionTrainTarget,
+  type TrainTargetIdentity,
+  type TrainTargetState,
+  type VersionedTrainTarget,
+} from "../shared/trainTarget";
 import {
   AuthRequiredError,
   currentUserId,
@@ -91,6 +101,7 @@ import {
   touchActiveCaseActivity,
 } from "./activeCase";
 import {
+  captureSessionMatchesTarget,
   applyRowEdit,
   identifyCapturePage,
   mergePageCapture,
@@ -370,6 +381,107 @@ async function createAiFillGuard(request: {
 // browser) and holds labels/selectors/decisions only. There is no value in it
 // to protect: captureScan never reads one.
 const CAPTURE_KEY = "capture.session";
+const TRAIN_TARGET_KEY = "capture.trainTarget";
+let captureMutationTail: Promise<void> = Promise.resolve();
+
+function serializeCaptureMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = captureMutationTail.then(operation, operation);
+  captureMutationTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function readTrainTargetState(): Promise<TrainTargetState> {
+  try {
+    const stored = await chrome.storage.session.get(TRAIN_TARGET_KEY);
+    return parseTrainTargetState(stored[TRAIN_TARGET_KEY]);
+  } catch {
+    return EMPTY_TRAIN_TARGET;
+  }
+}
+
+async function writeTrainTargetState(target: TrainTargetIdentity): Promise<TrainTargetState> {
+  return serializeCaptureMutation(async () => {
+    const current = await readTrainTargetState();
+    const transition = transitionTrainTarget(current, target);
+    if (!transition.changed) return transition.state;
+    // One storage write moves the selection and clears every capture decision
+    // together. An in-flight scanner validates this revision before it writes.
+    await chrome.storage.session.set({
+      [TRAIN_TARGET_KEY]: transition.state,
+      [CAPTURE_KEY]: null,
+    });
+    return transition.state;
+  });
+}
+
+async function assertCurrentTrainTarget(request: VersionedTrainTarget): Promise<TrainTargetState> {
+  const target = await readTrainTargetState();
+  if (!trainTargetRequestMatches(target, request)) {
+    throw new Error("The selected form configuration changed. Select it again before continuing.");
+  }
+  if ((await readPanelMode()) !== "train") {
+    throw new Error("Switch to Train forms to use this form configuration.");
+  }
+  return target;
+}
+
+async function commitCaptureForCurrentTarget(
+  request: VersionedTrainTarget,
+  session: CaptureSession,
+): Promise<CaptureSession> {
+  return serializeCaptureMutation(async () => {
+    const target = await assertCurrentTrainTarget(request);
+    if (
+      session.portalKey !== target.portalKey ||
+      session.mappingGeneration !== target.mappingGeneration
+    ) {
+      throw new Error("This capture belongs to a different configuration or mapping generation.");
+    }
+    await writeCaptureSession(session);
+    return session;
+  });
+}
+
+async function readCaptureForCurrentTarget(request: VersionedTrainTarget): Promise<CaptureSession> {
+  const target = await assertCurrentTrainTarget(request);
+  const current = await readCaptureSession();
+  if (current == null || !captureSessionMatchesTarget(current, target)) {
+    throw new Error("No capture is available for the selected form configuration.");
+  }
+  return current;
+}
+
+async function updateCaptureForCurrentTarget(
+  request: VersionedTrainTarget,
+  update: (current: CaptureSession) => CaptureSession,
+): Promise<CaptureSession> {
+  return serializeCaptureMutation(async () => {
+    const target = await assertCurrentTrainTarget(request);
+    const current = await readCaptureSession();
+    if (current == null || !captureSessionMatchesTarget(current, target)) {
+      throw new Error("No capture is available for the selected form configuration.");
+    }
+    const next = update(current);
+    await writeCaptureSession(next);
+    return next;
+  });
+}
+
+async function exactTrainPortal(request: VersionedTrainTarget & { tabUrl?: string | null }) {
+  await assertCurrentTrainTarget(request);
+  const rows = await listSharedPortals(request.portalKey ?? undefined);
+  const row = rows.find((candidate) => candidate.portalKey === request.portalKey);
+  if (!row) throw new Error("The selected form configuration is no longer available.");
+  const portal = toMatchedPortal(row);
+  if (portal.mappingGeneration !== request.mappingGeneration) {
+    throw new Error("This form's mappings changed. Refresh the selection before continuing.");
+  }
+  if (request.tabUrl != null && !portalKeyEligibleForUrl(portal.key, request.tabUrl, rows)) {
+    throw new Error("This page does not match the selected form configuration.");
+  }
+  await assertCurrentTrainTarget(request);
+  return portal;
+}
 
 async function readCaptureSession(): Promise<CaptureSession | null> {
   try {
@@ -917,13 +1029,24 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return { allDone: result.allDone };
     }
     // ---- S5.2/S5.4 capture ----
-    case "GET_CAPTURE":
-      return readCaptureSession();
+    case "GET_CAPTURE": {
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const target = await assertCurrentTrainTarget(targetRequest);
+      const session = await readCaptureSession();
+      return captureSessionMatchesTarget(session, target) ? session : null;
+    }
     case "START_CAPTURE": {
-      // Capture is a Train-forms job only — Work cases never proposes maps.
-      if ((await readPanelMode()) !== "train") {
-        throw new Error("Switch to Train forms to capture a portal.");
-      }
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const tabBefore = await chrome.tabs.get(request.tabId);
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabBefore.url });
       // Read the form's SHAPE from the bound tab (labels/selectors/types —
       // never a value), then ask the server what this org already knows about
       // each label so the review opens with suggestions, not a blank grid.
@@ -932,8 +1055,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // one with a static content_scripts match.
       await ensureContentScript(request.tabId);
       const scannedData = await scanFieldsAcrossFrames(request.tabId);
+      const tabAfter = await chrome.tabs.get(request.tabId);
+      if (tabAfter.url !== tabBefore.url) {
+        throw new Error("The portal page changed during capture. Scan the selected form page again.");
+      }
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabAfter.url });
       const previous = await readCaptureSession();
-      const samePortal = previous?.portalKey === request.portalKey;
+      const target = await assertCurrentTrainTarget(targetRequest);
+      const samePortal = captureSessionMatchesTarget(previous, target);
       // BITE-CAP-05 — identify the page AFTER the scan. The side panel sends a
       // collision-free candidate; we reuse an existing page when URL/heading/
       // selector-overlap evidence says so, so a genuine second page is not
@@ -976,42 +1105,44 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           : rows;
       const session: CaptureSession = {
         portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
         templateStepId: request.templateStepId ?? null,
         startedAt: new Date().toISOString(),
         rows: merged,
       };
-      await writeCaptureSession(session);
-      return session;
+      return commitCaptureForCurrentTarget(targetRequest, session);
     }
     case "SET_CAPTURE_CHOICE": {
-      const current = await readCaptureSession();
-      if (current == null) throw new Error("No capture in progress");
-      const next: CaptureSession = {
+      return updateCaptureForCurrentTarget(request, (current) => ({
         ...current,
         rows: current.rows.map((r) =>
-          r.selector === request.selector
-            ? { ...r, chosenToken: request.token }
-            : r,
+          r.selector === request.selector ? { ...r, chosenToken: request.token } : r,
         ),
-      };
-      await writeCaptureSession(next);
-      return next;
+      }));
     }
     // ---- 2026-08-19 manual mapping ----
     case "PICK_CAPTURE_FIELD": {
-      // Same Train-only gate as capture itself: pointing at a field is
-      // capturing one, and a proposal always lands in the shared library.
-      if ((await readPanelMode()) !== "train") {
-        throw new Error("Switch to Train forms to add a field.");
-      }
-      const current = await readCaptureSession();
-      if (current == null)
-        throw new Error("Capture this form first, then add missing fields.");
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const current = await readCaptureForCurrentTarget(targetRequest);
+      const tabBefore = await chrome.tabs.get(request.tabId);
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabBefore.url });
       await ensureContentScript(request.tabId);
       const pickOutcome = await pickElementAcrossFrames(request.tabId);
       // Cancelling is a normal outcome, not a failure: return the session
       // untouched so the panel simply leaves pick mode.
-      if (pickOutcome.status === "cancelled") return current;
+      if (pickOutcome.status === "cancelled") {
+        await exactTrainPortal(targetRequest);
+        return current;
+      }
+      const tabAfter = await chrome.tabs.get(request.tabId);
+      if (tabAfter.url !== tabBefore.url) {
+        throw new Error("The portal page changed during field selection. Choose the field again.");
+      }
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabAfter.url });
 
       const field = pickOutcome.field;
       const existing = current.rows.find((r) => r.selector === field.selector);
@@ -1051,9 +1182,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         typeOverridden: false,
         ...(field.options !== undefined ? { options: field.options } : {}),
       };
-      const next: CaptureSession = { ...current, rows: [...current.rows, row] };
-      await writeCaptureSession(next);
-      return next;
+      return updateCaptureForCurrentTarget(targetRequest, (latest) => ({
+        ...latest,
+        rows: [...latest.rows, row],
+      }));
     }
     case "CANCEL_CAPTURE_PICK": {
       // Best-effort: the pick may already have resolved, or the tab may be
@@ -1066,29 +1198,23 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return null;
     }
     case "EDIT_CAPTURE_ROW": {
-      const current = await readCaptureSession();
-      if (current == null) throw new Error("No capture in progress");
       // The rule itself is pure and lives beside mergePageCapture, which
       // depends on the same invariant: the selector IS the row's key.
-      const outcome = applyRowEdit(current.rows, request.selector, {
-        displayLabel: request.displayLabel,
-        fieldType: request.fieldType,
-        newSelector: request.newSelector,
+      return updateCaptureForCurrentTarget(request, (current) => {
+        const outcome = applyRowEdit(current.rows, request.selector, {
+          displayLabel: request.displayLabel,
+          fieldType: request.fieldType,
+          newSelector: request.newSelector,
+        });
+        if (!outcome.ok) throw new Error(outcome.reason);
+        return { ...current, rows: outcome.rows };
       });
-      if (!outcome.ok) throw new Error(outcome.reason);
-      const next: CaptureSession = { ...current, rows: outcome.rows };
-      await writeCaptureSession(next);
-      return next;
     }
     case "REMOVE_CAPTURE_ROW": {
-      const current = await readCaptureSession();
-      if (current == null) throw new Error("No capture in progress");
-      const next: CaptureSession = {
+      return updateCaptureForCurrentTarget(request, (current) => ({
         ...current,
         rows: current.rows.filter((r) => r.selector !== request.selector),
-      };
-      await writeCaptureSession(next);
-      return next;
+      }));
     }
     // ---- US-5 sandbox ----
     case "SANDBOX_FILL": {
@@ -1131,38 +1257,48 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return { cleared };
     }
     case "REMOVE_CAPTURE_ROWS": {
-      const current = await readCaptureSession();
-      if (current == null) throw new Error("No capture in progress");
       const drop = new Set(request.selectors);
-      const next: CaptureSession = {
+      return updateCaptureForCurrentTarget(request, (current) => ({
         ...current,
         rows: current.rows.filter((r) => !drop.has(r.selector)),
-      };
-      await writeCaptureSession(next);
-      return next;
+      }));
     }
     case "TEST_CAPTURE_SELECTOR": {
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const tabBefore = await chrome.tabs.get(request.tabId);
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabBefore.url });
       await ensureContentScript(request.tabId);
       const report = await matchSelectorAcrossFrames(
         request.tabId,
         request.selector,
         request.highlight === true,
       );
+      const tabAfter = await chrome.tabs.get(request.tabId);
+      if (tabAfter.url !== tabBefore.url) {
+        throw new Error("The portal page changed during selector testing. Run the test again on the selected page.");
+      }
+      await exactTrainPortal({ ...targetRequest, tabUrl: tabAfter.url });
       // The page reports the match SHAPE (how many, how many fillable, one
       // radio group?) — a bare count cannot tell a wrapper from a field.
       return { selector: request.selector, ...report };
     }
     case "SEND_CAPTURE": {
-      const current = await readCaptureSession();
-      if (current == null) throw new Error("No capture in progress");
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const current = await readCaptureForCurrentTarget(targetRequest);
+      await exactTrainPortal(targetRequest);
       // Capture / send is Train-only: proposals always land in the SHARED
       // library (`org_id IS NULL`). Work cases no longer proposes under an org.
-      const mode = await readPanelMode();
-      if (mode !== "train") {
-        throw new Error("Switch to Train forms to send a capture.");
-      }
       const rows: CaptureRow[] = [];
       for (const row of current.rows) {
+        await exactTrainPortal(targetRequest);
         if (row.sent) {
           rows.push(row);
           continue;
@@ -1184,6 +1320,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           sort_order: row.sortOrder ?? null,
           control_options: row.options,
         });
+        await exactTrainPortal(targetRequest);
         // The shared path returns the row itself, not a learned suggestion —
         // suggestions are org-scoped memory (field_dictionary) and training
         // has no org. Nothing to fold back; the trainer decides in the
@@ -1191,34 +1328,104 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         rows.push({ ...row, sent: true });
       }
       const next: CaptureSession = { ...current, rows };
-      await writeCaptureSession(next);
-      return next;
+      return commitCaptureForCurrentTarget(targetRequest, next);
     }
-    case "LIST_SHARED_PORTALS":
-      return listSharedPortals();
-    case "LIST_SHARED_FIELD_MAPS":
-      return listSharedFieldMaps(request.portalKey);
+    case "LIST_SHARED_PORTALS": {
+      if ((await readPanelMode()) !== "train") {
+        throw new Error("Switch to Train forms to use shared form configurations.");
+      }
+      return listSharedPortals(request.portalKey);
+    }
+    case "LIST_SHARED_FIELD_MAPS": {
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      await exactTrainPortal(targetRequest);
+      const maps = await listSharedFieldMaps(request.portalKey);
+      await exactTrainPortal(targetRequest);
+      return maps;
+    }
     case "RUN_MOCK_DRY_RUN": {
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const initialTab = await chrome.tabs.get(request.tabId);
+      await exactTrainPortal({ ...targetRequest, tabUrl: initialTab.url });
+      const validateTarget = async () => {
+        await assertCurrentTrainTarget(targetRequest);
+        const currentTab = await chrome.tabs.get(request.tabId);
+        if (currentTab.url !== initialTab.url) {
+          throw new Error("The portal page changed during the mock test. Choose the selected configuration page again.");
+        }
+        await exactTrainPortal({ ...targetRequest, tabUrl: currentTab.url });
+      };
       const orgId = await resolveMockTelemetryOrgId();
       await ensureContentScript(request.tabId);
       return fillMockPortal({
         tabId: request.tabId,
         portalKey: request.portalKey,
         orgId,
+        validateTarget,
       });
     }
-    case "MARK_PORTAL_PROVEN":
+    case "MARK_PORTAL_PROVEN": {
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      await exactTrainPortal(targetRequest);
       await proveSharedPortal({ portalKey: request.portalKey });
+      await exactTrainPortal(targetRequest);
       return null;
+    }
     case "GET_PANEL_MODE":
       return readPanelMode();
+    case "GET_TRAIN_TARGET":
+      return readTrainTargetState();
+    case "SET_TRAIN_TARGET": {
+      if ((await readPanelMode()) !== "train") {
+        throw new Error("Switch to Train forms to select a shared form configuration.");
+      }
+      if (
+        request.portalKey == null
+          ? request.mappingGeneration != null
+          : request.portalKey.trim() === "" ||
+            !Number.isSafeInteger(request.mappingGeneration) ||
+            request.mappingGeneration == null ||
+            request.mappingGeneration < 1
+      ) {
+        throw new Error("Choose a valid form configuration and mapping generation.");
+      }
+      return writeTrainTargetState({
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+      });
+    }
     case "SET_PANEL_MODE": {
       await writePanelMode(request.mode);
       return null;
     }
-    case "CLEAR_CAPTURE":
-      await chrome.storage.session.remove(CAPTURE_KEY);
-      return null;
+    case "CLEAR_CAPTURE": {
+      const requestTarget: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      return serializeCaptureMutation(async () => {
+        const target = await assertCurrentTrainTarget(requestTarget);
+        const current = await readCaptureSession();
+        if (!captureSessionMatchesTarget(current, target)) {
+          throw new Error("No capture is available for the selected form configuration.");
+        }
+        await chrome.storage.session.remove(CAPTURE_KEY);
+        return null;
+      });
+    }
     case "RECORD_CAQH_ATTESTATION": {
       const result = await recordCaqhAttestation(request.providerId, {
         verifiedFields: request.verifiedFields,

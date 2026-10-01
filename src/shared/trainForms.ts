@@ -5,11 +5,16 @@
 // URL across five steps and may or may not carry a distinguishing heading; a
 // portal row may exist under a URL that only prefix-matches. Capture is the
 // scarce act — the trainer is standing on the page with the form open — so
-// every ambiguity resolves to "capture it and let the admin rename it in the
-// editor" (F6.9.5), never to a prompt and never to a refusal.
+// ambiguity remains explicit until the trainer chooses an exact form key;
+// only then may capture bind to that shared configuration.
 
 import type { PortalFieldMap, PortalRegistryRow } from "./apiTypes";
-import { matchPortalByUrl, type MatchedPortal } from "./portals";
+import {
+  portalCandidatesByUrl,
+  portalKeyEligibleForUrl,
+  toMatchedPortal,
+  type MatchedPortal,
+} from "./portals";
 
 // ---------------------------------------------------------------------------
 // Page identity (F6.9.8)
@@ -93,14 +98,14 @@ export function assignSortOrder<T>(rows: readonly T[]): (T & { sortOrder: number
 /** What the trainer is looking at. */
 export type FormRecognition =
   | { kind: "existing"; portal: MatchedPortal }
+  | { kind: "ambiguous"; candidates: MatchedPortal[] }
   | { kind: "new"; candidateName: string };
 
 /**
  * Is the open page a form we already know?
  *
- * Recognition reuses the SAME registry match the fill engine uses
- * (`matchPortalByUrl`) — one rule, so the trainer and the filler can never
- * disagree about which portal a page is.
+ * Recognition uses the same origin/path rules as the fill resolver, while
+ * preserving every eligible configuration for an explicit Train/Test choice.
  *
  * Nothing here writes: a "new" result names a CANDIDATE portal, which the user
  * registers deliberately. Nothing is auto-attached to a template or a task
@@ -111,8 +116,9 @@ export function recognizeForm(
   rows: readonly PortalRegistryRow[],
   payerName: string | null,
 ): FormRecognition {
-  const matched = matchPortalByUrl(url, [...rows]);
-  if (matched) return { kind: "existing", portal: matched };
+  const candidates = portalCandidatesByUrl(url, rows);
+  if (candidates.length === 1) return { kind: "existing", portal: candidates[0]! };
+  if (candidates.length > 1) return { kind: "ambiguous", candidates };
   return { kind: "new", candidateName: candidatePortalName(payerName, rows) };
 }
 
@@ -203,13 +209,14 @@ export function captureStateSummary(state: FormCaptureState): string {
 /**
  * What Train should show and bind for capture on the open tab.
  *
- * Capture bind is URL-only (shared-library poison guard). The dropdown is
- * sticky navigation/messaging intent — it never auto-sets the capture key.
- * When a form is selected and the URL does not match, copy must NOT claim a
- * "new form" (login walls / SSO / wizard redirects are the real gap).
+ * Capture requires both an explicit/unique exact key and that key's own URL
+ * rule to accept the active page. When a selected form and URL disagree, the
+ * copy must NOT claim a "new form" (login walls / SSO / wizard redirects are
+ * the real gap).
  */
 export type TrainRecognitionView =
-  | { status: "matched"; portal: MatchedPortal }
+  | { status: "matched"; portal: MatchedPortal; selected: boolean }
+  | { status: "ambiguous"; portal: null; candidates: MatchedPortal[]; recognitionText: string; hintText: string }
   | {
       status: "mismatch";
       portal: null;
@@ -247,17 +254,22 @@ export const TRAIN_NEW_HINT =
 
 export const TRAIN_NO_TAB_HINT = TRAIN_NEW_HINT;
 
+export const TRAIN_AMBIGUOUS_HINT =
+  "Choose the exact form configuration before capture or mock testing. The same page can belong to more than one configuration.";
+
+export function portalTargetLabel(portal: Pick<MatchedPortal, "label" | "caseType" | "key">): string {
+  const caseType = portal.caseType
+    ? portal.caseType.charAt(0).toUpperCase() + portal.caseType.slice(1)
+    : "Unclassified";
+  return `${portal.label} · ${caseType} · ${portal.key}`;
+}
+
 /**
  * Resolve Train recognition UI + capture bind from URL + sticky selection.
  *
- * `portal` is non-null only on `matched` — the sole automatic capture bind.
+ * `portal` is non-null only after an exact selection or a unique URL match.
  */
 export function resolveTrainRecognition(input: TrainRecognitionInput): TrainRecognitionView {
-  const recognition = recognizeForm(input.url, input.rows, input.payerName);
-  if (recognition.kind === "existing") {
-    return { status: "matched", portal: recognition.portal };
-  }
-
   if (!input.url) {
     return {
       status: "no-tab",
@@ -270,7 +282,11 @@ export function resolveTrainRecognition(input: TrainRecognitionInput): TrainReco
   const selectedKey = input.selectedPortalKey.trim();
   if (selectedKey) {
     const selected = input.rows.find((r) => r.portalKey === selectedKey);
-    const selectedName = tidy(selected?.name) ?? selectedKey;
+    const selectedPortal = selected ? toMatchedPortal(selected) : null;
+    const selectedName = selectedPortal ? portalTargetLabel(selectedPortal) : selectedKey;
+    if (selectedPortal && portalKeyEligibleForUrl(selectedKey, input.url, input.rows)) {
+      return { status: "matched", portal: selectedPortal, selected: true };
+    }
     return {
       status: "mismatch",
       portal: null,
@@ -280,7 +296,25 @@ export function resolveTrainRecognition(input: TrainRecognitionInput): TrainReco
     };
   }
 
-  const candidateName = recognition.candidateName;
+  const payer = tidy(input.payerName);
+  const eligibleRows = payer == null
+    ? input.rows
+    : input.rows.filter((row) => tidy(row.payerName ?? null) === payer);
+  const candidates = portalCandidatesByUrl(input.url, eligibleRows);
+  if (candidates.length === 1) {
+    return { status: "matched", portal: candidates[0]!, selected: false };
+  }
+  if (candidates.length > 1) {
+    return {
+      status: "ambiguous",
+      portal: null,
+      candidates,
+      recognitionText: "Several form configurations match this page. Choose the intended configuration to continue.",
+      hintText: TRAIN_AMBIGUOUS_HINT,
+    };
+  }
+
+  const candidateName = candidatePortalName(input.payerName, input.rows);
   return {
     status: "new",
     portal: null,
@@ -291,15 +325,16 @@ export function resolveTrainRecognition(input: TrainRecognitionInput): TrainReco
 }
 
 /**
- * Shared-library invariant: the only portal_key capture may send is the one
- * `matchPortalByUrl` returns for the active tab. A dropdown selection that
- * disagrees with the tab must never win automatically.
+ * An unselected capture may bind only when one configuration's URL rules
+ * accept the active tab. Specificity orders candidates for display; it does
+ * not resolve identity when overlapping configurations are eligible.
  */
 export function capturePortalKeyForUrl(
   url: string | null | undefined,
   rows: readonly PortalRegistryRow[],
 ): string | null {
-  return matchPortalByUrl(url, [...rows])?.key ?? null;
+  const candidates = portalCandidatesByUrl(url, rows);
+  return candidates.length === 1 ? candidates[0]!.key : null;
 }
 
 /** True when `portalKey` is exactly the URL-matched registry key (or both absent). */
@@ -308,14 +343,13 @@ export function captureKeyAgreesWithTabUrl(
   url: string | null | undefined,
   rows: readonly PortalRegistryRow[],
 ): boolean {
-  const allowed = capturePortalKeyForUrl(url, rows);
   const key = (portalKey ?? "").trim();
-  if (!key) return allowed == null;
-  return allowed === key;
+  if (!key) return portalCandidatesByUrl(url, rows).length === 0;
+  return portalKeyEligibleForUrl(key, url, rows);
 }
 
 export type CaptureStartDecision =
-  | { ok: true; tabId: number; portalKey: string }
+  | { ok: true; tabId: number; portalKey: string; mappingGeneration: number }
   | { ok: false; reason: "no-tab" | "key-mismatch" };
 
 /**
@@ -337,10 +371,12 @@ export function decideCaptureStart(input: {
   if (!portalKey || !captureKeyAgreesWithTabUrl(portalKey, input.tabUrl, input.rows)) {
     return { ok: false, reason: "key-mismatch" };
   }
-  return { ok: true, tabId, portalKey };
+  const row = input.rows.find((candidate) => candidate.portalKey === portalKey);
+  const portal = row ? toMatchedPortal(row) : null;
+  if (!portal) return { ok: false, reason: "key-mismatch" };
+  return { ok: true, tabId, portalKey, mappingGeneration: portal.mappingGeneration };
 }
 
 /** User-visible line when click-time capture bind disagrees with the tab. */
 export const CAPTURE_TAB_MISMATCH_ERROR =
   "This tab no longer matches the recognized form. Open the registered form URL and try again.";
-

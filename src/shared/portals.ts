@@ -13,6 +13,9 @@ export interface MatchedPortal {
   key: string;
   label: string;
   formUrl: string | null;
+  caseType: PortalRegistryRow["caseType"];
+  /** Normalized current generation; old rows with NULL metadata are gen 1. */
+  mappingGeneration: number;
   /** The payer this form belongs to, when the registry names one. Carried so
    * the panel can hand a finished capture straight to that payer's template
    * editor in the web app, which is where mapping actually happens (D18) —
@@ -24,24 +27,87 @@ export interface MatchedPortal {
   verified: boolean;
 }
 
-function prefixOf(formUrl: string): string | null {
-  try {
-    const u = new URL(formUrl);
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return null;
-  }
-}
-
 export function toMatchedPortal(row: PortalRegistryRow): MatchedPortal {
+  const generation = row.mappingGeneration;
   return {
     key: row.portalKey,
     label: row.name,
     formUrl: row.formUrl,
+    caseType: row.caseType ?? null,
+    mappingGeneration:
+      Number.isSafeInteger(generation) && typeof generation === "number" && generation > 0
+        ? generation
+        : 1,
     payerId: row.payerId,
     proven: row.provenAt != null,
     verified: row.isVerified,
   };
+}
+
+function matchesFormUrl(url: URL, formUrl: string): boolean {
+  try {
+    const registered = new URL(formUrl);
+    if (url.origin !== registered.origin) return false;
+    const prefix = registered.pathname;
+    if (prefix.endsWith("/")) return url.pathname.startsWith(prefix);
+    return url.pathname === prefix || url.pathname.startsWith(`${prefix}/`);
+  } catch {
+    return false;
+  }
+}
+
+/** Every registered configuration whose own origin/path rules permit this
+ * page. Results are specificity ordered for display only; identity must come
+ * from an exact selected key when more than one candidate remains. */
+export function portalCandidatesByUrl(
+  url: string | undefined | null,
+  rows: readonly PortalRegistryRow[],
+): MatchedPortal[] {
+  if (!url) return [];
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  return rows
+    .filter((row) => row.formUrl != null && matchesFormUrl(parsed, row.formUrl))
+    .map(toMatchedPortal)
+    .sort((a, b) => {
+      const aPath = (() => { try { return new URL(a.formUrl ?? "").pathname.length; } catch { return -1; } })();
+      const bPath = (() => { try { return new URL(b.formUrl ?? "").pathname.length; } catch { return -1; } })();
+      return bPath - aPath || a.key.localeCompare(b.key);
+    });
+}
+
+/** The most-specific candidates. Equal-specificity rows are intentionally
+ * preserved so Train/Test can ask the operator instead of choosing by order. */
+export function bestPortalCandidatesByUrl(
+  url: string | undefined | null,
+  rows: readonly PortalRegistryRow[],
+): MatchedPortal[] {
+  const candidates = portalCandidatesByUrl(url, rows);
+  if (candidates.length < 2) return candidates;
+  const bestPathLength = candidates[0]?.formUrl
+    ? new URL(candidates[0].formUrl).pathname.length
+    : -1;
+  return candidates.filter((candidate) => {
+    try {
+      return new URL(candidate.formUrl ?? "").pathname.length === bestPathLength;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Whether this exact configuration's origin/path rules permit the page,
+ * independent of any sibling's URL specificity or registry ordering. */
+export function portalKeyEligibleForUrl(
+  portalKey: string,
+  url: string | undefined | null,
+  rows: readonly PortalRegistryRow[],
+): boolean {
+  return portalCandidatesByUrl(url, rows).some((candidate) => candidate.key === portalKey);
 }
 
 /** The registry row whose formUrl prefixes `url`, longest prefix wins (two
@@ -54,20 +120,24 @@ export function matchPortalByUrl(
   if (!url) return null;
   let target: string;
   try {
-    const u = new URL(url);
-    target = `${u.origin}${u.pathname}`;
+    const parsed = new URL(url);
+    target = `${parsed.origin}${parsed.pathname}`;
   } catch {
     return null;
   }
   let best: PortalRegistryRow | null = null;
-  let bestLen = -1;
+  let bestLength = -1;
   for (const row of rows) {
     if (!row.formUrl) continue;
-    const prefix = prefixOf(row.formUrl);
-    if (prefix == null) continue;
-    if (target.startsWith(prefix) && prefix.length > bestLen) {
-      best = row;
-      bestLen = prefix.length;
+    try {
+      const parsed = new URL(row.formUrl);
+      const prefix = `${parsed.origin}${parsed.pathname}`;
+      if (target.startsWith(prefix) && prefix.length > bestLength) {
+        best = row;
+        bestLength = prefix.length;
+      }
+    } catch {
+      // A malformed registry URL does not match this page.
     }
   }
   return best ? toMatchedPortal(best) : null;

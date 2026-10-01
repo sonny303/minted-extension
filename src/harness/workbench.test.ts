@@ -21,6 +21,7 @@ import { createMockPanelApi, FIXTURES } from "../../scripts/mock-panel-api.mjs";
 import { buildSubmissionTouchBody } from "../shared/submission";
 import {
   ApiError,
+  apiFetch,
   getCaseContext,
   getNextBestAction,
   getPortalFieldMaps,
@@ -1265,6 +1266,54 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     expect(written[0]?.token).toBeNull();
   });
 
+  it("M53 — uses explicit configuration routes while legacy no-query reads stay filtered", async () => {
+    await writePanelMode("train");
+    mock.state.requests.length = 0;
+    mock.state.sharedOrgHeaders.length = 0;
+    const legacy = mock.state.sharedPortals[0]!;
+    legacy.mappingGeneration = null;
+    legacy.caseType = null;
+    legacy.requiresExplicitSelection = false;
+    const explicit = {
+      ...legacy,
+      id: "shared-contract-1",
+      portalKey: "aetna_contract",
+      name: "Aetna Contract",
+      caseType: "contract" as const,
+      mappingGeneration: 7,
+      requiresExplicitSelection: true,
+    };
+    mock.state.sharedPortals.push(explicit);
+    try {
+      const registry = await listSharedPortals();
+      expect(registry.map((row) => row.portalKey)).toEqual(["national_join", "aetna_contract"]);
+      expect(registry.find((row) => row.portalKey === "aetna_contract")).toMatchObject({
+        caseType: "contract",
+        mappingGeneration: 7,
+      });
+      expect(mock.state.requests.at(-1)?.path).toBe("/api/shared-portals?selection=explicit");
+
+      const exact = await listSharedPortals("aetna_contract");
+      expect(exact.map((row) => row.portalKey)).toEqual(["aetna_contract"]);
+      expect(mock.state.requests.at(-1)?.path).toBe(
+        "/api/shared-portals?selection=explicit&portal_key=aetna_contract",
+      );
+      await expect(listSharedPortals("missing_configuration")).rejects.toMatchObject({ status: 404 });
+
+      await listSharedFieldMaps("aetna_contract");
+      expect(mock.state.requests.at(-1)?.path).toBe(
+        "/api/shared-field-maps?selection=explicit&portal_key=aetna_contract",
+      );
+
+      const legacyRead = await apiFetch<PortalRegistryRow[]>("/api/shared-portals");
+      expect(legacyRead.data.map((row) => row.portalKey)).toEqual(["national_join"]);
+      expect(mock.state.requests.at(-1)?.path).toBe("/api/shared-portals");
+      expect(mock.state.sharedOrgHeaders).toEqual([null, null, null, null, null]);
+    } finally {
+      mock.state.sharedPortals.splice(mock.state.sharedPortals.indexOf(explicit), 1);
+    }
+  });
+
   it("TS-151b — a hand-off lands in Work cases whatever job was selected", async () => {
     // The chooser must never stand between the webapp's launch and the case
     // it launched — and leaving the panel in training mode would also strip
@@ -1522,7 +1571,32 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     formSection: string | null;
   }>;
   let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let previousTabGet: typeof chrome.tabs.get;
+  let previousFetch: typeof fetch;
   let pickPayload: unknown;
+  let captureTarget: {
+    portalKey: string;
+    mappingGeneration: number;
+    targetRevision: number;
+  };
+  const capturePortalRow = {
+    id: "shared-regional-enrollment",
+    orgId: null,
+    portalKey: "regional_enrollment",
+    name: "Regional Health Plan network enrollment",
+    payerId: null,
+    payerName: "Regional Health Plan",
+    caseType: "enrollment",
+    mappingGeneration: 1,
+    requiresExplicitSelection: true,
+    formUrl: "https://portal.example.com/regional/enroll/form",
+    isVerified: true,
+    lastVerifiedAt: null,
+    provenAt: null,
+    urlChangedAt: null,
+    createdAt: "2026-08-01T00:00:00Z",
+    updatedAt: "2026-08-01T00:00:00Z",
+  } satisfies PortalRegistryRow;
 
   beforeAll(async () => {
     // Importing the worker registers messaging; handleRequest is the same
@@ -1530,11 +1604,20 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await import("../background/index");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     stub.reset();
+    mock.state.sharedPortals.push(capturePortalRow);
     scanPayload = [];
     pickPayload = { status: "cancelled" };
     previousSendMessage = chrome.tabs.sendMessage;
+    previousTabGet = chrome.tabs.get;
+    previousFetch = globalThis.fetch;
+    chrome.tabs.get = (async (tabId: number) => ({
+      id: tabId,
+      url: "https://portal.example.com/regional/enroll/form/step1",
+      active: true,
+      windowId: 1,
+    })) as typeof chrome.tabs.get;
     chrome.tabs.sendMessage = (async (
       _tabId: number,
       message: { type?: string },
@@ -1546,10 +1629,26 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
         return { ok: true, data: pickPayload };
       throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
     }) as typeof chrome.tabs.sendMessage;
+    await writePanelMode("train");
+    const { handleRequest } = await import("../background/index");
+    const state = await handleRequest({
+      type: "SET_TRAIN_TARGET",
+      portalKey: capturePortalRow.portalKey,
+      mappingGeneration: capturePortalRow.mappingGeneration,
+    }) as import("../shared/trainTarget").TrainTargetState;
+    captureTarget = {
+      portalKey: capturePortalRow.portalKey,
+      mappingGeneration: capturePortalRow.mappingGeneration,
+      targetRevision: state.revision,
+    };
   });
 
   afterEach(() => {
     chrome.tabs.sendMessage = previousSendMessage;
+    chrome.tabs.get = previousTabGet;
+    globalThis.fetch = previousFetch;
+    const index = mock.state.sharedPortals.indexOf(capturePortalRow);
+    if (index >= 0) mock.state.sharedPortals.splice(index, 1);
   });
 
   it("keeps page 1 rows and decisions when a disjoint page 2 is scanned", async () => {
@@ -1575,7 +1674,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const page1 = (await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "regional_enrollment",
+      ...captureTarget,
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1586,6 +1685,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
       type: "SET_CAPTURE_CHOICE",
       selector: "#p1a",
       token: "provider.firstName",
+      ...captureTarget,
     });
 
     // Disjoint selectors + a different URL tail candidate — must become a
@@ -1598,7 +1698,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const page2 = (await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "regional_enrollment",
+      ...captureTarget,
       pageStep: "step2",
       pageUrlTail: "step2",
       captureMode: "auto",
@@ -1612,6 +1712,171 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     expect(
       page2.rows.filter((r) => r.pageStep === "step2").map((r) => r.selector),
     ).toEqual(["#p2a", "#p2b"]);
+
+    const switched = await handleRequest({
+      type: "SET_TRAIN_TARGET",
+      portalKey: "national_join",
+      mappingGeneration: 1,
+    }) as import("../shared/trainTarget").TrainTargetState;
+    expect(await handleRequest({
+      type: "GET_CAPTURE",
+      portalKey: "national_join",
+      mappingGeneration: 1,
+      targetRevision: switched.revision,
+    })).toBeNull();
+  });
+
+  it("rejects a scan result that arrives after the exact target changes", async () => {
+    const { handleRequest } = await import("../background/index");
+    let announceScan!: () => void;
+    let releaseScan!: (value: unknown) => void;
+    const scanStarted = new Promise<void>((resolve) => { announceScan = resolve; });
+    const delayedScan = new Promise<unknown>((resolve) => { releaseScan = resolve; });
+    chrome.tabs.sendMessage = (async (
+      _tabId: number,
+      message: { type?: string },
+    ) => {
+      if (message?.type === "PING") return { ok: true };
+      if (message?.type === "SCAN_FIELDS") {
+        announceScan();
+        return delayedScan;
+      }
+      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+
+    const pendingCapture = handleRequest({
+      type: "START_CAPTURE",
+      tabId: 1,
+      ...captureTarget,
+      pageStep: "step1",
+      pageUrlTail: "step1",
+      captureMode: "auto",
+    });
+    await scanStarted;
+    const switched = await handleRequest({
+      type: "SET_TRAIN_TARGET",
+      portalKey: "national_join",
+      mappingGeneration: 1,
+    }) as import("../shared/trainTarget").TrainTargetState;
+    releaseScan({ ok: true, data: scanPayload });
+
+    await expect(pendingCapture).rejects.toThrow(/configuration changed/);
+    expect(switched.portalKey).toBe("national_join");
+    expect(await handleRequest({
+      type: "GET_CAPTURE",
+      portalKey: "national_join",
+      mappingGeneration: 1,
+      targetRevision: switched.revision,
+    })).toBeNull();
+  });
+
+  it("rejects an exact map-list result that arrives after a target switch", async () => {
+    const { handleRequest } = await import("../background/index");
+    let announceRequest!: () => void;
+    let releaseRequest!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { announceRequest = resolve; });
+    const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve; });
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/shared-field-maps?") && url.includes("portal_key=regional_enrollment")) {
+        announceRequest();
+        await requestGate;
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      const pendingMaps = handleRequest({ type: "LIST_SHARED_FIELD_MAPS", ...captureTarget });
+      await requestStarted;
+      await handleRequest({
+        type: "SET_TRAIN_TARGET",
+        portalKey: "national_join",
+        mappingGeneration: 1,
+      });
+      releaseRequest();
+      await expect(pendingMaps).rejects.toThrow(/configuration changed/);
+    } finally {
+      releaseRequest();
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
+  it("rejects a proof acknowledgement that arrives after a target switch", async () => {
+    const { handleRequest } = await import("../background/index");
+    let announceRequest!: () => void;
+    let releaseRequest!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { announceRequest = resolve; });
+    const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve; });
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/shared-portals/prove")) {
+        announceRequest();
+        await requestGate;
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      const pendingProof = handleRequest({ type: "MARK_PORTAL_PROVEN", ...captureTarget });
+      await requestStarted;
+      await handleRequest({
+        type: "SET_TRAIN_TARGET",
+        portalKey: "national_join",
+        mappingGeneration: 1,
+      });
+      releaseRequest();
+      await expect(pendingProof).rejects.toThrow(/configuration changed/);
+    } finally {
+      releaseRequest();
+      globalThis.fetch = fetchBefore;
+    }
+  });
+
+  it("does not apply a late mock-map result to a different target", async () => {
+    const { handleRequest } = await import("../background/index");
+    let announceRequest!: () => void;
+    let releaseRequest!: () => void;
+    let fillMessages = 0;
+    const requestStarted = new Promise<void>((resolve) => { announceRequest = resolve; });
+    const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve; });
+    const fetchBefore = globalThis.fetch;
+    const sendBefore = chrome.tabs.sendMessage;
+    chrome.tabs.sendMessage = (async (_tabId: number, message: { type?: string }) => {
+      if (message?.type === "FILL_FIELDS") fillMessages += 1;
+      if (message?.type === "PING") return { ok: true };
+      throw new Error(`unexpected tab message: ${message?.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/shared-field-maps?")) {
+        announceRequest();
+        await requestGate;
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+
+    try {
+      const pendingMock = handleRequest({
+        type: "RUN_MOCK_DRY_RUN",
+        tabId: 1,
+        ...captureTarget,
+      });
+      await requestStarted;
+      await handleRequest({
+        type: "SET_TRAIN_TARGET",
+        portalKey: "national_join",
+        mappingGeneration: 1,
+      });
+      releaseRequest();
+      await expect(pendingMock).rejects.toThrow(/configuration changed/);
+      expect(fillMessages).toBe(0);
+    } finally {
+      releaseRequest();
+      globalThis.fetch = fetchBefore;
+      chrome.tabs.sendMessage = sendBefore;
+    }
   });
 
   it("re-points a drifted library field under the library's own name", async () => {
@@ -1627,7 +1892,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "regional_enrollment",
+      ...captureTarget,
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1646,6 +1911,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const session = (await handleRequest({
       type: "PICK_CAPTURE_FIELD",
       tabId: 1,
+      ...captureTarget,
       pageStep: "step1",
       displayLabel: "Provider NPI",
     })) as {
@@ -1671,7 +1937,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     await handleRequest({
       type: "START_CAPTURE",
       tabId: 1,
-      portalKey: "regional_enrollment",
+      ...captureTarget,
       pageStep: "step1",
       pageUrlTail: "step1",
       captureMode: "auto",
@@ -1688,6 +1954,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
     const session = (await handleRequest({
       type: "PICK_CAPTURE_FIELD",
       tabId: 1,
+      ...captureTarget,
       pageStep: "step1",
     })) as { rows: Array<{ selector: string; displayLabel?: string | null }> };
     expect(
@@ -1705,7 +1972,7 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
       handleRequest({
         type: "START_CAPTURE",
         tabId: 1,
-        portalKey: "regional_enrollment",
+        ...captureTarget,
         pageStep: "step1",
         pageUrlTail: "step1",
         captureMode: "auto",

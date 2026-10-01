@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyRowEdit,
   canSendCapture,
+  captureSessionMatchesTarget,
   captureCounts,
   diffCapture,
   identifyCapturePage,
@@ -33,7 +34,7 @@ function row(over: Partial<CaptureRow> = {}): CaptureRow {
 }
 
 function session(rows: CaptureRow[]): CaptureSession {
-  return { portalKey: "availity", templateStepId: null, startedAt: "2026-07-28", rows };
+  return { portalKey: "availity", mappingGeneration: 1, templateStepId: null, startedAt: "2026-07-28", rows };
 }
 
 describe("captureCounts / recognitionSummary (S5.4)", () => {
@@ -74,6 +75,21 @@ describe("parseCaptureSession (S5.2 — survives a worker restart)", () => {
     if (!first) throw new Error("expected a restored row");
     expect(first.chosenToken).toBe("provider.npi");
     expect(first.sent).toBe(true);
+  });
+
+  it("binds restored rows and decisions to portal key plus mapping generation", () => {
+    const stored = session([row({ chosenToken: "provider.npi", sent: true })]);
+    const current = parseCaptureSession({ ...stored, mappingGeneration: 4 });
+    expect(current?.mappingGeneration).toBe(4);
+    expect(captureSessionMatchesTarget(current, { portalKey: "availity", mappingGeneration: 4 })).toBe(true);
+    expect(captureSessionMatchesTarget(current, { portalKey: "availity", mappingGeneration: 5 })).toBe(false);
+    expect(captureSessionMatchesTarget(current, { portalKey: "other", mappingGeneration: 4 })).toBe(false);
+  });
+
+  it("treats capture data without generation metadata as legacy generation 1", () => {
+    const legacy = parseCaptureSession({ ...session([row()]), mappingGeneration: null });
+    expect(legacy?.mappingGeneration).toBe(1);
+    expect(captureSessionMatchesTarget(legacy, { portalKey: "availity", mappingGeneration: 1 })).toBe(true);
   });
 
   it("returns null rather than a half-session when a row is malformed", () => {
@@ -413,6 +429,7 @@ describe("usedPageNames / nextPageSequence", () => {
   it("reports the distinct pages captured so far", () => {
     const session = {
       portalKey: "p",
+      mappingGeneration: 1,
       templateStepId: null,
       startedAt: "2026-08-07T00:00:00Z",
       rows: [
