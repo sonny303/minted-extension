@@ -31,6 +31,12 @@ import { readPanelMode } from "./mode";
 import { shouldSendOrgHeader } from "../shared/panelMode";
 import type { ReportedField } from "../shared/fill";
 import { isFillEventV2Advertised, type FillEventV2Metadata } from "../shared/fillEventV2";
+import {
+  parseWorkContextValidationResponse,
+  workTuplesEqual,
+  type WorkContextTuple,
+  type WorkContextValidationResponse,
+} from "../shared/workContext";
 
 export class ApiError extends Error {
   constructor(
@@ -46,10 +52,10 @@ async function requestOnce(
   path: string,
   token: string,
   init?: RequestInit,
-  expectedContext?: { orgId: string | null; mode: "case" },
+  expectedContext?: { orgId: string | null; mode: "case"; useRequestedOrg?: boolean },
 ): Promise<Response> {
   // Stored only when a multi-org user has picked; absent = no header sent.
-  const orgId = await readActiveOrgId();
+  const storedOrgId = await readActiveOrgId();
   // E6.9 F6.9.8: the org header is decided by MODE, not by a path literal.
   // Training a payer form has no org at all — it writes the shared library —
   // and the user-scoped routes (org discovery, view prefs, shared propose)
@@ -57,9 +63,13 @@ async function requestOnce(
   // Match the pathname precisely (ignore any query string).
   const pathname = path.split("?")[0] ?? path;
   const mode = await readPanelMode();
-  if (expectedContext && (orgId !== expectedContext.orgId || mode !== expectedContext.mode)) {
+  if (
+    expectedContext &&
+    (mode !== expectedContext.mode || (!expectedContext.useRequestedOrg && storedOrgId !== expectedContext.orgId))
+  ) {
     throw new ApiError(409, "The active work context changed before learning could be saved.");
   }
+  const orgId = expectedContext?.useRequestedOrg ? expectedContext.orgId : storedOrgId;
   return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -77,7 +87,7 @@ async function requestOnce(
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
-  expectedContext?: { orgId: string | null; mode: "case" },
+  expectedContext?: { orgId: string | null; mode: "case"; useRequestedOrg?: boolean },
 ): Promise<{ data: T; meta: ApiMeta | null }> {
   let token = await getAccessToken();
   let response = await requestOnce(path, token, init, expectedContext);
@@ -378,6 +388,56 @@ export async function getCaseContext(caseId: string): Promise<CaseContext> {
     `/api/cases/${encodeURIComponent(caseId)}/context`,
   );
   return data;
+}
+
+/** Revalidate one immutable M56 owner/step/config tuple in the active org.
+ * The server returns canonical effective web maps in the same guarded read;
+ * legacy org map/registry routes intentionally remain unchanged. */
+export async function validateWorkContext(
+  tuple: WorkContextTuple,
+  options: { signal?: AbortSignal } = {},
+): Promise<WorkContextValidationResponse> {
+  let data: unknown;
+  try {
+    const response = await apiFetch<unknown>(
+      "/api/work-context/validate",
+      {
+        method: "POST",
+        cache: "no-store",
+        signal: options.signal,
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+        body: JSON.stringify(tuple),
+      },
+      { orgId: tuple.orgId, mode: "case", useRequestedOrg: true },
+    );
+    data = response.data;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      const message = error.status === 404
+        ? "The authorized Work context could not be found in this organization."
+        : error.status === 409
+          ? "The Work context or portal mapping changed. Reopen this task from Minted Panel."
+          : error.status === 422
+            ? "Minted Panel rejected the Work context. Reopen this task from Minted Panel."
+            : "Minted Panel could not validate this Work context.";
+      throw new ApiError(error.status, message);
+    }
+    throw error;
+  }
+  const parsed = parseWorkContextValidationResponse(data);
+  if (!parsed) throw new ApiError(502, "Minted Panel returned an invalid Work validation response.");
+  const echoedTuple = {
+    ...parsed.tuple,
+    protocolVersion: tuple.protocolVersion,
+  } as WorkContextTuple;
+  if (
+    !workTuplesEqual(echoedTuple, tuple) ||
+    parsed.mappingGeneration !== tuple.mappingGeneration ||
+    parsed.effectiveMappingFingerprint !== tuple.effectiveMappingFingerprint
+  ) {
+    throw new ApiError(409, "The Work context or portal mapping changed. Reopen this task from Minted Panel.");
+  }
+  return parsed;
 }
 
 export async function getPortalFieldMapsWithMeta(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {

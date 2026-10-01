@@ -52,6 +52,7 @@ import {
   putViewPrefs,
   searchCases,
   searchProviders,
+  type ProviderProfileRequestOptions,
 } from "./api";
 import { projectQuickCards, resolveLayout } from "../shared/quickCards";
 import {
@@ -101,6 +102,18 @@ import {
   touchActiveCaseActivity,
 } from "./activeCase";
 import {
+  clearActiveWork,
+  currentActiveWorkEpoch,
+  getActiveWorkState,
+  profileOptionsForActiveWork,
+  registerActiveWorkListeners,
+  registerValidatedWorkSelectionCommitter,
+  registerWorkSwitchInvalidator,
+  requireActiveWorkForTab,
+  revalidateActiveWork,
+} from "./activeWork";
+import type { ActiveWorkRecord } from "../shared/workContext";
+import {
   captureSessionMatchesTarget,
   applyRowEdit,
   identifyCapturePage,
@@ -127,6 +140,7 @@ chrome.sidePanel
 // E4.3 F4.3.1/TE-1: the SET_ACTIVE_CASE handoff receipt + portal-tab binding
 // and expiry listeners. Top-level so every worker restart re-registers them.
 registerActiveCaseListeners();
+registerActiveWorkListeners();
 
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const SELECTED_GROUP_PREFIX = "minted.selectedGroupId.";
@@ -294,6 +308,7 @@ async function clearOrgSelections(): Promise<void> {
 async function clearOrgScopedState(
   preserveHandoffOrgId: string | null = null,
 ): Promise<void> {
+  await clearActiveWork({ allowLegacyFallback: true });
   await clearActiveCaseForOrgChange(preserveHandoffOrgId);
   await clearOrgSelections();
 }
@@ -320,13 +335,147 @@ async function beginAiFillAttempt(): Promise<void> {
   }
 }
 
+// A Work-v2 launch/tab switch revokes any pending fill before the new receipt
+// can be acknowledged. The callback is registered before runtime messages are
+// accepted; beginAiFillAttempt is a hoisted worker function declaration.
+registerWorkSwitchInvalidator(beginAiFillAttempt);
+registerValidatedWorkSelectionCommitter(async (tuple) => {
+  await writePanelMode("case");
+  const currentOrgId = await readActiveOrgId();
+  if (currentOrgId !== tuple.orgId) {
+    await beginAiFillAttempt();
+    await clearActiveCaseForOrgChange(null);
+    await clearOrgSelections();
+    await writeActiveOrgId(tuple.orgId);
+  }
+  await writeSessionString(SELECTED_PROVIDER_KEY, tuple.providerId);
+  await writeSessionString(
+    SELECTED_CASE_PREFIX + tuple.providerId,
+    tuple.ownerKind === "case" ? tuple.ownerId : null,
+  );
+  await writeSessionString(SELECTED_FACILITY_PREFIX + tuple.providerId, tuple.facilityId);
+  // Contract profiles resolve their group under the validated assignment
+  // tuple; a stale picker group must not leak into that profile request.
+  await writeSessionString(SELECTED_GROUP_PREFIX + tuple.providerId, null);
+});
+
+interface WorkFillAuthorization {
+  record: ActiveWorkRecord;
+  epoch: number;
+  maps: import("../shared/apiTypes").PortalFieldMap[];
+}
+
+interface CreatedAiFillGuard {
+  orgId: string | null;
+  revision: number;
+  selectionRevision: number;
+  tabUrl: string;
+  validate: () => Promise<void>;
+  work?: WorkFillAuthorization;
+}
+
+function workTupleMatchesFillRequest(
+  work: ActiveWorkRecord,
+  request: { providerId: string; caseId?: string | null; portalKey: string; facilityId: string | null; groupId?: string | null },
+): boolean {
+  const tuple = work.tuple;
+  return request.providerId === tuple.providerId && request.portalKey === tuple.portalKey &&
+    request.facilityId === tuple.facilityId && (request.groupId == null) &&
+    (tuple.ownerKind === "case" ? request.caseId === tuple.ownerId : request.caseId == null);
+}
+
+async function currentWorkTabUrl(tabId: number): Promise<string> {
+  const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+  if (typeof frame?.url !== "string" || frame.url === "") {
+    throw new Error("The active Work tab has no readable main-frame URL.");
+  }
+  return frame.url;
+}
+
+async function createWorkFillGuard(
+  request: { tabId: number; providerId: string; caseId?: string | null; portalKey: string; facilityId: string | null; groupId?: string | null },
+  work: ActiveWorkRecord,
+): Promise<CreatedAiFillGuard> {
+  const revision = fillSelectionRevision;
+  const activeRevision = activeTabRevision;
+  const navigationRevision = tabNavigationRevision.get(request.tabId) ?? 0;
+  const epoch = currentActiveWorkEpoch();
+  if (!workTupleMatchesFillRequest(work, request)) {
+    throw new Error("Fill target does not match the authorized Work owner and portal configuration.");
+  }
+  const [orgId, selectionRevision, selectedProvider, selectedCase, selectedFacility] = await Promise.all([
+    readActiveOrgId(),
+    readAiSelectionRevision(),
+    readSessionString(SELECTED_PROVIDER_KEY),
+    readSessionString(SELECTED_CASE_PREFIX + work.tuple.providerId),
+    readSessionString(SELECTED_FACILITY_PREFIX + work.tuple.providerId),
+  ]);
+  if (
+    orgId !== work.tuple.orgId || selectedProvider !== work.tuple.providerId ||
+    (selectedCase === AD_HOC_CASE_SELECTION ? null : selectedCase) !== (work.tuple.ownerKind === "case" ? work.tuple.ownerId : null) ||
+    selectedFacility !== work.tuple.facilityId
+  ) {
+    throw new Error("The selected provider, owner, location, or organization changed. Reopen the Work from Minted Panel.");
+  }
+  await chrome.tabs.get(request.tabId);
+  const tabUrl = await currentWorkTabUrl(request.tabId);
+  const initialValidation = await revalidateActiveWork(work, epoch);
+  const validate = async (): Promise<void> => {
+    if (
+      revision !== fillSelectionRevision ||
+      activeRevision !== activeTabRevision ||
+      navigationRevision !== (tabNavigationRevision.get(request.tabId) ?? 0)
+    ) {
+      throw new Error("The form or Work context changed. Run Fill again.");
+    }
+    const [currentOrg, currentTab, activeTabs, currentRevision, providerId, caseId, facilityId, currentTabUrl] = await Promise.all([
+      readActiveOrgId(),
+      chrome.tabs.get(request.tabId),
+      chrome.tabs.query({ active: true, currentWindow: true }),
+      readAiSelectionRevision(),
+      readSessionString(SELECTED_PROVIDER_KEY),
+      readSessionString(SELECTED_CASE_PREFIX + work.tuple.providerId),
+      readSessionString(SELECTED_FACILITY_PREFIX + work.tuple.providerId),
+      currentWorkTabUrl(request.tabId),
+    ]);
+    if (
+      currentOrg !== work.tuple.orgId || currentRevision !== selectionRevision ||
+      providerId !== work.tuple.providerId ||
+      (caseId === AD_HOC_CASE_SELECTION ? null : caseId) !== (work.tuple.ownerKind === "case" ? work.tuple.ownerId : null) ||
+      facilityId !== work.tuple.facilityId || currentTab.id !== request.tabId || currentTabUrl !== tabUrl || activeTabs[0]?.id !== request.tabId
+    ) {
+      throw new Error("The form or Work context changed. Run Fill again.");
+    }
+    await revalidateActiveWork(work, epoch);
+    if (
+      revision !== fillSelectionRevision ||
+      activeRevision !== activeTabRevision ||
+      navigationRevision !== (tabNavigationRevision.get(request.tabId) ?? 0)
+    ) {
+      throw new Error("The form or Work context changed. Run Fill again.");
+    }
+  };
+  await validate();
+  return {
+    orgId: work.tuple.orgId,
+    revision,
+    selectionRevision,
+    tabUrl,
+    validate,
+    work: { record: work, epoch, maps: initialValidation.effectiveWebMaps },
+  };
+}
+
 async function createAiFillGuard(request: {
   tabId: number;
   providerId: string;
   caseId?: string | null;
+  portalKey: string;
   facilityId: string | null;
   groupId?: string | null;
-}) {
+}): Promise<CreatedAiFillGuard> {
+  const work = await requireActiveWorkForTab(request.tabId);
+  if (work) return createWorkFillGuard(request, work);
   const revision = fillSelectionRevision;
   const activeRevision = activeTabRevision;
   const navigationRevision = tabNavigationRevision.get(request.tabId) ?? 0;
@@ -923,6 +1072,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return mutateCurrentHandoff(request.receiptKey, async (record) => {
         if (record.orgId !== request.orgId) return false;
         await beginAiFillAttempt();
+        await clearActiveWork({ allowLegacyFallback: true });
         await clearOrgSelections();
         await writeActiveOrgId(request.orgId);
         return true;
@@ -980,10 +1130,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return getCaseContext(request.caseId);
     case "GET_ACTIVE_CASE":
       return getActiveCaseState();
+    case "GET_ACTIVE_WORK":
+      return getActiveWorkState();
+    case "CLEAR_ACTIVE_WORK":
+      await clearActiveWork();
+      return null;
     case "ENTER_ACTIVE_CASE":
       // TE-17: an in-panel selection enters the SAME active-case state as a
       // handoff — same record, same 60-minute/tab-close expiry.
       await beginAiFillAttempt();
+      await clearActiveWork({ allowLegacyFallback: true });
       await enterActiveCase({
         caseId: request.caseId,
         providerId: request.providerId,
@@ -992,6 +1148,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return null;
     case "CLEAR_ACTIVE_CASE":
       await beginAiFillAttempt();
+      await clearActiveWork({ allowLegacyFallback: true });
       await clearActiveCase();
       return null;
     case "CLEAR_ACTIVE_CASE_IF_CURRENT": {
@@ -1407,6 +1564,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       });
     }
     case "SET_PANEL_MODE": {
+      if ((await readPanelMode()) !== request.mode) await clearActiveWork({ allowLegacyFallback: true });
       await writePanelMode(request.mode);
       return null;
     }
@@ -1473,13 +1631,52 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // providers otherwise leave them unresolved behind meta.needs_facility).
       // When state is set (B1.1), license.* resolves for that state instead
       // of staying ambiguous over several state licenses.
+      const workState = await getActiveWorkState();
+      if (workState.status === "blocked" || workState.status === "expired") {
+        throw new Error("The exact Work context is unavailable. Reopen the task from Minted Panel.");
+      }
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTabId = activeTabs[0]?.id;
+      const work = workState.status === "active" && activeTabId != null
+        ? await requireActiveWorkForTab(activeTabId)
+        : null;
+      if (workState.status === "active" && work == null) {
+        throw new Error("The exact Work context is unavailable. Reopen the task from Minted Panel.");
+      }
+      let profileOptions: ProviderProfileRequestOptions = {
+        facilityId: request.facilityId,
+        state: request.state,
+        groupId: request.groupId,
+        caseId: request.caseId,
+      };
+      if (work != null) {
+        if (work.tuple.providerId !== request.providerId ||
+            (request.facilityId ?? null) !== work.tuple.facilityId) {
+          throw new Error("The provider or facility does not match the exact Work context.");
+        }
+        await revalidateActiveWork(work, currentActiveWorkEpoch());
+        if (work.tuple.ownerKind === "contract") {
+          profileOptions = {
+            contractContext: {
+              contractId: work.tuple.ownerId,
+              assignmentId: work.tuple.assignmentId,
+              contextVersion: work.tuple.contextVersion,
+              sopTemplateId: work.tuple.sopTemplateId,
+              sopVersion: work.tuple.sopVersion,
+              stepIdentity: work.tuple.stepIdentity,
+            },
+            ...(work.tuple.facilityId == null ? {} : { facilityId: work.tuple.facilityId }),
+          };
+        } else {
+          profileOptions = {
+            caseId: work.tuple.ownerId,
+            facilityId: work.tuple.facilityId,
+            state: request.state,
+          };
+        }
+      }
       const [{ profile, meta }, { layout, catalog }] = await Promise.all([
-        getProviderProfile(request.providerId, {
-          facilityId: request.facilityId,
-          state: request.state,
-          groupId: request.groupId,
-          caseId: request.caseId,
-        }),
+        getProviderProfile(request.providerId, profileOptions),
         readCardLayout(),
       ]);
       const servedLabels = new Map(catalog.map((f) => [f.key, f.label]));
@@ -1508,6 +1705,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_PROVIDER":
       if ((await readSessionString(SELECTED_PROVIDER_KEY)) !== request.providerId) {
         await beginAiFillAttempt();
+        await clearActiveWork({ allowLegacyFallback: true });
       }
       await writeSessionString(SELECTED_PROVIDER_KEY, request.providerId);
       return null;
@@ -1516,6 +1714,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_CASE":
       if ((await readSessionString(SELECTED_CASE_PREFIX + request.providerId)) !== request.caseId) {
         await beginAiFillAttempt();
+        await clearActiveWork({ allowLegacyFallback: true });
       }
       await writeSessionString(
         SELECTED_CASE_PREFIX + request.providerId,
@@ -1527,6 +1726,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_GROUP":
       if ((await readSessionString(SELECTED_GROUP_PREFIX + request.providerId)) !== request.groupId) {
         await beginAiFillAttempt();
+        await clearActiveWork({ allowLegacyFallback: true });
       }
       await writeSessionString(SELECTED_GROUP_PREFIX + request.providerId, request.groupId);
       return null;
@@ -1535,6 +1735,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "SET_SELECTED_FACILITY":
       if ((await readSessionString(SELECTED_FACILITY_PREFIX + request.providerId)) !== request.facilityId) {
         await beginAiFillAttempt();
+        await clearActiveWork({ allowLegacyFallback: true });
       }
       await writeSessionString(
         SELECTED_FACILITY_PREFIX + request.providerId,
@@ -1572,7 +1773,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         state: request.state,
         facilityId: request.facilityId,
         groupId: request.groupId,
-      }, guard);
+      }, guard, guard.work ? {
+        maps: guard.work.maps,
+        profileOptions: profileOptionsForActiveWork(guard.work.record),
+      } : {});
     }
     case "FILL": {
       // A fill without a prepared AI scan is the compatible static-only path.
@@ -1600,6 +1804,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         aiStatus: request.aiStatus,
         orgId: guard.orgId,
         validate: guard.validate,
+        ...(guard.work ? {
+          maps: guard.work.maps,
+          profileOptions: profileOptionsForActiveWork(guard.work.record),
+        } : {}),
       });
       // Context invalidation can race the awaited content apply or fill-event
       // request. A canceled operation may return a static-only summary, but it

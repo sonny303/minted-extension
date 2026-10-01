@@ -34,6 +34,7 @@ import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
 import type { SelectorMatchReport } from "./selectorMatch";
 import type { TrainTargetState } from "./trainTarget";
+import type { ActiveWorkState } from "./workContext";
 
 // Distinct from an unselected/loading case; never sent to the Panel API.
 export const AD_HOC_CASE_SELECTION = "__ad_hoc__";
@@ -210,6 +211,9 @@ export type BgRequest =
   // parity: same record, same 60-min/tab-close expiry); CLEAR dismisses an
   // expired/mismatched context.
   | { type: "GET_ACTIVE_CASE" }
+  // M56: read/clear the worker-owned versioned exact-tab Work binding.
+  | { type: "GET_ACTIVE_WORK" }
+  | { type: "CLEAR_ACTIVE_WORK" }
   | {
       type: "ENTER_ACTIVE_CASE";
       caseId: string;
@@ -323,6 +327,10 @@ export interface ActiveCaseUpdatedEvent {
   type: "ACTIVE_CASE_UPDATED";
 }
 
+export interface ActiveWorkUpdatedEvent {
+  type: "ACTIVE_WORK_UPDATED";
+}
+
 export interface AuthState {
   signedIn: boolean;
   email: string | null;
@@ -419,6 +427,8 @@ export interface BgResponseMap {
   SET_SELECTED_FACILITY: null;
   SET_VIEW_PREFS: null;
   GET_ACTIVE_CASE: ActiveCaseState;
+  GET_ACTIVE_WORK: ActiveWorkState;
+  CLEAR_ACTIVE_WORK: null;
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE_IF_CURRENT: boolean;

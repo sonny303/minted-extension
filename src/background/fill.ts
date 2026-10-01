@@ -31,6 +31,7 @@ import {
   getViewPrefs,
   postFillEvent,
   postSharedTestFill,
+  type ProviderProfileRequestOptions,
 } from "./api";
 import {
   applyFillAcrossFrames,
@@ -595,10 +596,17 @@ async function fetchPortalMaps(portalKey: string): Promise<{ maps: PortalFieldMa
 export async function prepareAiFillPortal(
   request: FillRequest,
   guard: AiFillGuard,
+  sourceOverrides: {
+    maps?: PortalFieldMap[];
+    fillEventV2?: boolean;
+    profileOptions?: ProviderProfileRequestOptions;
+  } = {},
 ): Promise<import("../shared/fill").AiFillPreparation> {
   const [{ maps, fillEventV2 }, { profile }, viewPrefs] = await Promise.all([
-    fetchPortalMaps(request.portalKey),
-    getProviderProfile(request.providerId, {
+    sourceOverrides.maps
+      ? Promise.resolve({ maps: sourceOverrides.maps, fillEventV2: sourceOverrides.fillEventV2 ?? false })
+      : fetchPortalMaps(request.portalKey),
+    getProviderProfile(request.providerId, sourceOverrides.profileOptions ?? {
       state: request.state,
       facilityId: request.facilityId,
       groupId: request.groupId,
@@ -721,6 +729,10 @@ export interface FillPortalOptions {
   candidates?: AiFillCandidate[];
   aiStatus?: "unavailable" | "no-matches" | "error";
   orgId?: string | null;
+  /** Supplied only from a successful M56 `/api/work-context/validate` read. */
+  maps?: PortalFieldMap[];
+  fillEventV2?: boolean;
+  profileOptions?: ProviderProfileRequestOptions;
 }
 
 export async function fillPortal(
@@ -791,8 +803,10 @@ export async function fillPortal(
     ? { maps: prepared.maps, profile: prepared.profile, fillEventV2: prepared.fillEventV2 ?? false }
     : await (async () => {
         const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
-          fetchPortalMaps(request.portalKey),
-          getProviderProfile(request.providerId, {
+          options.maps
+            ? Promise.resolve({ maps: options.maps, fillEventV2: options.fillEventV2 ?? false })
+            : fetchPortalMaps(request.portalKey),
+          getProviderProfile(request.providerId, options.profileOptions ?? {
             state: request.state,
             facilityId: request.facilityId,
             groupId: request.groupId,

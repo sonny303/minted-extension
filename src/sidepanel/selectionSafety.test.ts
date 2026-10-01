@@ -3,6 +3,7 @@ import { createContext, runInContext, type Context } from "node:vm";
 import ts from "typescript";
 import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
+import { workFormUrlMatchesPage } from "../shared/workContext";
 
 // Execute the unchanged entry-point functions/listeners with controlled DOM,
 // network timing, and selection state. No copied implementation or source-text
@@ -19,6 +20,50 @@ function code(names: string[], listenerTargets: string[] = []) {
 }
 
 describe("fill selection safety", () => {
+  it("uses webNavigation main-frame URL for Work while preserving legacy tabs.url", async () => {
+    const getFrame = vi.fn(async () => ({ url: "https://portal.example/form?payer=A" }));
+    const scope = createContext({ chrome: { webNavigation: { getFrame } } });
+    runInContext(code(["activePageUrlForTab"]), scope);
+
+    await expect(runInContext('activePageUrlForTab({ id: 7 }, true)', scope))
+      .resolves.toBe("https://portal.example/form?payer=A");
+    await expect(runInContext('activePageUrlForTab({ id: 7, url: "https://legacy.example/form" }, false)', scope))
+      .resolves.toBe("https://legacy.example/form");
+    expect(getFrame).toHaveBeenCalledOnce();
+    expect(getFrame).toHaveBeenCalledWith({ tabId: 7, frameId: 0 });
+  });
+
+  it("detects a bound Work page from webNavigation when tabs.Tab.url is hidden", async () => {
+    const record = {
+      tuple: { launchReceiptId: "receipt", portalKey: "portal", mappingGeneration: 1 },
+      boundTabId: 7,
+      formOrigin: "https://portal.example",
+      formPath: "/form",
+    };
+    const getFrame = vi.fn(async () => ({ url: "https://portal.example/form?payer=A" }));
+    const scope = createContext({
+      chrome: { webNavigation: { getFrame } },
+      panelMode: "case",
+      activeWorkState: { status: "active", record },
+      queryActiveTab: async () => ({ id: 7 }),
+      workFormUrlMatchesPage,
+      portalRows: [], sharedPortalRows: [],
+      portal: null, portalTabId: null,
+      detectedPageUrl: null, detectedPortalIdentity: null,
+      invalidateFillSelection: vi.fn(),
+      updateFillReady: vi.fn(), renderActiveCases: vi.fn(), renderCapture: vi.fn(),
+      renderCaqh: vi.fn(), refreshPortalAccessPrompt: vi.fn(),
+    });
+    runInContext(code(["activePageUrlForTab", "activeWorkRecordForTab", "matchedActiveWorkPortal", "detectPortal"]), scope);
+
+    await runInContext("detectPortal()", scope);
+
+    expect(runInContext("detectedPageUrl", scope)).toBe("https://portal.example/form?payer=A");
+    expect(runInContext("portalTabId", scope)).toBe(7);
+    expect(runInContext("portal", scope)).toMatchObject({ key: "portal", mappingGeneration: 1 });
+    expect(getFrame).toHaveBeenCalledWith({ tabId: 7, frameId: 0 });
+  });
+
   it.each([false, true])("sends initial profile context without borrowing the previous location state (handoff: %s)", async (handoff) => {
     const dom = new JSDOM('<select id="facility"></select>');
     const sendToBackground = vi.fn<(request: unknown) => Promise<unknown>>(async () => ({ ok: true, data: {
@@ -83,6 +128,8 @@ describe("fill selection safety", () => {
   ])("checks explicit ad hoc choice %s, group %s, location %s", (choice, group, location, ready) => {
     const scope: Context = createContext({
       portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "none" }, activeWorkRecordForTab: () => null,
       orgResolved: () => true, selectedProviderId: () => "provider",
       facilitiesLoaded: true, needsFacility: false,
       selectedFacilityId: () => location, selectedGroupId: group,
@@ -91,6 +138,42 @@ describe("fill selection safety", () => {
     });
     runInContext(code(["isFillReady"]), scope);
     expect(runInContext("isFillReady()", scope)).toBe(ready);
+  });
+
+  it("allows an exact Contract Work tab without borrowing a selected case", () => {
+    const workRecord = {
+      tuple: { ownerKind: "contract", portalKey: "portal" },
+      boundTabId: 7,
+    };
+    const scope: Context = createContext({
+      portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "active", record: workRecord },
+      activeWorkRecordForTab: () => workRecord,
+      orgResolved: () => true, selectedProviderId: () => "provider",
+      facilitiesLoaded: true, needsFacility: false,
+      selectedFacilityId: () => "location", selectedGroupId: null,
+      caseSelect: { value: "" }, AD_HOC_CASE_SELECTION: "__ad_hoc__",
+      selectedCaseId: () => null, activeCaseStatus: "none", activeCase: null,
+    });
+    runInContext(code(["isFillReady"]), scope);
+    expect(runInContext("isFillReady()", scope)).toBe(true);
+  });
+
+  it("blocks legacy URL recognition while an exact Work context is revoked", () => {
+    const scope: Context = createContext({
+      portal: { key: "portal" }, portalTabId: 7,
+      detectedPageUrl: "https://portal.example/form",
+      activeWorkState: { status: "blocked", orgId: "org" },
+      activeWorkRecordForTab: () => null,
+      orgResolved: () => true, selectedProviderId: () => "provider",
+      facilitiesLoaded: true, needsFacility: false,
+      selectedFacilityId: () => "location", selectedGroupId: "group",
+      caseSelect: { value: "case-id" }, AD_HOC_CASE_SELECTION: "__ad_hoc__",
+      selectedCaseId: () => "case-id", activeCaseStatus: "none", activeCase: null,
+    });
+    runInContext(code(["isFillReady"]), scope);
+    expect(runInContext("isFillReady()", scope)).toBe(false);
   });
 
   it.each([false, true])("discards a delayed fill after changing group (return to original: %s)", async (returnToOriginal) => {
@@ -107,6 +190,9 @@ describe("fill selection safety", () => {
       isFillReady: () => true, syncSelectedGroup: async () => {},
       renderQuickCards: vi.fn(), refreshFacilityCards: vi.fn(),
       portal: null, portalTabId: null, lastFill: null, lastFillTabId: null, lastFillPageUrl: null,
+      activeWorkState: { status: "none" }, activeWorkRecordForTab: () => null,
+      activePageUrlForTab: async (tab: { url?: string }) => tab.url ?? null,
+      matchedActiveWorkPortal: () => null,
       selectedProviderId: () => "provider", selectedCaseId: () => null,
       selectedFacilityId: () => "facility", orgResolved: () => true,
       facilitiesLoaded: true, needsFacility: false, selectedCaseState: () => "CO",

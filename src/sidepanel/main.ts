@@ -47,6 +47,7 @@ import type {
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
+import { workFormUrlMatchesPage, type ActiveWorkRecord, type ActiveWorkState } from "../shared/workContext";
 import {
   caseReturnUrl,
   evaluateHandoffApplication,
@@ -359,6 +360,7 @@ let facilitiesLoaded = false;
 let needsFacility = false;
 let portal: MatchedPortal | null = null;
 let portalTabId: number | null = null;
+let activeWorkState: ActiveWorkState = { status: "none" };
 // Portal registry from the API, held in memory per org.
 // Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
 // which is the correct signed-out/org-less posture.
@@ -484,6 +486,54 @@ function selectedFacilityId(): string | null {
 // Single org resolves by itself (read-only, no header); several need a pick.
 function orgResolved(): boolean {
   return orgs.length === 1 || (orgs.length > 1 && activeOrgId != null);
+}
+
+function activeWorkRecordForTab(
+  tab: Pick<chrome.tabs.Tab, "id"> | null,
+  pageUrl: string | null,
+): ActiveWorkRecord | null {
+  if (activeWorkState.status !== "active" || tab?.id == null) return null;
+  const record = activeWorkState.record;
+  return record.boundTabId === tab.id && workFormUrlMatchesPage(pageUrl ?? undefined, record.formOrigin, record.formPath)
+    ? record
+    : null;
+}
+
+/** Tabs only expose URL fields after host access is granted. Work already has
+ * webNavigation permission, so use its main-frame URL for the exact bound-tab
+ * path; legacy recognition keeps its existing tabs.url behavior. */
+async function activePageUrlForTab(
+  tab: Pick<chrome.tabs.Tab, "id" | "url"> | null,
+  useWorkFrameUrl: boolean,
+): Promise<string | null> {
+  if (tab == null) return null;
+  if (!useWorkFrameUrl) return tab.url ?? null;
+  if (tab.id == null) return null;
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId: tab.id, frameId: 0 });
+    return typeof frame?.url === "string" && frame.url !== "" ? frame.url : null;
+  } catch {
+    return null;
+  }
+}
+
+function activeWorkStateIdentity(state: ActiveWorkState): string {
+  if (state.status === "none") return "none";
+  if (state.status === "blocked") return `blocked:${state.orgId ?? "none"}`;
+  return `${state.status}:${state.record.tuple.launchReceiptId}:${state.record.boundTabId}`;
+}
+
+function matchedActiveWorkPortal(record: ActiveWorkRecord): MatchedPortal {
+  return {
+    key: record.tuple.portalKey,
+    label: `${record.tuple.portalKey} · selected Work`,
+    formUrl: `${record.formOrigin}${record.formPath}`,
+    caseType: record.caseType,
+    mappingGeneration: record.tuple.mappingGeneration,
+    payerId: null,
+    proven: false,
+    verified: true,
+  };
 }
 
 function providerLabel(p: ProviderListItem): string {
@@ -1646,6 +1696,13 @@ function currentSelectionAllowsCaseWork(): boolean {
 // the coverage sensor's readiness check so the two can never disagree.
 function isFillReady(): boolean {
   const portalOpen = portal != null && portalTabId != null;
+  const visibleWorkRecord = activeWorkRecordForTab(
+    portalTabId == null ? null : { id: portalTabId },
+    detectedPageUrl,
+  );
+  const tabMatchesWork = visibleWorkRecord != null && portal?.key === visibleWorkRecord.tuple.portalKey;
+  const workBlocksLegacy = activeWorkState.status !== "none" && !tabMatchesWork;
+  const contractWork = visibleWorkRecord?.tuple.ownerKind === "contract";
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   // Block fill when active-case context expired — when the active-case record
   // covers the selected case and expired, the gate closes (the worker also
@@ -1660,13 +1717,14 @@ function isFillReady(): boolean {
     !currentHandoffSelectionIsApplied();
   return Boolean(
     portalOpen &&
+    !workBlocksLegacy &&
     orgResolved() &&
     selectedProviderId() &&
     facilitiesLoaded &&
     !facilityBlocked &&
     !expiredBlocked &&
     !unappliedHandoffBlocked &&
-    (selectedCaseId() != null || (caseSelect.value === AD_HOC_CASE_SELECTION &&
+    (contractWork || selectedCaseId() != null || (caseSelect.value === AD_HOC_CASE_SELECTION &&
       selectedGroupId != null && selectedFacilityId() != null)),
   );
 }
@@ -1674,9 +1732,19 @@ function isFillReady(): boolean {
 function updateFillReady(): void {
   syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
-  portalStatus.textContent = portalOpen
-    ? `${portal?.label} form detected in the current tab.`
-    : "Open a registered payer portal in the current tab to fill it.";
+  const visibleWorkRecord = activeWorkRecordForTab(
+    portalTabId == null ? null : { id: portalTabId },
+    detectedPageUrl,
+  );
+  portalStatus.textContent = activeWorkState.status === "blocked"
+    ? "The exact Work context ended. Re-launch it or make a manual selection before filling."
+    : activeWorkState.status === "expired"
+      ? "The exact Work context expired. Re-launch it from Minted Panel."
+      : activeWorkState.status === "active" && visibleWorkRecord == null
+        ? "Return to the exact launched portal tab to continue this Work context."
+        : portalOpen
+          ? `${portal?.label} form detected in the current tab.`
+          : "Open a registered payer portal in the current tab to fill it.";
   portalStatus.classList.toggle("detected", portalOpen);
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
@@ -1707,7 +1775,7 @@ function selectedCaseState(): string {
 }
 
 function coverageSelectionKey(): string | null {
-  if (!isFillReady()) return null;
+  if (activeWorkState.status !== "none" || !isFillReady()) return null;
   return [
     selectedProviderId(),
     selectedFacilityId() ?? "none",
@@ -1723,6 +1791,11 @@ function coverageSelectionKey(): string | null {
 // on error it just hides. Respects the generation guard exactly like the other
 // loaders — a superseded selection's response is discarded, never rendered.
 function refreshCoverage(): void {
+  if (activeWorkState.status !== "none") {
+    coverageKey = null;
+    renderCoverage(null);
+    return;
+  }
   const key = coverageSelectionKey();
   // Unchanged selection (this also swallows the many redundant updateFillReady
   // calls fired during intermediate loading states) — keep the current panel /
@@ -2655,13 +2728,26 @@ async function loadOrgs(generation: number): Promise<void> {
 
   const sole = orgs.length === 1 ? orgs[0] : undefined;
   if (sole) {
-    // Clearing any stored org id also wipes stale multi-org leftovers in
-    // the worker (SET_ACTIVE_ORG clears org-scoped state on change).
-    await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
-    if (!isCurrent(generation)) return;
+    const workOrgId = activeWorkState.status === "none"
+      ? null
+      : activeWorkState.status === "blocked"
+        ? activeWorkState.orgId
+        : activeWorkState.record.tuple.orgId;
+    if (workOrgId === sole.orgId) {
+      // Work-v2 requires the validated org id to remain selected so the
+      // worker can pin every fill to the same membership.
+      activeOrgId = sole.orgId;
+    } else {
+      // Clearing any stored org id also wipes stale multi-org leftovers in
+      // the worker (SET_ACTIVE_ORG clears org-scoped state on change).
+      await sendToBackground({ type: "SET_ACTIVE_ORG", orgId: null });
+      if (!isCurrent(generation)) return;
+      activeOrgId = null;
+    }
     orgSelect.replaceChildren(
       new Option(orgLabel(sole), sole.orgId, true, true),
     );
+    renderOrgContext();
     orgReady = true;
     renderModeSurfaces();
     renderIdentityGuard();
@@ -2737,6 +2823,7 @@ async function loadPortalRegistry(generation: number): Promise<void> {
 }
 
 let detectedPageUrl: string | null = null;
+let detectedPortalIdentity: string | null = null;
 async function detectPortal(): Promise<void> {
   // Train uses the shared registry + sticky selection messaging (TRAIN-DUAL).
   // Do not overwrite `portal` from the Work `portalRows` list while training.
@@ -2745,9 +2832,20 @@ async function detectPortal(): Promise<void> {
     return;
   }
   const tab = await queryActiveTab();
-  if (portalTabId !== (tab?.id ?? null) || detectedPageUrl !== (tab?.url ?? null)) invalidateFillSelection();
-  detectedPageUrl = tab?.url ?? null;
-  portal = matchPortalByUrl(tab?.url, portalRows);
+  const hasWorkContext = activeWorkState.status !== "none";
+  const pageUrl = await activePageUrlForTab(tab, hasWorkContext);
+  const workRecord = activeWorkRecordForTab(tab, pageUrl);
+  const nextPortal = hasWorkContext
+    ? workRecord == null ? null : matchedActiveWorkPortal(workRecord)
+    : matchPortalByUrl(pageUrl, portalRows);
+  const nextIdentity = nextPortal == null
+    ? null
+    : `${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
+  if (portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
+      detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
+  detectedPageUrl = pageUrl;
+  detectedPortalIdentity = nextIdentity;
+  portal = nextPortal;
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
   // The active-cases heading + THIS PAGE chips reflect the detected page.
@@ -2861,6 +2959,8 @@ function showMain(auth: AuthState): void {
     const modeResponse = await sendToBackground({ type: "GET_PANEL_MODE" });
     panelMode = modeResponse.ok ? modeResponse.data : DEFAULT_PANEL_MODE;
     applyPanelMode();
+    const workResponse = await sendToBackground({ type: "GET_ACTIVE_WORK" });
+    if (workResponse.ok) activeWorkState = workResponse.data;
     if (panelMode === "train") {
       // Training loads no org, but the ADMIN gate is a fact about memberships
       // — so read them anyway (a user-scoped call, no org header) or a
@@ -3174,7 +3274,12 @@ fillBtn.addEventListener("click", () => {
     if (!isFillCurrent()) return;
     const tab = await queryActiveTab();
     if (!isFillCurrent()) return;
-    const clickPortal = matchPortalByUrl(tab?.url, portalRows);
+    const hasWorkContext = activeWorkState.status !== "none";
+    const originalUrl = await activePageUrlForTab(tab, hasWorkContext);
+    const workRecord = activeWorkRecordForTab(tab, originalUrl);
+    const clickPortal = hasWorkContext
+      ? workRecord == null ? null : matchedActiveWorkPortal(workRecord)
+      : matchPortalByUrl(tab?.url, portalRows);
     portal = clickPortal;
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
     updateFillReady();
@@ -3190,7 +3295,6 @@ fillBtn.addEventListener("click", () => {
     fillBtn.textContent = "Filling…";
     fillBtn.classList.add("filling");
     fillNote.hidden = false;
-    const originalUrl = tab.url ?? "";
     let response: Awaited<ReturnType<typeof sendToBackground<"FILL">>>;
     try {
       let aiScanId: string | undefined;
@@ -3229,10 +3333,15 @@ fillBtn.addEventListener("click", () => {
       // A delayed local prompt never gets to apply to another active tab or a
       // new document. The worker repeats this binding check before writes.
       const currentTab = await queryActiveTab();
+      const currentPageUrl = await activePageUrlForTab(currentTab, hasWorkContext);
+      const currentWorkRecord = activeWorkRecordForTab(currentTab, currentPageUrl);
+      const currentPortal = hasWorkContext
+        ? currentWorkRecord == null ? null : matchedActiveWorkPortal(currentWorkRecord)
+        : matchPortalByUrl(currentTab?.url, portalRows);
       if (
         !isFillCurrent() || currentTab?.id !== tab.id ||
-        (currentTab.url ?? "") !== originalUrl ||
-        matchPortalByUrl(currentTab.url, portalRows)?.key !== clickPortal.key
+        currentPageUrl !== originalUrl ||
+        currentPortal?.key !== clickPortal.key
       ) {
         setError(mainError, "The portal page changed during AI review. Run Fill again.");
         return;
@@ -3891,6 +4000,31 @@ function renderHandoffBanner(): void {
     return;
   }
 
+  if (activeWorkState.status === "expired") {
+    handoffBanner.hidden = false;
+    handoffBanner.classList.add("banner-warn");
+    const text = document.createElement("span");
+    text.textContent = "This exact Work context expired after 60 minutes idle. Re-launch the task from Minted Panel to continue.";
+    handoffBanner.append(text);
+    return;
+  }
+  if (activeWorkState.status === "blocked") {
+    handoffBanner.hidden = false;
+    handoffBanner.classList.add("banner-warn");
+    const text = document.createElement("span");
+    text.textContent = "The exact Work tab or context ended. Relaunch the task from Minted Panel, or make a manual selection before filling.";
+    handoffBanner.append(text);
+    return;
+  }
+  if (activeWorkState.status === "active") {
+    handoffBanner.hidden = false;
+    const text = document.createElement("span");
+    const work = activeWorkState.record;
+    text.textContent = `Exact Work context · ${work.tuple.ownerKind} · ${work.tuple.portalKey} · mapping ${work.tuple.mappingGeneration}. Fill is bound to its launched tab.`;
+    handoffBanner.append(text);
+    return;
+  }
+
   const record = activeCase;
   if (record == null) return;
 
@@ -4207,15 +4341,40 @@ async function refreshActiveCase(applyHandoff = true): Promise<void> {
   }
 }
 
+async function refreshActiveWork(reloadSelections = true): Promise<void> {
+  const previousIdentity = activeWorkStateIdentity(activeWorkState);
+  const modeResponse = await sendToBackground({ type: "GET_PANEL_MODE" });
+  if (modeResponse.ok && modeResponse.data !== panelMode) {
+    panelMode = modeResponse.data;
+    applyPanelMode();
+  }
+  const response = await sendToBackground({ type: "GET_ACTIVE_WORK" });
+  if (!response.ok) return;
+  activeWorkState = response.data;
+  const changed = activeWorkStateIdentity(activeWorkState) !== previousIdentity;
+  if (changed && activeWorkState.status !== "none" && reloadSelections &&
+      !views.main.hidden && panelMode !== "train") {
+    await loadOrgs(bumpGeneration());
+    await refreshActiveCase();
+  }
+  await detectPortal();
+  renderHandoffBanner();
+  updateFillReady();
+}
+
 // The worker's push channel: a handoff arrived / the bound tab closed / a
 // second launch replaced the context while the panel is open.
 chrome.runtime.onMessage.addListener((message: { type?: string }) => {
   if (message?.type === "ACTIVE_CASE_UPDATED") void refreshActiveCase();
+  if (message?.type === "ACTIVE_WORK_UPDATED") void refreshActiveWork();
 });
 
 // Slow poll: expiry is a clock, and no event fires when 60 idle minutes pass.
 window.setInterval(() => {
-  if (!views.main.hidden) void refreshActiveCase();
+  if (!views.main.hidden) {
+    void refreshActiveCase();
+    void refreshActiveWork();
+  }
 }, 30_000);
 
 // ---------------------------------------------------------------------------
