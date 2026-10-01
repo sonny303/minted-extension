@@ -266,6 +266,7 @@ async function main() {
   const profileDir = await mkdtemp(join(tmpdir(), "minted-m22-chrome-"));
   let chrome;
   let devtools;
+  let chromeStderr = "";
   try {
     chrome = spawn(
       chromePath,
@@ -285,8 +286,11 @@ async function main() {
         ...(process.platform === "linux" ? ["--no-sandbox"] : []),
         "about:blank",
       ],
-      { stdio: "ignore" },
+      { stdio: ["ignore", "ignore", "pipe"] },
     );
+    chrome.stderr.on("data", (chunk) => {
+      chromeStderr = (chromeStderr + String(chunk)).slice(-2_000);
+    });
     chrome.on("error", (error) => {
       throw new Error(`Could not launch Chrome: ${error.message}`);
     });
@@ -305,30 +309,54 @@ async function main() {
 
     const targets = async () =>
       (await devtools.send("Target.getTargets")).targetInfos;
-    const worker = await poll(
-      targets,
-      (items) =>
-        items.find(
+    const observedWorkers = new Map();
+    const selectedWorker = await poll(
+      async () => {
+        const candidates = (await targets()).filter(
           (target) =>
             target.type === "service_worker" &&
+            target.url.startsWith("chrome-extension://") &&
             target.url.endsWith("/background.js"),
-        ),
-      "built extension service worker",
-    ).then((items) =>
-      items.find(
-        (target) =>
-          target.type === "service_worker" &&
-          target.url.endsWith("/background.js"),
-      ),
+        );
+        for (const candidate of candidates) {
+          if (observedWorkers.has(candidate.targetId)) continue;
+          const sessionId = (
+            await devtools.send("Target.attachToTarget", {
+              targetId: candidate.targetId,
+              flatten: true,
+            })
+          ).sessionId;
+          await devtools.send("Runtime.enable", {}, sessionId);
+          let name;
+          try {
+            name = await evaluate(
+              devtools,
+              "chrome.runtime.getManifest().name",
+              sessionId,
+            );
+            observedWorkers.set(candidate.targetId, { url: candidate.url, name });
+            if (name === manifest.name) {
+              return { worker: candidate, sessionId };
+            }
+          } finally {
+            if (name !== manifest.name) {
+              await devtools.send("Target.detachFromTarget", { sessionId });
+            }
+          }
+        }
+        return {
+          worker: null,
+          observed: [...observedWorkers.values()],
+          chromeStderr,
+        };
+      },
+      (result) => Boolean(result.worker),
+      "Minted built extension service worker",
+      30_000,
     );
+    const worker = selectedWorker.worker;
     const extensionId = new URL(worker.url).hostname;
-    const workerSession = (
-      await devtools.send("Target.attachToTarget", {
-        targetId: worker.targetId,
-        flatten: true,
-      })
-    ).sessionId;
-    await devtools.send("Runtime.enable", {}, workerSession);
+    const workerSession = selectedWorker.sessionId;
 
     const unhandledRejections = [];
     const runtimeExceptions = [];
