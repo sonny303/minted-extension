@@ -13,7 +13,8 @@
     "watch": "node scripts/watch.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:runtime": "node scripts/verify-built-mv3-runtime.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0"

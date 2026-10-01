@@ -517,6 +517,13 @@ export async function onTabRemoved(tabId: number): Promise<void> {
   if (changed) notifyPanel();
 }
 
+// Chrome tab events have no response channel. Session storage can reject
+// during worker teardown; treat activity bookkeeping as best-effort so an
+// event callback cannot leak an unhandled rejection into the MV3 worker.
+function ignoreTabListenerFailure(operation: Promise<unknown>): void {
+  void operation.catch(() => {});
+}
+
 /** Wire the Chrome listeners. Top-level from the worker entry so every worker
  * restart re-registers them. */
 export function registerActiveCaseListeners(): void {
@@ -547,10 +554,16 @@ export function registerActiveCaseListeners(): void {
   );
   chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
     if (changeInfo.url != null) {
-      void maybeBindPortalTab(tabId, changeInfo.url).then(() => onTabActivity(tabId));
+      ignoreTabListenerFailure(
+        maybeBindPortalTab(tabId, changeInfo.url).then(() => onTabActivity(tabId)),
+      );
     }
   });
-  chrome.tabs?.onActivated?.addListener((info) => void onTabActivity(info.tabId));
-  chrome.tabs?.onRemoved?.addListener((tabId) => void onTabRemoved(tabId));
+  chrome.tabs?.onActivated?.addListener((info) => {
+    ignoreTabListenerFailure(onTabActivity(info.tabId));
+  });
+  chrome.tabs?.onRemoved?.addListener((tabId) => {
+    ignoreTabListenerFailure(onTabRemoved(tabId));
+  });
   void reconcilePersistedPortalTab().catch(() => {});
 }
