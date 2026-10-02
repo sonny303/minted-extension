@@ -34,7 +34,7 @@ import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
 import type { SelectorMatchReport } from "./selectorMatch";
 import type { TrainTargetState } from "./trainTarget";
-import type { ActiveWorkState } from "./workContext";
+import type { ActiveWorkState, WorkPortalPermissionTarget } from "./workContext";
 
 // Distinct from an unselected/loading case; never sent to the Panel API.
 export const AD_HOC_CASE_SELECTION = "__ad_hoc__";
@@ -213,6 +213,9 @@ export type BgRequest =
   | { type: "GET_ACTIVE_CASE" }
   // M56: read/clear the worker-owned versioned exact-tab Work binding.
   | { type: "GET_ACTIVE_WORK" }
+  // MINT-64: return only the exact origin for the current bound Work tab,
+  // after fresh server validation. The user still grants it with a click.
+  | { type: "GET_WORK_PORTAL_PERMISSION_TARGET" }
   | { type: "CLEAR_ACTIVE_WORK" }
   | {
       type: "ENTER_ACTIVE_CASE";
@@ -434,6 +437,7 @@ export interface BgResponseMap {
   SET_VIEW_PREFS: null;
   GET_ACTIVE_CASE: ActiveCaseState;
   GET_ACTIVE_WORK: ActiveWorkState;
+  GET_WORK_PORTAL_PERMISSION_TARGET: WorkPortalPermissionTarget | null;
   CLEAR_ACTIVE_WORK: null;
   ENTER_ACTIVE_CASE: null;
   CLEAR_ACTIVE_CASE: null;

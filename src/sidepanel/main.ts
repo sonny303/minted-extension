@@ -48,10 +48,12 @@ import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
 import {
+  isActiveWorkExpired,
   workFormUrlMatchesPage,
   type ActiveWorkRecord,
   type ActiveWorkState,
   type CanonicalWorkContextTuple,
+  type WorkPortalPermissionTarget,
 } from "../shared/workContext";
 import {
   caseReturnUrl,
@@ -254,6 +256,8 @@ const caqhStatus = el<HTMLElement>("caqh-status");
 const portalRegistryEmpty = el<HTMLElement>("portal-registry-empty");
 const portalAccess = el<HTMLElement>("portal-access");
 const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
+const workPortalAccess = el<HTMLElement>("work-portal-access");
+const workPortalAccessGrant = el<HTMLButtonElement>("work-portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
 const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
@@ -374,6 +378,9 @@ let activeWorkState: ActiveWorkState = { status: "none" };
 // Empty until the org resolves — matchPortalByUrl over [] recognizes nothing,
 // which is the correct signed-out/org-less posture.
 let portalRows: PortalRegistryRow[] = [];
+let portalRegistryLoaded = false;
+let workPortalAccessCandidate: (WorkPortalPermissionTarget & { pattern: string }) | null = null;
+let portalAccessPromptRevision = 0;
 // Panel mode and the shared portal registry used in Train forms.
 // against. The worker owns the mode — it decides whether a call carries
 // x-org-id — so the panel mirrors it rather than being its source of truth.
@@ -2920,8 +2927,10 @@ async function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
 // state (not "wrong page"); a fetch failure keeps the banner hidden and
 // degrades recognition to nothing.
 async function loadPortalRegistry(generation: number): Promise<void> {
+  portalRegistryLoaded = false;
   const response = await sendToBackground({ type: "LIST_PORTALS" });
   if (!isCurrent(generation)) return;
+  portalRegistryLoaded = response.ok;
   portalRows = response.ok ? response.data : [];
   portalRegistryEmpty.hidden = !(response.ok && portalRows.length === 0);
   void detectPortal();
@@ -2969,10 +2978,45 @@ async function detectPortal(): Promise<void> {
 // stays hidden. Reads the registry we already fetched, so it needs no host
 // permission to decide what to ask for.
 async function refreshPortalAccessPrompt(): Promise<void> {
-  if (portal != null) {
-    portalAccess.hidden = true;
-    return;
+  const revision = ++portalAccessPromptRevision;
+  portalAccess.hidden = true;
+  workPortalAccess.hidden = true;
+  workPortalAccessCandidate = null;
+
+  // Work portals can intentionally be absent from LIST_PORTALS. Ask the
+  // worker for a fresh Panel-validated target; the panel never derives a new
+  // payer origin from the page or from the handoff message.
+  if (panelMode === "case" && activeWorkState.status === "active") {
+    const tab = await queryActiveTab();
+    const pageUrl = await activePageUrlForTab(tab, true);
+    const record = activeWorkRecordForTab(tab, pageUrl);
+    if (
+      record != null &&
+      portal != null &&
+      portalTabId === tab?.id &&
+      portal.portalId === record.tuple.portalId &&
+      (!portalRegistryLoaded || workPortalAbsentFromRegistry(record, portalRows))
+    ) {
+      const targetResponse = await sendToBackground({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
+      if (revision !== portalAccessPromptRevision) return;
+      const target = targetResponse.ok ? targetResponse.data : null;
+      const pattern = target == null ? null : workPortalPermissionPattern(target.origin);
+      if (
+        target != null && pattern != null &&
+        workPortalGrantTargetMatches(target, record, tab?.id ?? null)
+      ) {
+        const alreadyGranted = await hasOriginPermissions([pattern]);
+        if (revision !== portalAccessPromptRevision) return;
+        if (!alreadyGranted) {
+          workPortalAccessCandidate = { ...target, pattern };
+          workPortalAccess.hidden = false;
+        }
+        return;
+      }
+    }
   }
+
+  if (portal != null) return;
   // The origins to ask for come from whichever registry this job works
   // against: the org's in case mode, the shared library's while training.
   const patterns = portalOriginPatterns(
@@ -2983,6 +3027,36 @@ async function refreshPortalAccessPrompt(): Promise<void> {
     return;
   }
   portalAccess.hidden = await hasOriginPermissions(patterns);
+}
+
+function workPortalPermissionPattern(origin: string): string | null {
+  try {
+    const parsed = new URL(origin);
+    if (
+      parsed.protocol !== "https:" || parsed.origin !== origin ||
+      parsed.username !== "" || parsed.password !== ""
+    ) return null;
+    return `${parsed.origin}/` + "*";
+  } catch {
+    return null;
+  }
+}
+
+function workPortalAbsentFromRegistry(
+  record: ActiveWorkRecord,
+  rows: PortalRegistryRow[],
+): boolean {
+  return !rows.some((row) => row.id === record.tuple.portalId || row.portalKey === record.tuple.portalKey);
+}
+
+function workPortalGrantTargetMatches(
+  target: WorkPortalPermissionTarget,
+  record: ActiveWorkRecord,
+  activeTabId: number | null,
+): boolean {
+  return !isActiveWorkExpired(record, Date.now()) && activeTabId != null && target.tabId === activeTabId &&
+    target.tabId === record.boundTabId && target.origin === record.formOrigin &&
+    target.launchReceiptId === record.tuple.launchReceiptId;
 }
 
 async function hasOriginPermissions(origins: string[]): Promise<boolean> {
@@ -3012,6 +3086,58 @@ portalAccessGrant.addEventListener("click", () => {
       );
     } finally {
       portalAccessGrant.disabled = false;
+    }
+  })();
+});
+
+workPortalAccessGrant.addEventListener("click", () => {
+  const candidate = workPortalAccessCandidate;
+  if (candidate == null || workPortalAccess.hidden) return;
+  const record = activeWorkState.status === "active" ? activeWorkState.record : null;
+  if (record == null || !workPortalGrantTargetMatches(candidate, record, portalTabId)) {
+    void refreshActiveWork(false);
+    return;
+  }
+  workPortalAccessGrant.disabled = true;
+  // This API call must stay synchronous in the click handler so Chrome sees
+  // the user gesture. It requests one server-validated HTTPS origin only.
+  let grantRequest: Promise<boolean>;
+  try {
+    grantRequest = chrome.permissions.request({ origins: [candidate.pattern] });
+  } catch (error) {
+    workPortalAccessGrant.disabled = false;
+    setError(
+      mainError,
+      error instanceof Error ? error.message : "Could not grant access to this Work portal",
+    );
+    return;
+  }
+  void (async () => {
+    try {
+      const granted = await grantRequest;
+      if (!granted) return;
+      const response = await sendToBackground({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
+      const target = response.ok ? response.data : null;
+      const currentRecord = activeWorkState.status === "active" ? activeWorkState.record : null;
+      const stillCurrent = target != null && currentRecord != null && panelMode === "case" &&
+        (!portalRegistryLoaded || workPortalAbsentFromRegistry(currentRecord, portalRows)) &&
+        workPortalGrantTargetMatches(target, currentRecord, portalTabId);
+      if (!stillCurrent || target == null || target.origin !== candidate.origin ||
+          target.tabId !== candidate.tabId || target.launchReceiptId !== candidate.launchReceiptId) {
+        // The exact Work may expire or switch while Chrome displays its grant
+        // prompt. Revoke only the origin just granted if that authorization
+        // no longer matches the server-validated Work target.
+        await chrome.permissions.remove({ origins: [candidate.pattern] });
+      }
+      await refreshActiveWork(false);
+    } catch (error) {
+      setError(
+        mainError,
+        error instanceof Error ? error.message : "Could not grant access to this Work portal",
+      );
+    } finally {
+      workPortalAccessGrant.disabled = false;
+      await refreshPortalAccessPrompt();
     }
   })();
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
-import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
+import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
@@ -370,6 +370,79 @@ describe("SET_ACTIVE_WORK exact tab binding", () => {
     await expect(launch).resolves.toEqual({ ok: false, code: "SUPERSEDED" });
     await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
     expect((await getActiveWorkState()).status).toBe("none");
+  });
+});
+
+describe("MINT-64 Work host permission target", () => {
+  it("returns only the freshly validated origin of the exact active Work tab", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+
+    await expect(getWorkPortalPermissionTarget()).resolves.toEqual({
+      tabId: 700,
+      launchReceiptId: message.launchReceiptId,
+      origin: "https://portal.example.com",
+    });
+    expect(validateWorkContext).toHaveBeenCalledTimes(2);
+    expect(stub.tabQueries).toContainEqual({ active: true, currentWindow: true });
+  });
+
+  it("does not return a target when fresh server validation no longer requires explicit selection", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    vi.mocked(validateWorkContext).mockResolvedValueOnce({
+      ...validationResult(),
+      requiresExplicitSelection: false,
+    });
+
+    await expect(getWorkPortalPermissionTarget()).resolves.toBeNull();
+  });
+
+  it("returns no target for a different active tab without changing the bound Work", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    stub.setQueryTabs([
+      { id: 701, windowId: 1, url: "https://other.example/form", active: true } as chrome.tabs.Tab,
+    ]);
+
+    await expect(getWorkPortalPermissionTarget()).resolves.toBeNull();
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(true);
+    expect(validateWorkContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not return a grant target for an expired Work record", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    const record = stub.sessionStore.get(ACTIVE_WORK_KEY) as Record<string, unknown>;
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      ...record,
+      lastActivityAt: new Date(Date.now() - 60 * 60 * 1000 - 1).toISOString(),
+    });
+
+    await expect(getWorkPortalPermissionTarget()).resolves.toBeNull();
+    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(true);
+    expect(validateWorkContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not extend the Work idle timeout while preparing the permission prompt", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    const record = stub.sessionStore.get(ACTIVE_WORK_KEY) as Record<string, unknown>;
+    const lastActivityAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    stub.sessionStore.set(ACTIVE_WORK_KEY, { ...record, lastActivityAt });
+
+    await expect(getWorkPortalPermissionTarget()).resolves.toMatchObject({ origin: "https://portal.example.com" });
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ lastActivityAt });
+  });
+
+  it("drops the target if the active tab changes while Panel revalidation is pending", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    const pending = deferred<ReturnType<typeof validationResult>>();
+    vi.mocked(validateWorkContext).mockImplementationOnce(() => pending.promise);
+    const target = getWorkPortalPermissionTarget();
+    await vi.waitFor(() => expect(validateWorkContext).toHaveBeenCalledTimes(2));
+    stub.setQueryTabs([
+      { id: 700, windowId: 1, url: message.portalUrl, active: false } as chrome.tabs.Tab,
+      { id: 701, windowId: 1, url: "https://other.example/form", active: true } as chrome.tabs.Tab,
+    ]);
+    pending.resolve(validationResult());
+
+    await expect(target).resolves.toBeNull();
   });
 });
 

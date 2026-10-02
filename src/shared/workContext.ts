@@ -71,6 +71,15 @@ export interface ActiveWorkRecord {
   lastActivityAt: string;
 }
 
+/** A worker-validated host target for an explicit user grant.
+ * The panel cannot choose an origin; it receives only the active Work tab's
+ * canonical form origin after server revalidation. */
+export interface WorkPortalPermissionTarget {
+  tabId: number;
+  launchReceiptId: string;
+  origin: string;
+}
+
 export type ActiveWorkState =
   | { status: "none" }
   | { status: "blocked"; orgId: string | null }

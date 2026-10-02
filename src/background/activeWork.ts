@@ -18,6 +18,7 @@ import {
   type SetActiveWorkMessage,
   type WorkContextTuple,
   type WorkContextValidationResponse,
+  type WorkPortalPermissionTarget,
   type CaseWorkContextTuple,
   type ContractWorkContextTuple,
   tupleFromSetActiveWorkMessage,
@@ -564,6 +565,36 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
   }
   await touchActiveWork(tabId);
   return record;
+}
+
+/** Return the exact form origin only after rechecking the currently active
+ * tab binding and validating the Work tuple with Panel. This read must not
+ * touch the idle timer: merely showing a permission prompt is not Work
+ * activity. The side panel still requests the origin from a direct user click. */
+export async function getWorkPortalPermissionTarget(): Promise<WorkPortalPermissionTarget | null> {
+  const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = activeTabs[0]?.id;
+  if (!Number.isSafeInteger(tabId) || tabId == null) return null;
+  if (pendingLaunch != null || await readWorkBlock() != null) return null;
+  const work = await readActiveWorkRecord();
+  if (work == null || isActiveWorkExpired(work, Date.now()) || work.boundTabId !== tabId) return null;
+  try {
+    await chrome.tabs.get(work.boundTabId);
+  } catch {
+    return null;
+  }
+  if (!workFormUrlMatchesPage(await getMainFrameUrl(work.boundTabId), work.formOrigin, work.formPath)) return null;
+  const validation = await revalidateActiveWork(work, currentActiveWorkEpoch());
+  if (!validation.requiresExplicitSelection || !isSafePortalFormUrl(validation.formUrl)) return null;
+  const currentActiveTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (currentActiveTabs[0]?.id !== work.boundTabId) return null;
+  const formUrl = new URL(validation.formUrl);
+  if (formUrl.origin !== work.formOrigin || formUrl.pathname !== work.formPath) return null;
+  return {
+    tabId: work.boundTabId,
+    launchReceiptId: work.tuple.launchReceiptId,
+    origin: formUrl.origin,
+  };
 }
 
 /** Revalidate at start and immediately before DOM writes. The return maps are
