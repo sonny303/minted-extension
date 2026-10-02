@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortalFieldMap, PortalMappingMetadata, ProviderProfileResponse } from "../shared/apiTypes";
 import type { FillPageResult } from "../shared/fill";
 import type { ControlSummary } from "../shared/nanoAi";
+import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
 import { canonicalizeWorkContextTuple } from "../shared/workContext";
 
 const mocks = vi.hoisted(() => ({
@@ -78,6 +79,18 @@ function pageResult(instructions: Array<{ selector: string; kind?: string; token
   };
 }
 
+function attemptedUnverifiedOutcome(mapId: string | null) {
+  return {
+    mapId,
+    targetKey: createFillEventV2OpaqueKey("t"),
+    frameKey: createFillEventV2OpaqueKey("f"),
+    stepKey: null,
+    attempted: true,
+    outcome: "unverified" as const,
+    reasonCode: "readback_unavailable" as const,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getPortalFieldMaps.mockResolvedValue([]);
@@ -106,6 +119,97 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("local AI fill orchestration", () => {
+  it("retains attempted-label summary and value-free V2 telemetry for an unverified static text write", async () => {
+    const mapId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const outcome = attemptedUnverifiedOutcome(mapId);
+    mocks.applyFillAcrossFrames.mockResolvedValue({
+      ...pageResult([{ selector: "#synthetic-text" }]),
+      attemptedLabels: ["Synthetic text field"],
+      fieldOutcomes: [outcome],
+    });
+
+    const summary = await fillPortal(request, {
+      maps: [{ ...portalMap("#synthetic-text"), id: mapId }],
+      fillEventV2: true,
+    });
+
+    const event = mocks.postFillEvent.mock.calls[0]?.[0];
+    expect(summary).toMatchObject({
+      filled: 1,
+      fieldsAttempted: 1,
+      fieldsVerified: 0,
+      fieldsRejected: 0,
+      attemptedLabels: ["Synthetic text field"],
+      fieldOutcomes: [outcome],
+      telemetry: {
+        schemaVersion: 2,
+        fieldsAttempted: 1,
+        fieldsVerified: 0,
+        fieldsRejected: 0,
+      },
+    });
+    expect(event).toMatchObject({
+      fieldsFilled: 0,
+      v2: {
+        schemaVersion: 2,
+        fieldsAttempted: 1,
+        fieldsVerified: 0,
+        fieldsRejected: 0,
+        fieldOutcomes: [outcome],
+      },
+    });
+    expect(event.v2).not.toHaveProperty("attemptedLabels");
+    const wireTelemetry = JSON.stringify(event.v2);
+    for (const privateDetail of ["Synthetic text field", "#synthetic-text", "provider.npi", "1234567890"]) {
+      expect(wireTelemetry).not.toContain(privateDetail);
+    }
+  });
+
+  it("combines static and AI attempted outcomes without sending labels or selectors", async () => {
+    const staticMapId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const staticOutcome = attemptedUnverifiedOutcome(staticMapId);
+    const aiOutcome = attemptedUnverifiedOutcome(null);
+    const mapped = { ...portalMap("#static-text"), id: staticMapId };
+    const guard = {
+      orgId: "org-1", revision: 1, selectionRevision: 1,
+      tabUrl: "https://portal.example/form", validate: vi.fn(),
+    };
+    const prepared = await prepareAiFillPortal(request, guard, {
+      maps: [mapped], fillEventV2: true,
+    });
+    mocks.applyFillAcrossFrames.mockResolvedValue({
+      ...pageResult([{ selector: "#static-text" }]),
+      attemptedLabels: ["Synthetic static field"],
+      fieldOutcomes: [staticOutcome],
+    });
+    mocks.applyAiFillAcrossBoundFrames.mockResolvedValue({
+      ...pageResult([{ selector: "#npi", kind: "ai", token: "provider.npi", confidence: 0.91 }]),
+      attemptedLabels: ["Synthetic AI field"],
+      fieldOutcomes: [aiOutcome],
+    });
+
+    const summary = await fillPortal(request, {
+      scanId: prepared.scanId,
+      candidates: [{ selector: "#npi", token: "provider.npi", confidence: 0.91 }],
+    });
+
+    const event = mocks.postFillEvent.mock.calls[0]?.[0];
+    expect(summary).toMatchObject({
+      fieldsAttempted: 2,
+      fieldsVerified: 0,
+      attemptedLabels: ["Synthetic static field", "Synthetic AI field"],
+      fieldOutcomes: [staticOutcome, aiOutcome],
+    });
+    expect(event).toMatchObject({
+      fieldsFilled: 0,
+      v2: { fieldsAttempted: 2, fieldsVerified: 0, fieldOutcomes: [staticOutcome, aiOutcome] },
+    });
+    const wireTelemetry = JSON.stringify(event.v2);
+    for (const privateDetail of ["Synthetic static field", "Synthetic AI field", "#static-text", "#npi", "provider.npi"]) {
+      expect(wireTelemetry).not.toContain(privateDetail);
+    }
+  });
+
   it("records a value-free canonical Work tuple with forced V2 telemetry and the successful fill id", async () => {
     const tuple = {
       protocolVersion: 2 as const,
@@ -238,6 +342,8 @@ describe("local AI fill orchestration", () => {
   });
 
   it("cancels a delayed AI apply on context invalidation and never recreates a review", async () => {
+    const staticMapId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const staticOutcome = attemptedUnverifiedOutcome(staticMapId);
     let current = true;
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
@@ -249,6 +355,14 @@ describe("local AI fill orchestration", () => {
     const prepared = await prepareAiFillPortal(request, {
       orgId: "org-1", revision: 1, selectionRevision: 1,
       tabUrl: "https://portal.example/form", validate,
+    }, {
+      maps: [{ ...portalMap("#static-text"), id: staticMapId }],
+      fillEventV2: true,
+    });
+    mocks.applyFillAcrossFrames.mockResolvedValue({
+      ...pageResult([{ selector: "#static-text" }]),
+      attemptedLabels: ["Synthetic static field"],
+      fieldOutcomes: [staticOutcome],
     });
     mocks.applyAiFillAcrossBoundFrames.mockImplementation(async (
       _tabId,
@@ -279,6 +393,14 @@ describe("local AI fill orchestration", () => {
     expect(mocks.postFillEvent).not.toHaveBeenCalled();
     expect(summary.aiReview).toBeNull();
     expect(summary.aiFilled).toBe(0);
+    expect(summary).toMatchObject({
+      filled: 1,
+      staticFilled: 1,
+      fieldsAttempted: 1,
+      fieldsVerified: 0,
+      attemptedLabels: ["Synthetic static field"],
+      fieldOutcomes: [staticOutcome],
+    });
     expect(readActiveAiReview(summary.fillSessionId ?? "missing")).toBeNull();
   });
 
