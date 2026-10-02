@@ -461,19 +461,24 @@ export async function applyFillAcrossFrames(
   const { captureV2 = false, validate } = options;
   if (instructions.length === 0) {
     const frames = await listTabFrames(tabId);
-    const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
+    const responses: FrameResponse[] = [];
+    for (const frame of frames) {
+      // Empty plans still reach the page to count its controls. Keep validation
+      // outside the send catch so a stale Work context aborts instead of being
+      // reported as an unreachable frame.
+      await validate?.();
       try {
         const raw = (await sendToFrame(tabId, frame.frameId, {
           type: "APPLY_FILL",
           instructions: [],
         })) as { ok?: boolean; data?: unknown } | undefined;
-        return raw?.ok
+        responses.push(raw?.ok
           ? { frameId: frame.frameId, ok: true, data: raw.data }
-          : { frameId: frame.frameId, ok: false };
+          : { frameId: frame.frameId, ok: false });
       } catch {
-        return { frameId: frame.frameId, ok: false };
+        responses.push({ frameId: frame.frameId, ok: false });
       }
-    }));
+    }
     const pageResults: FillPageResult[] = [];
     for (const response of responses) {
       if (!response.ok || !response.data) continue;
@@ -513,6 +518,9 @@ export async function applyFillAcrossFrames(
       return { frameId: frame.frameId, ok: false };
     }
   }));
+  // The probes may have awaited a slow or changing page. Re-check the caller's
+  // owner/configuration guard before interpreting their snapshots.
+  await validate?.();
   if (responses.every((response) => !response.ok)) throw new Error("Could not reach the enrollment form in any frame");
 
   const probeByFrame = new Map<number, Map<string, FillProbeResult>>();
@@ -664,6 +672,9 @@ export async function applyFillAcrossFrames(
         },
       } : {}),
     };
+    // Keep stale-context failures distinct from page/frame failures. The guard
+    // must pass immediately before each value-bearing dispatch.
+    await validate?.();
     try {
       priorApplyMayHaveChangedPage = true;
       const raw = (await sendToFrame(tabId, targetFrame.frameId, { type: "APPLY_FILL", instructions: [routed], requireUniqueTarget: true })) as

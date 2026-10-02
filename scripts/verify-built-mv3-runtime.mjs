@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,6 +18,16 @@ const ACTIVE_CASE_KEY = "minted.activeCase";
 const ACTIVE_ORG_KEY = "minted.activeOrgId";
 const SELECTED_PROVIDER_KEY = "minted.selectedProviderId";
 const OWNER_KEY = "minted.workbenchOwner";
+const MINT64_BASELINES = {
+  panelM60: "78204da977249ca784d44d4f7901290edd2f17cb",
+  extensionM60: "a74231e3de3dfbc1893933b21d672bc7ef92cbd3",
+};
+const MINT64_BUILT_WORK_MARKERS = [
+  "/api/work-context/validate",
+  "minted.activeWork.v2",
+  "SET_ACTIVE_WORK",
+  "PREPARE_AI_FILL",
+];
 
 const EXPECTED_MANIFEST = {
   permissions: [
@@ -261,6 +272,20 @@ async function main() {
     "Built package has no MV3 module service worker.",
   );
   assert(existsSync(join(DIST, "sidepanel.html")), "Built side panel page is missing.");
+  const backgroundBundle = await readFile(join(DIST, "background.js"), "utf8");
+  const missingWorkMarkers = MINT64_BUILT_WORK_MARKERS.filter(
+    (marker) => !backgroundBundle.includes(marker),
+  );
+  assert(
+    missingWorkMarkers.length === 0,
+    `Built background bundle is missing MINT-64 Work runtime markers: ${missingWorkMarkers.join(", ")}.`,
+  );
+  const builtWorkArtifact = {
+    baselines: MINT64_BASELINES,
+    file: "dist/background.js",
+    sha256: createHash("sha256").update(backgroundBundle).digest("hex"),
+    markers: MINT64_BUILT_WORK_MARKERS,
+  };
 
   const chromePath = findChrome();
   const profileDir = await mkdtemp(join(tmpdir(), "minted-m22-chrome-"));
@@ -296,11 +321,19 @@ async function main() {
     });
 
     const activePortFile = join(profileDir, "DevToolsActivePort");
-    const activePort = await poll(
-      async () => (await readFile(activePortFile, "utf8")).split("\n")[0],
-      (value) => /^\d+$/.test(value ?? ""),
-      "Chrome DevTools port",
-    );
+    let activePort;
+    try {
+      activePort = await poll(
+        async () => (await readFile(activePortFile, "utf8")).split("\n")[0],
+        (value) => /^\d+$/.test(value ?? ""),
+        "Chrome DevTools port",
+      );
+    } catch (error) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\nChrome stderr: ${chromeStderr || "(empty)"}`,
+        { cause: error },
+      );
+    }
     const version = await globalThis
       .fetch(`http://127.0.0.1:${activePort}/json/version`)
       .then((response) => response.json());
@@ -312,7 +345,8 @@ async function main() {
     const observedWorkers = new Map();
     const selectedWorker = await poll(
       async () => {
-        const candidates = (await targets()).filter(
+        const targetInfos = await targets();
+        const candidates = targetInfos.filter(
           (target) =>
             target.type === "service_worker" &&
             target.url.startsWith("chrome-extension://") &&
@@ -347,6 +381,7 @@ async function main() {
         return {
           worker: null,
           observed: [...observedWorkers.values()],
+          targetSummary: targetInfos.map(({ targetId, type, url, title }) => ({ targetId, type, url, title })),
           chromeStderr,
         };
       },
@@ -757,6 +792,7 @@ async function main() {
             externally_connectable: manifest.externally_connectable.matches,
           },
           sidePanelLoaded: true,
+          mint64BuiltWorkArtifact: builtWorkArtifact,
           organizationSwitchClearedPriorState: true,
           logoutClearedAuthAndWorkbench: true,
           retrySequence,
@@ -782,4 +818,36 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv.includes("--artifact-only")) {
+  const manifest = JSON.parse(
+    await readFile(join(DIST, "manifest.json"), "utf8"),
+  );
+  assert(manifest.manifest_version === 3, "Built package is not Manifest V3.");
+  assert(
+    manifest.background?.service_worker === "background.js" &&
+      manifest.background?.type === "module",
+    "Built package has no MV3 module service worker.",
+  );
+  const backgroundBundle = await readFile(join(DIST, "background.js"), "utf8");
+  const missingWorkMarkers = MINT64_BUILT_WORK_MARKERS.filter(
+    (marker) => !backgroundBundle.includes(marker),
+  );
+  assert(
+    missingWorkMarkers.length === 0,
+    `Built background bundle is missing MINT-64 Work runtime markers: ${missingWorkMarkers.join(", ")}.`,
+  );
+  console.log(JSON.stringify({
+    result: "passed",
+    manifestVersion: manifest.manifest_version,
+    serviceWorker: manifest.background.service_worker,
+    mint64BuiltWorkArtifact: {
+      baselines: MINT64_BASELINES,
+      file: "dist/background.js",
+      sha256: createHash("sha256").update(backgroundBundle).digest("hex"),
+      markers: MINT64_BUILT_WORK_MARKERS,
+    },
+    runtimeBehavior: "not exercised by --artifact-only",
+  }, null, 2));
+} else {
+  await main();
+}
