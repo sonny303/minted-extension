@@ -283,6 +283,8 @@ describe("P06 receiver ordering", () => {
         providerId: receiptA.providerId,
         caseId: receiptA.caseId,
         portalKey: receiptA.portalKey ?? "regional_enrollment",
+        portalId: "legacy-portal-config",
+        mappingGeneration: 1,
         state: "CO",
         facilityId: receiptA.facilityId,
       }),

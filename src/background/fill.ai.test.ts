@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
+import type { PortalFieldMap, PortalMappingMetadata, ProviderProfileResponse } from "../shared/apiTypes";
 import type { FillPageResult } from "../shared/fill";
 import type { ControlSummary } from "../shared/nanoAi";
 import { canonicalizeWorkContextTuple } from "../shared/workContext";
 
 const mocks = vi.hoisted(() => ({
   getPortalFieldMaps: vi.fn(),
+  getPortalFieldMapsWithMeta: vi.fn(),
   getProviderProfile: vi.fn(),
   getViewPrefs: vi.fn(),
   postFillEvent: vi.fn(),
@@ -28,7 +29,14 @@ vi.mock("./frameMessaging", () => ({
   acceptAiFillAcrossFrames: vi.fn(),
 }));
 
-const { fillPortal, prepareAiFillPortal, invalidatePendingAiScans, readActiveAiReview } = await import("./fill");
+const {
+  fillPortal,
+  prepareAiFillPortal,
+  invalidatePendingAiScans,
+  invalidateAiFillStateForConfiguration,
+  PortalConfigurationValidationError,
+  readActiveAiReview,
+} = await import("./fill");
 
 const request = {
   tabId: 7,
@@ -73,6 +81,9 @@ function pageResult(instructions: Array<{ selector: string; kind?: string; token
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getPortalFieldMaps.mockResolvedValue([]);
+  mocks.getPortalFieldMapsWithMeta.mockResolvedValue({
+    maps: [], fillEventV2: false, portalMappings: [],
+  });
   mocks.getProviderProfile.mockResolvedValue({ profile });
   mocks.getViewPrefs.mockResolvedValue({
     fields: null,
@@ -194,7 +205,9 @@ describe("local AI fill orchestration", () => {
 
   it("uses static fills when Nano is unavailable and records zero AI writes honestly", async () => {
     const mapped = portalMap("#static-npi");
-    mocks.getPortalFieldMaps.mockResolvedValue([mapped]);
+    mocks.getPortalFieldMapsWithMeta.mockResolvedValue({
+      maps: [mapped], fillEventV2: false, portalMappings: [],
+    });
     mocks.applyFillAcrossFrames.mockResolvedValue(pageResult([
       { selector: "#static-npi", kind: "static" },
     ]));
@@ -267,5 +280,145 @@ describe("local AI fill orchestration", () => {
     expect(summary.aiReview).toBeNull();
     expect(summary.aiFilled).toBe(0);
     expect(readActiveAiReview(summary.fillSessionId ?? "missing")).toBeNull();
+  });
+
+  it("keeps a prepared review offline, then invalidates it after a confirmed reset on reconnect", async () => {
+    const target = {
+      ...request,
+      portalId: "portal-config-1",
+      mappingGeneration: 2,
+    };
+    const guard = {
+      orgId: "org-1",
+      revision: 1,
+      selectionRevision: 1,
+      tabUrl: "https://portal.example/form",
+      validate: vi.fn(),
+      validateConfiguration: vi.fn(async (expectedFingerprint?: string, known?: PortalMappingMetadata[] | null) => {
+        let current: PortalMappingMetadata[];
+        try {
+          current = known ?? (await mocks.getPortalFieldMapsWithMeta(target.portalKey)).portalMappings;
+        } catch {
+          throw new PortalConfigurationValidationError(
+            "Reconnect to Minted Panel to verify this form configuration before filling.",
+          );
+        }
+        const row = current[0];
+        if (!row) throw new Error("The exact form configuration metadata is missing.");
+        if (row?.portal_id !== target.portalId || row?.mapping_generation !== target.mappingGeneration ||
+          (expectedFingerprint != null && row?.effective_mapping_fingerprint !== expectedFingerprint)) {
+          await invalidateAiFillStateForConfiguration({
+            portalId: target.portalId,
+            portalKey: target.portalKey,
+            mappingGeneration: target.mappingGeneration,
+          });
+          throw new PortalConfigurationValidationError("This form configuration changed or was reset.");
+        }
+        return String(row.effective_mapping_fingerprint);
+      }),
+    };
+
+    const staleMetadata = [{
+      portal_key: target.portalKey,
+      portal_id: target.portalId,
+      mapping_generation: 2,
+      active_field_count: 1,
+      mapping_ready: true,
+      effective_mapping_fingerprint: "sha256:before-reset",
+    }];
+    mocks.getPortalFieldMapsWithMeta.mockResolvedValueOnce({
+      maps: [portalMap("#npi")], fillEventV2: false, portalMappings: staleMetadata,
+    }).mockResolvedValueOnce({
+      maps: [], fillEventV2: false, portalMappings: staleMetadata,
+    });
+    const prepared = await prepareAiFillPortal(target, guard);
+    const fill = () => fillPortal(target, {
+      scanId: prepared.scanId,
+      candidates: [{ selector: "#npi", token: "provider.npi", confidence: 0.91 }],
+      validateConfiguration: guard.validateConfiguration,
+    });
+
+    mocks.getPortalFieldMapsWithMeta.mockRejectedValueOnce(new Error("offline"));
+    await expect(fill()).rejects.toThrow("Reconnect to Minted Panel");
+    expect(mocks.clearAiScanAcrossFrames).not.toHaveBeenCalled();
+    expect(mocks.applyFillAcrossFrames).not.toHaveBeenCalled();
+    expect(mocks.applyAiFillAcrossBoundFrames).not.toHaveBeenCalled();
+
+    mocks.getPortalFieldMapsWithMeta.mockResolvedValueOnce({
+      maps: [], fillEventV2: false,
+      portalMappings: [{ ...staleMetadata[0], mapping_generation: 3, effective_mapping_fingerprint: "sha256:after-reset" }],
+    });
+    await expect(fill()).rejects.toThrow("changed or was reset");
+    expect(mocks.clearAiScanAcrossFrames).toHaveBeenCalledWith(target.tabId, prepared.scanId, [0]);
+    expect(mocks.applyFillAcrossFrames).not.toHaveBeenCalled();
+    expect(mocks.applyAiFillAcrossBoundFrames).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a reset configuration's prepared scan without clearing a same-URL sibling", async () => {
+    const sharedUrl = "https://portal.example/form";
+    const first = { ...request, portalId: "config-a", mappingGeneration: 1 };
+    const sibling = { ...request, portalId: "config-b", portalKey: "sibling", mappingGeneration: 1 };
+    mocks.getPortalFieldMapsWithMeta.mockImplementation(async (portalKey: string) => ({
+      maps: [],
+      fillEventV2: false,
+      portalMappings: [{
+        portal_key: portalKey,
+        portal_id: portalKey === first.portalKey ? first.portalId : sibling.portalId,
+        case_type: null,
+        requires_explicit_selection: false,
+        mapping_generation: 1,
+        active_field_count: 1,
+        mapping_ready: true,
+        is_verified: true,
+        effective_mapping_fingerprint: `sha256:${portalKey}`,
+      }],
+    }));
+    const guard = { orgId: "org-1", revision: 1, selectionRevision: 1, tabUrl: sharedUrl, validate: vi.fn() };
+    const firstScan = await prepareAiFillPortal(first, guard);
+    const siblingScan = await prepareAiFillPortal(sibling, guard);
+
+    await invalidateAiFillStateForConfiguration({
+      portalId: first.portalId!,
+      portalKey: first.portalKey,
+      mappingGeneration: first.mappingGeneration!,
+    });
+
+    expect(mocks.clearAiScanAcrossFrames).toHaveBeenCalledWith(first.tabId, firstScan.scanId, [0]);
+    expect(mocks.clearAiScanAcrossFrames).not.toHaveBeenCalledWith(sibling.tabId, siblingScan.scanId, [0]);
+    await expect(fillPortal(sibling, {
+      scanId: siblingScan.scanId,
+      candidates: [],
+    })).resolves.toBeDefined();
+  });
+
+  it("keeps legacy generation-one mappings fillable when the exact metadata matches", async () => {
+    const legacy = { ...request, portalId: "legacy-config", mappingGeneration: 1 };
+    const metadata = [{
+      portal_key: legacy.portalKey,
+      portal_id: legacy.portalId,
+      mapping_generation: 1,
+      active_field_count: 1,
+      mapping_ready: true,
+      effective_mapping_fingerprint: "sha256:legacy",
+    }];
+    const validateConfiguration = vi.fn(async (expectedFingerprint?: string, known?: PortalMappingMetadata[] | null) => {
+      const row = known?.[0] ?? metadata[0];
+      if (!row) throw new Error("The exact legacy configuration metadata is missing.");
+      if (row.portal_id !== legacy.portalId || row.mapping_generation !== legacy.mappingGeneration ||
+        (expectedFingerprint != null && row.effective_mapping_fingerprint !== expectedFingerprint)) {
+        throw new Error("The legacy configuration changed.");
+      }
+      return String(row.effective_mapping_fingerprint);
+    });
+    mocks.getPortalFieldMapsWithMeta.mockResolvedValue({
+      maps: [portalMap("#static-npi")], fillEventV2: false, portalMappings: metadata,
+    });
+    mocks.applyFillAcrossFrames.mockResolvedValue(pageResult([{ selector: "#static-npi", kind: "static" }]));
+
+    const summary = await fillPortal(legacy, { aiStatus: "unavailable", validateConfiguration });
+
+    expect(summary.staticFilled).toBe(1);
+    expect(validateConfiguration).toHaveBeenCalledWith("sha256:legacy");
+    expect(mocks.postFillEvent).toHaveBeenCalledTimes(1);
   });
 });

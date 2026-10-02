@@ -449,11 +449,19 @@ export async function validateWorkContext(
   return parsed;
 }
 
-export async function getPortalFieldMapsWithMeta(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
+export async function getPortalFieldMapsWithMeta(portalKey: string): Promise<{
+  maps: PortalFieldMap[];
+  fillEventV2: boolean;
+  portalMappings: NonNullable<ApiMeta["portal_mappings"]>;
+}> {
   const { data, meta } = await apiFetch<PortalFieldMap[]>(
     `/api/portal-field-maps?portal_key=${encodeURIComponent(portalKey)}`,
   );
-  return { maps: data, fillEventV2: isFillEventV2Advertised(meta) };
+  return {
+    maps: data,
+    fillEventV2: isFillEventV2Advertised(meta),
+    portalMappings: meta?.portal_mappings ?? [],
+  };
 }
 
 export async function getPortalFieldMaps(portalKey: string): Promise<PortalFieldMap[]> {

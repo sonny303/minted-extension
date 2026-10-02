@@ -11,7 +11,8 @@
 //   source "manual_partial" fill the token value AND flag for manual review
 //   status                 ONLY "approved" fills (S5.1, 2026-07-28); proposed
 //                          rows are unreviewed observations and never fill
-import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
+import type { PortalFieldMap, PortalMappingMetadata, ProviderProfileResponse } from "../shared/apiTypes";
+import { portalMappingState, type PortalConfigurationTarget } from "../shared/portals";
 import type { ControlSummary } from "../shared/nanoAi";
 import type {
   AiFillCandidate,
@@ -435,6 +436,10 @@ export interface FillRequest {
   providerId: string;
   caseId?: string | null;
   portalKey: string;
+  /** Exact selected registry row. Optional only for pure unit callers that
+   * bypass the worker message boundary. */
+  portalId?: string;
+  mappingGeneration?: number;
   state: string;
   // The resolved location: the user's pick, or the provider's sole facility.
   // null when the provider has no facilities — facility.* tokens then come
@@ -449,6 +454,10 @@ export interface AiFillGuard {
   selectionRevision: number;
   tabUrl: string;
   validate: () => Promise<void>;
+  validateConfiguration?: (
+    expectedFingerprint?: string,
+    metadata?: PortalMappingMetadata[] | null,
+  ) => Promise<string>;
 }
 
 interface PreparedAiFill {
@@ -463,6 +472,7 @@ interface PreparedAiFill {
   unprocessedControls: number;
   createdAt: number;
   fillEventV2?: boolean;
+  mappingFingerprint?: string;
   operation?: AiFillOperation;
 }
 
@@ -479,6 +489,8 @@ export interface AcceptedAiFillReceipt {
   providerId: string;
   caseId?: string | null;
   portalKey: string;
+  portalId: string;
+  mappingGeneration: number;
   state: string;
   facilityId: string | null;
   groupId?: string | null;
@@ -513,6 +525,16 @@ const activeAiReviews = new Map<string, {
 }>();
 const AI_CONFIDENCE_THRESHOLD = 0.85;
 const AI_PREPARED_MAX_AGE_MS = 120_000;
+
+/** Exact-configuration checks may fail because the server is unreachable or
+ * because it confirmed a reset. Keep these distinct from page connectivity:
+ * an offline read must block Fill without retiring the local review. */
+export class PortalConfigurationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PortalConfigurationValidationError";
+  }
+}
 
 async function discardPreparedAiFill(scanId: string, prepared: PreparedAiFill): Promise<void> {
   preparedAiFills.delete(scanId);
@@ -550,6 +572,13 @@ async function finishAiOperation(prepared: PreparedAiFill, operation: AiFillOper
   );
 }
 
+function releaseAiOperation(prepared: PreparedAiFill, operation: AiFillOperation): void {
+  operation.cancelled = true;
+  operation.abortController.abort();
+  if (prepared.operation === operation) prepared.operation = undefined;
+  activeAiOperations.delete(operation.fillSessionId);
+}
+
 function isAllowedAiToken(token: string): boolean {
   return token.length <= 80 && !/(^|[._])ssn/i.test(token);
 }
@@ -565,6 +594,8 @@ function sameFillRequest(a: FillRequest, b: FillRequest): boolean {
     a.providerId === b.providerId &&
     (a.caseId || null) === (b.caseId || null) &&
     a.portalKey === b.portalKey &&
+    a.portalId === b.portalId &&
+    a.mappingGeneration === b.mappingGeneration &&
     a.state === b.state &&
     a.facilityId === b.facilityId &&
     (a.groupId || null) === (b.groupId || null)
@@ -580,20 +611,53 @@ function isExactCandidate(value: unknown): value is AiFillCandidate {
     typeof candidate.confidence === "number" && Number.isFinite(candidate.confidence);
 }
 
-async function fetchPortalMaps(portalKey: string): Promise<{ maps: PortalFieldMap[]; fillEventV2: boolean }> {
-  try {
-    if (typeof getPortalFieldMapsWithMeta === "function") {
-      const res = await getPortalFieldMapsWithMeta(portalKey);
-      if (res && Array.isArray(res.maps)) return res;
-    }
-  } catch {
-    // fall back to getPortalFieldMaps
+interface PortalMapSource {
+  maps: PortalFieldMap[];
+  fillEventV2: boolean;
+  portalMappings?: PortalMappingMetadata[];
+  mappingFingerprint?: string;
+}
+
+function configurationTarget(request: FillRequest): PortalConfigurationTarget | null {
+  return request.portalId && Number.isSafeInteger(request.mappingGeneration) &&
+    (request.mappingGeneration ?? 0) > 0
+    ? {
+        portalId: request.portalId,
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration!,
+      }
+    : null;
+}
+
+async function fetchPortalMaps(
+  portalKey: string,
+  target?: PortalConfigurationTarget | null,
+  validateConfiguration?: AiFillGuard["validateConfiguration"],
+): Promise<PortalMapSource> {
+  const res = await getPortalFieldMapsWithMeta(portalKey);
+  if (!res || !Array.isArray(res.maps)) {
+    throw new Error("Minted Panel returned an invalid current mapping response.");
   }
-  if (typeof getPortalFieldMaps === "function") {
-    const maps = await getPortalFieldMaps(portalKey);
-    return { maps: maps ?? [], fillEventV2: false };
+  const source: PortalMapSource = {
+    maps: res.maps,
+    fillEventV2: res.fillEventV2,
+    portalMappings: res.portalMappings,
+  };
+  if (target) {
+    const fingerprint = validateConfiguration
+      ? await validateConfiguration(undefined, res.portalMappings)
+      : (() => {
+          const state = portalMappingState(res.portalMappings, target);
+          if (state !== "ready") {
+            throw new PortalConfigurationValidationError(
+              "Minted Panel could not confirm this exact form configuration before filling.",
+            );
+          }
+          return res.portalMappings.find((row) => row.portal_key === target.portalKey)?.effective_mapping_fingerprint ?? "";
+        })();
+    source.mappingFingerprint = fingerprint;
   }
-  return { maps: [], fillEventV2: false };
+  return source;
 }
 
 /** Prepare a value-free local-model prompt and retain the value-bearing fill
@@ -604,13 +668,19 @@ export async function prepareAiFillPortal(
   sourceOverrides: {
     maps?: PortalFieldMap[];
     fillEventV2?: boolean;
+    mappingFingerprint?: string;
     profileOptions?: ProviderProfileRequestOptions;
   } = {},
 ): Promise<import("../shared/fill").AiFillPreparation> {
-  const [{ maps, fillEventV2 }, { profile }, viewPrefs] = await Promise.all([
+  const target = configurationTarget(request);
+  const [{ maps, fillEventV2, mappingFingerprint }, { profile }, viewPrefs] = await Promise.all([
     sourceOverrides.maps
-      ? Promise.resolve({ maps: sourceOverrides.maps, fillEventV2: sourceOverrides.fillEventV2 ?? false })
-      : fetchPortalMaps(request.portalKey),
+      ? Promise.resolve({
+          maps: sourceOverrides.maps,
+          fillEventV2: sourceOverrides.fillEventV2 ?? false,
+          mappingFingerprint: sourceOverrides.mappingFingerprint,
+        })
+      : fetchPortalMaps(request.portalKey, target, guard.validateConfiguration),
     getProviderProfile(request.providerId, sourceOverrides.profileOptions ?? {
       state: request.state,
       facilityId: request.facilityId,
@@ -620,6 +690,9 @@ export async function prepareAiFillPortal(
     getViewPrefs().catch(() => null),
   ]);
   await guard.validate();
+  if (target && mappingFingerprint && guard.validateConfiguration) {
+    await guard.validateConfiguration(mappingFingerprint);
+  }
   const scanId = crypto.randomUUID();
   const scan = await scanUnmappedControlsAcrossFrames(
     request.tabId,
@@ -665,6 +738,7 @@ export async function prepareAiFillPortal(
     unprocessedControls,
     createdAt: Date.now(),
     fillEventV2: fillEventV2 ?? false,
+    mappingFingerprint,
   };
   preparedAiFills.set(scanId, prepared);
   while (preparedAiFills.size > 4) {
@@ -683,6 +757,26 @@ export async function invalidatePendingAiScans(tabId?: number): Promise<void> {
     preparedAiFills.delete(scanId);
     if (prepared.operation) await cancelAiOperation(prepared, prepared.operation);
     else await clearAiScanAcrossFrames(prepared.request.tabId, scanId, prepared.frames.map((frame) => frame.frameId));
+  }
+}
+
+/** Retire only the pending AI state that was prepared against one exact old
+ * configuration generation. Same-URL and same-payer sibling keys remain live. */
+export async function invalidateAiFillStateForConfiguration(
+  target: PortalConfigurationTarget,
+): Promise<void> {
+  const matches = (request: FillRequest): boolean =>
+    request.portalId === target.portalId &&
+    request.portalKey === target.portalKey &&
+    request.mappingGeneration === target.mappingGeneration;
+  for (const [scanId, prepared] of [...preparedAiFills]) {
+    if (!matches(prepared.request)) continue;
+    await discardPreparedAiFill(scanId, prepared);
+  }
+  for (const [fillSessionId, active] of [...activeAiReviews]) {
+    if (!matches(active.request)) continue;
+    activeAiReviews.delete(fillSessionId);
+    await clearAiFillAcrossFrames(active.request.tabId, fillSessionId);
   }
 }
 
@@ -716,6 +810,7 @@ export async function acceptActiveAiReview(
 ): Promise<boolean> {
   const active = activeAiReviews.get(fillSessionId);
   if (!active || active.request.tabId !== tabId || active.review.writes.length === 0) return false;
+  await active.guard.validateConfiguration?.();
   await active.guard.validate();
   await acceptAiFillAcrossFrames(tabId, fillSessionId);
   activeAiReviews.delete(fillSessionId);
@@ -730,6 +825,7 @@ export async function clearAiReviewInTab(tabId: number, fillSessionId: string): 
 
 export interface FillPortalOptions {
   validate?: () => Promise<void>;
+  validateConfiguration?: AiFillGuard["validateConfiguration"];
   scanId?: string;
   candidates?: AiFillCandidate[];
   aiStatus?: "unavailable" | "no-matches" | "error";
@@ -810,13 +906,23 @@ export async function fillPortal(
     throw new Error("AI suggestions have no matching form scan. Run Fill again.");
   }
 
+  const target = configurationTarget(request);
   const resolvedData = prepared
-    ? { maps: prepared.maps, profile: prepared.profile, fillEventV2: prepared.fillEventV2 ?? false }
+    ? {
+        maps: prepared.maps,
+        profile: prepared.profile,
+        fillEventV2: prepared.fillEventV2 ?? false,
+        mappingFingerprint: prepared.mappingFingerprint,
+      }
     : await (async () => {
-        const [{ maps, fillEventV2 }, { profile }] = await Promise.all([
+        const [{ maps, fillEventV2, mappingFingerprint }, { profile }] = await Promise.all([
           options.maps
-            ? Promise.resolve({ maps: options.maps, fillEventV2: options.fillEventV2 ?? false })
-            : fetchPortalMaps(request.portalKey),
+            ? Promise.resolve({
+                maps: options.maps,
+                fillEventV2: options.fillEventV2 ?? false,
+                mappingFingerprint: undefined,
+              })
+            : fetchPortalMaps(request.portalKey, target, options.validateConfiguration),
           getProviderProfile(request.providerId, options.profileOptions ?? {
             state: request.state,
             facilityId: request.facilityId,
@@ -824,13 +930,16 @@ export async function fillPortal(
             caseId: request.caseId,
           }),
         ]);
-        return { maps, profile, fillEventV2 };
+        return { maps, profile, fillEventV2, mappingFingerprint };
       })();
   const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
   const fillEventV2 = resolvedData.fillEventV2;
 
   const assertPreparedCurrent = async (): Promise<void> => {
     await options.validate?.();
+    if (target && options.validateConfiguration) {
+      await options.validateConfiguration(prepared?.mappingFingerprint ?? resolvedData.mappingFingerprint);
+    }
     if (!prepared || !operation) return;
     if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
       throw new Error("The form or selection changed during AI review. Run Fill again.");
@@ -838,6 +947,21 @@ export async function fillPortal(
     await prepared.guard.validate();
     if (operation.cancelled || preparedAiFills.get(prepared.scanId) !== prepared) {
       throw new Error("The form or selection changed during AI review. Run Fill again.");
+    }
+  };
+  const assertPreflightCurrent = async (): Promise<void> => {
+    try {
+      await assertPreparedCurrent();
+    } catch (error) {
+      if (prepared && operation) {
+        if (error instanceof PortalConfigurationValidationError) {
+          releaseAiOperation(prepared, operation);
+        } else {
+          await cancelAiOperation(prepared, operation);
+          await finishAiOperation(prepared, operation);
+        }
+      }
+      throw error;
     }
   };
 
@@ -868,26 +992,16 @@ export async function fillPortal(
   // Pre-flight ping: any frame answering is enough (Availity's form lives in
   // a child iframe). ensureContentScript already ran in the worker.
   try {
-    await assertPreparedCurrent();
-    const frames = await listTabFrames(request.tabId);
-    await assertPreparedCurrent();
-    let alive = false;
-    for (const frame of frames) {
-      try {
-        await assertPreparedCurrent();
-        const pong = (await sendToFrame(request.tabId, frame.frameId, {
-          type: "PING",
-        })) as { ok?: boolean } | undefined;
-        await assertPreparedCurrent();
-        if (pong?.ok === true) {
-          alive = true;
-          break;
-        }
-      } catch {
-        // try next frame
-      }
-    }
-    if (!alive) throw new Error("the enrollment form did not answer the pre-flight ping");
+    // Keep configuration/Work authorization failures outside the page-reachability
+    // catches. A reset or offline registry must never be reported as a dead tab.
+    await assertPreflightCurrent();
+  } catch (error) {
+    if (error instanceof PortalConfigurationValidationError || error instanceof ApiError) throw error;
+    throw new Error("Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.", { cause: error });
+  }
+  let frames: Awaited<ReturnType<typeof listTabFrames>>;
+  try {
+    frames = await listTabFrames(request.tabId);
   } catch (error) {
     if (prepared && operation) {
       await cancelAiOperation(prepared, operation);
@@ -896,6 +1010,33 @@ export async function fillPortal(
     throw new Error(
       "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
       { cause: error },
+    );
+  }
+  await assertPreflightCurrent();
+  let alive = false;
+  for (const frame of frames) {
+    await assertPreflightCurrent();
+    let pong: { ok?: boolean } | undefined;
+    try {
+      pong = (await sendToFrame(request.tabId, frame.frameId, { type: "PING" })) as
+        { ok?: boolean } | undefined;
+    } catch {
+      // try next frame
+      continue;
+    }
+    await assertPreflightCurrent();
+    if (pong?.ok === true) {
+      alive = true;
+      break;
+    }
+  }
+  if (!alive) {
+    if (prepared && operation) {
+      await cancelAiOperation(prepared, operation);
+      await finishAiOperation(prepared, operation);
+    }
+    throw new Error(
+      "Could not reach the enrollment form - open the portal's enrollment page in the current tab and reload it.",
     );
   }
 
@@ -935,7 +1076,12 @@ export async function fillPortal(
       await assertPreparedCurrent();
       const lifecycle: AiFillApplyLifecycle = {
         isCancelled: () => operation?.cancelled === true || preparedAiFills.get(prepared!.scanId) !== prepared,
-        validate: () => prepared!.guard.validate(),
+        validate: async () => {
+          await prepared!.guard.validate();
+          if (target && options.validateConfiguration) {
+            await options.validateConfiguration(prepared!.mappingFingerprint);
+          }
+        },
         onDispatch: (frameId) => operation?.dispatchedFrameIds.add(frameId),
       };
       aiPageResult = await applyAiFillAcrossBoundFrames(

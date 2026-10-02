@@ -263,6 +263,8 @@ export type BgRequest =
       providerId: string;
       caseId?: string | null;
       portalKey: string;
+      portalId: string;
+      mappingGeneration: number;
       state: string;
       // The resolved location (user pick or sole facility); null only when
       // the provider has no facilities.
@@ -278,6 +280,8 @@ export type BgRequest =
       providerId: string;
       caseId?: string | null;
       portalKey: string;
+      portalId: string;
+      mappingGeneration: number;
       state: string;
       facilityId: string | null;
       groupId?: string | null;

@@ -500,6 +500,16 @@ export async function createMockPanelApi(options = {}) {
       // A mapping gap: the row exists but is linked to no token yet.
       fieldMapRow(FIXTURES.UNTRAINED_MAP_ID, FIXTURES.PORTAL_KEY, "label:Group Medicare PTAN", null),
     ],
+    // Current unflagged registry target used by reset-aware Extension Fill.
+    // Tests may advance its generation or swap its id to simulate an org
+    // override taking precedence over a same-key global row.
+    portalMapping: {
+      portalId: "portal-1",
+      orgId: null,
+      portalKey: FIXTURES.PORTAL_KEY,
+      mappingGeneration: 1,
+      requiresExplicitSelection: false,
+    },
     touches: new Map(), // idempotency_id -> stored touch row
     touchBodies: [], // every touch body, including injected network failures
     fillSessions: new Map(),
@@ -612,10 +622,12 @@ export async function createMockPanelApi(options = {}) {
       if (method !== "GET") return envelope(res, 405, null, "Method not allowed");
       const rows = [
         {
-          id: "portal-1",
-          orgId: null,
-          portalKey: "regional_enrollment",
+          id: state.portalMapping.portalId,
+          orgId: state.portalMapping.orgId,
+          portalKey: state.portalMapping.portalKey,
           name: "Regional Health Plan network enrollment",
+          mappingGeneration: state.portalMapping.mappingGeneration,
+          requiresExplicitSelection: state.portalMapping.requiresExplicitSelection,
           payerId: null,
           formUrl:
             "https://portal.example.com/regional/enroll/form",
@@ -1016,8 +1028,20 @@ export async function createMockPanelApi(options = {}) {
         return envelope(res, 422, null, "Request body must be a JSON object");
       }
       const keys = Object.keys(body).sort().join(",");
-      if (keys !== "case_id,fill_session_id,mappings,page_url,portal_key,provider_id") {
+      if (
+        keys !== "case_id,fill_session_id,mappings,page_url,portal_key,provider_id" &&
+        keys !== "case_id,expected_mapping_generation,fill_session_id,mappings,page_url,portal_key,provider_id"
+      ) {
         return envelope(res, 422, null, "Invalid learning receipt shape");
+      }
+      if (body.expected_mapping_generation != null &&
+        (!Number.isSafeInteger(body.expected_mapping_generation) || body.expected_mapping_generation < 1)) {
+        return envelope(res, 422, null, "expected_mapping_generation must be a positive integer");
+      }
+      if (body.expected_mapping_generation != null &&
+        body.portal_key === state.portalMapping.portalKey &&
+        body.expected_mapping_generation !== state.portalMapping.mappingGeneration) {
+        return envelope(res, 409, null, "The form mapping generation changed");
       }
       const safeUrl = typeof body.page_url === "string" ? new URL(body.page_url) : null;
       if (!safeUrl || !["http:", "https:"].includes(safeUrl.protocol) || safeUrl.search || safeUrl.hash ||
@@ -1130,7 +1154,24 @@ export async function createMockPanelApi(options = {}) {
       const portalKey = url.searchParams.get("portal_key");
       let rows = state.fieldMaps;
       if (portalKey) rows = rows.filter((r) => r.portalKey === portalKey);
-      return envelope(res, 200, rows, null, { total: rows.length });
+      const activeFieldCount = rows.filter((row) => row.status === "approved" && row.mapType === "web").length;
+      const portalMappings = portalKey === state.portalMapping.portalKey
+        ? [{
+            portal_key: state.portalMapping.portalKey,
+            portal_id: state.portalMapping.portalId,
+            case_type: null,
+            requires_explicit_selection: state.portalMapping.requiresExplicitSelection,
+            mapping_generation: state.portalMapping.mappingGeneration,
+            active_field_count: activeFieldCount,
+            mapping_ready: activeFieldCount > 0,
+            is_verified: true,
+            effective_mapping_fingerprint: `sha256:fixture-${state.portalMapping.mappingGeneration}`,
+          }]
+        : [];
+      return envelope(res, 200, rows, null, {
+        total: rows.length,
+        ...(portalMappings.length ? { portal_mappings: portalMappings } : {}),
+      });
     }
 
     // --- /api/fill-events ---

@@ -3,6 +3,8 @@ import { createContext, runInContext, type Context } from "node:vm";
 import ts from "typescript";
 import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
+import { matchPortalByUrl, portalMappingState } from "../shared/portals";
+import type { PortalMappingMetadata, PortalRegistryRow } from "../shared/apiTypes";
 import { workFormUrlMatchesPage } from "../shared/workContext";
 
 // Execute the unchanged entry-point functions/listeners with controlled DOM,
@@ -217,6 +219,73 @@ describe("fill selection safety", () => {
     finishFill({ ok: true, data: { fillSessionId: "group-A-session" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(renderFillSummary).not.toHaveBeenCalled();
+  });
+
+  it("pins the active-org override from same-key URL rows through AI prepare and Fill", async () => {
+    const dom = new JSDOM('<button id="fill"></button>');
+    const fillBtn = dom.window.document.querySelector("button")!;
+    const sharedRow: PortalRegistryRow = {
+      id: "shared-config", orgId: null, portalKey: "legacy-enrollment", name: "A Shared Portal",
+      payerId: null, caseType: "enrollment", mappingGeneration: 1, formUrl: "https://portal.example/form",
+      isVerified: true, lastVerifiedAt: null, provenAt: null, urlChangedAt: null,
+      createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const orgRow: PortalRegistryRow = {
+      ...sharedRow, id: "org-config", orgId: "active-org", name: "Z Organization Portal", mappingGeneration: 4,
+    };
+    const portalRows = [sharedRow, orgRow];
+    const selectedMapMetadata: PortalMappingMetadata[] = [{
+      portal_key: "legacy-enrollment", portal_id: "org-config", case_type: "enrollment",
+      requires_explicit_selection: false, mapping_generation: 4, active_field_count: 2,
+      mapping_ready: true, is_verified: true, effective_mapping_fingerprint: "sha256:org-map",
+    }];
+    const matchedPortal = matchPortalByUrl("https://portal.example/form/step?session=1", portalRows);
+    expect(matchedPortal).toMatchObject({ portalId: "org-config", key: "legacy-enrollment", mappingGeneration: 4 });
+    expect(portalMappingState(selectedMapMetadata, {
+      portalId: matchedPortal!.portalId,
+      portalKey: matchedPortal!.key,
+      mappingGeneration: matchedPortal!.mappingGeneration,
+    })).toBe("ready");
+
+    const requests: Array<Record<string, unknown>> = [];
+    const sendToBackground = vi.fn(async (request: Record<string, unknown>) => {
+      requests.push(request);
+      if (request.type === "PREPARE_AI_FILL") {
+        return { ok: true, data: { scanId: "scan-org", controls: [], tokenCatalog: [], unprocessedControls: 0 } };
+      }
+      if (request.type === "FILL") return { ok: true, data: { fillSessionId: "fill-org" } };
+      return { ok: true, data: null };
+    });
+    const scope: Context = createContext({
+      fillBtn, selectedGroupId: "group", loadGeneration: 1, fillSelectionRevision: 0,
+      isFillReady: () => true, syncSelectedGroup: async () => {}, clearFillResults: vi.fn(),
+      portal: null, portalTabId: null, lastFill: null, lastFillTabId: null, lastFillPageUrl: null,
+      activeWorkState: { status: "none" }, activeWorkRecordForTab: () => null,
+      activePageUrlForTab: async (tab: { url?: string }) => tab.url ?? null,
+      matchedActiveWorkPortal: () => null,
+      selectedProviderId: () => "provider", selectedCaseId: () => null,
+      selectedFacilityId: () => "facility", orgResolved: () => true,
+      facilitiesLoaded: true, needsFacility: false, selectedCaseState: () => "CO",
+      queryActiveTab: async () => ({ id: 7, url: "https://portal.example/form/step?session=1" }),
+      matchPortalByUrl, portalRows,
+      updateFillReady: vi.fn(), refreshCoverage: vi.fn(), setError: vi.fn(),
+      mainError: {}, fillNote: {}, canUseNano: async () => true,
+      NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
+      isCurrent: (generation: number) => generation === scope.loadGeneration,
+      sendToBackground, renderFillSummary: vi.fn(),
+    });
+
+    runInContext(code(["invalidateFillSelection"], ["fillBtn"]), scope);
+    fillBtn.click();
+    await vi.waitFor(() => expect(requests.some((request) => request.type === "FILL")).toBe(true));
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "PREPARE_AI_FILL", portalId: "org-config", portalKey: "legacy-enrollment", mappingGeneration: 4,
+      }),
+      expect.objectContaining({
+        type: "FILL", portalId: "org-config", portalKey: "legacy-enrollment", mappingGeneration: 4,
+      }),
+    ]));
   });
 
   it.each([null, "MO"])("uses the selected location state (%s) without guessing the home state", (state) => {
