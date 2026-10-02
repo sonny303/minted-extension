@@ -21,6 +21,105 @@ function code(names: string[], listenerTargets: string[] = []) {
   return ts.transpileModule(selected, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 }
 
+interface WorkFillHarnessRecord {
+  tuple: {
+    ownerKind: string;
+    ownerId: string;
+    portalKey: string;
+    portalId: string;
+    mappingGeneration: number;
+  };
+  caseType: string;
+  boundTabId: number;
+  formOrigin: string;
+  formPath: string;
+}
+
+function fillClickHarness(options: {
+  workState?: { status: string; record?: WorkFillHarnessRecord };
+  tabId?: number;
+  pageUrl?: string;
+  selectedGroupId?: string | null;
+  holdGroupWrite?: boolean;
+} = {}) {
+  const dom = new JSDOM('<button id="fill"></button><div id="fill-note" hidden></div>');
+  const fillBtn = dom.window.document.querySelector<HTMLButtonElement>("#fill")!;
+  const fillNote = dom.window.document.querySelector<HTMLElement>("#fill-note")!;
+  const workState = options.workState ?? { status: "none" };
+  let tabId = options.tabId ?? 7;
+  const initialPageUrl = options.pageUrl ?? "https://portal.example/form";
+  let pageUrl = initialPageUrl;
+  const selectedGroupId = options.selectedGroupId === undefined ? "primary-group" : options.selectedGroupId;
+  const mainError = {};
+  const requests: Array<Record<string, unknown>> = [];
+  const setError = vi.fn();
+  let announceGroupWrite!: () => void;
+  const groupWriteStarted = new Promise<void>((resolve) => { announceGroupWrite = resolve; });
+  let releaseGroupWrite!: () => void;
+  const groupWriteGate = new Promise<void>((resolve) => { releaseGroupWrite = resolve; });
+  const queryActiveTab = vi.fn(async () => ({ id: tabId, url: pageUrl }));
+  const sendToBackground = vi.fn(async (request: Record<string, unknown>) => {
+    requests.push(request);
+    if (request.type === "SET_SELECTED_GROUP") {
+      announceGroupWrite();
+      if (options.holdGroupWrite) await groupWriteGate;
+      return { ok: true, data: null };
+    }
+    if (request.type === "PREPARE_AI_FILL") {
+      return { ok: true, data: { scanId: "scan-work", controls: [], tokenCatalog: [], unprocessedControls: 0 } };
+    }
+    if (request.type === "FILL") {
+      const record = workState.record;
+      return {
+        ok: true,
+        data: {
+          fillSessionId: "fill-session",
+          workContext: record?.tuple ?? null,
+          workCaseType: record?.caseType ?? null,
+        },
+      };
+    }
+    return { ok: true, data: null };
+  });
+  const scope: Context = createContext({
+    fillBtn, fillNote, mainError, setError, requests,
+    groupSelectionWrite: Promise.resolve(),
+    selectedGroupId,
+    loadGeneration: 1, fillSelectionRevision: 0,
+    isFillReady: () => true, clearFillResults: vi.fn(),
+    portal: null, portalTabId: null, lastFill: null, lastFillTabId: null, lastFillPageUrl: null,
+    activeWorkState: workState,
+    activePageUrlForTab: async () => pageUrl,
+    queryActiveTab,
+    selectedProviderId: () => "provider-id",
+    selectedCaseId: () => workState.record?.tuple?.ownerKind === "case" ? workState.record.tuple.ownerId : null,
+    selectedFacilityId: () => "facility-id",
+    selectedCaseState: () => "CO",
+    orgResolved: () => true, facilitiesLoaded: true, needsFacility: false,
+    workFormUrlMatchesPage,
+    matchPortalByUrl: (url: string) => url === initialPageUrl
+      ? { key: "legacy-portal", portalId: "legacy-portal-id", mappingGeneration: 1 }
+      : null,
+    portalRows: [],
+    updateFillReady: vi.fn(), refreshCoverage: vi.fn(),
+    canUseNano: async () => true,
+    NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
+    isCurrent: () => true,
+    sendToBackground, renderFillSummary: vi.fn(),
+  });
+  runInContext(code([
+    "invalidateFillSelection", "syncSelectedGroup", "activeWorkRecordForTab", "matchedActiveWorkPortal",
+  ], ["fillBtn"]), scope);
+  return {
+    dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted,
+    finishGroupWrite: releaseGroupWrite,
+    setActiveTab: (nextTabId: number, nextPageUrl: string) => {
+      tabId = nextTabId;
+      pageUrl = nextPageUrl;
+    },
+  };
+}
+
 describe("fill selection safety", () => {
   it("uses webNavigation main-frame URL for Work while preserving legacy tabs.url", async () => {
     const getFrame = vi.fn(async () => ({ url: "https://portal.example/form?payer=A" }));
@@ -176,6 +275,100 @@ describe("fill selection safety", () => {
     });
     runInContext(code(["isFillReady"]), scope);
     expect(runInContext("isFillReady()", scope)).toBe(false);
+  });
+
+  it.each([
+    ["Contract Work", "contract", "contract"],
+    ["Enrollment Work", "case", "enrollment"],
+  ] as const)("preserves the no-group tuple for %s", async (_label, ownerKind, caseType) => {
+    const record: WorkFillHarnessRecord = {
+      tuple: {
+        ownerKind,
+        ownerId: ownerKind === "case" ? "case-owner-id" : "contract-owner-id",
+        portalKey: "typed-work-portal",
+        portalId: "typed-work-portal-id",
+        mappingGeneration: 4,
+      },
+      caseType,
+      boundTabId: 7,
+      formOrigin: "https://portal.example",
+      formPath: "/form",
+    };
+    const harness = fillClickHarness({ workState: { status: "active", record } });
+
+    harness.fillBtn.click();
+    await vi.waitFor(() => expect(harness.requests.some((request) => request.type === "FILL")).toBe(true));
+
+    expect(harness.requests.some((request) => request.type === "SET_SELECTED_GROUP")).toBe(false);
+    expect(harness.requests.find((request) => request.type === "PREPARE_AI_FILL")).toMatchObject({
+      caseId: ownerKind === "case" ? record.tuple.ownerId : null,
+      groupId: null,
+    });
+    expect(harness.requests.find((request) => request.type === "FILL")).toMatchObject({
+      caseId: ownerKind === "case" ? record.tuple.ownerId : null,
+      groupId: null,
+    });
+  });
+
+  it.each([
+    ["wrong bound tab", { tabId: 8, pageUrl: "https://portal.example/form" }],
+    ["wrong form URL", { tabId: 7, pageUrl: "https://portal.example/other" }],
+    ["expired Work", { tabId: 7, pageUrl: "https://portal.example/form", status: "expired" }],
+  ])("fails closed for %s without persisting a legacy group", async (_label, scenario) => {
+    const record: WorkFillHarnessRecord = {
+      tuple: {
+        ownerKind: "case",
+        ownerId: "case-owner-id",
+        portalKey: "typed-work-portal",
+        portalId: "typed-work-portal-id",
+        mappingGeneration: 4,
+      },
+      caseType: "enrollment",
+      boundTabId: 7,
+      formOrigin: "https://portal.example",
+      formPath: "/form",
+    };
+    const harness = fillClickHarness({
+      tabId: scenario.tabId,
+      pageUrl: scenario.pageUrl,
+      workState: { status: "status" in scenario ? scenario.status : "active", record },
+    });
+
+    harness.fillBtn.click();
+    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalledWith(
+      harness.mainError,
+      "The enrollment form is no longer the active tab - switch back to it and try again.",
+    ));
+
+    expect(harness.requests).toEqual([]);
+  });
+
+  it("keeps legacy selected-group persistence and fill payloads", async () => {
+    const harness = fillClickHarness({ selectedGroupId: "legacy-group" });
+
+    harness.fillBtn.click();
+    await vi.waitFor(() => expect(harness.requests.some((request) => request.type === "FILL")).toBe(true));
+
+    expect(harness.requests.find((request) => request.type === "SET_SELECTED_GROUP")).toMatchObject({
+      providerId: "provider-id",
+      groupId: "legacy-group",
+    });
+    expect(harness.requests.find((request) => request.type === "PREPARE_AI_FILL")).toMatchObject({ groupId: "legacy-group" });
+    expect(harness.requests.find((request) => request.type === "FILL")).toMatchObject({ groupId: "legacy-group" });
+  });
+
+  it("re-reads the active tab after delayed legacy group persistence", async () => {
+    const harness = fillClickHarness({ selectedGroupId: "legacy-group", holdGroupWrite: true });
+
+    harness.fillBtn.click();
+    await harness.groupWriteStarted;
+    harness.setActiveTab(8, "https://other.example/form");
+    harness.finishGroupWrite();
+    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalled());
+
+    expect(harness.queryActiveTab).toHaveBeenCalledTimes(2);
+    expect(harness.requests.some((request) => request.type === "PREPARE_AI_FILL")).toBe(false);
+    expect(harness.requests.some((request) => request.type === "FILL")).toBe(false);
   });
 
   it.each([false, true])("discards a delayed fill after changing group (return to original: %s)", async (returnToOriginal) => {

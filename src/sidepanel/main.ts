@@ -3496,18 +3496,56 @@ fillBtn.addEventListener("click", () => {
   void (async () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
+    let tab: chrome.tabs.Tab | null;
+    let hasWorkContext: boolean;
+    let originalUrl: string | null;
+    let workRecord: ActiveWorkRecord | null;
     try {
-      await syncSelectedGroup();
+      tab = await queryActiveTab();
+      if (!isFillCurrent()) return;
+      hasWorkContext = activeWorkState.status !== "none";
+      originalUrl = await activePageUrlForTab(tab, hasWorkContext);
+      if (!isFillCurrent()) return;
+      workRecord = activeWorkRecordForTab(tab, originalUrl);
+      // A Work selection is valid only on its exact bound tab and URL. Keep a
+      // stale or mismatched Work context closed instead of falling through to
+      // legacy selection writes or URL-based fill recognition.
+      if (hasWorkContext && workRecord == null) {
+        setError(
+          mainError,
+          "The enrollment form is no longer the active tab - switch back to it and try again.",
+        );
+        return;
+      }
+      // Work carries its own provider/case/facility tuple. The UI's legacy
+      // group selector may default to a primary group even though Work has no
+      // group, so never persist that display-only value for an exact Work fill.
+      if (workRecord == null) {
+        await syncSelectedGroup();
+        if (!isFillCurrent()) return;
+        // Legacy selection persistence can take time. Re-read the active tab
+        // after it settles so a tab switch cannot leave this fill bound to the
+        // page captured before that await.
+        tab = await queryActiveTab();
+        if (!isFillCurrent()) return;
+        hasWorkContext = activeWorkState.status !== "none";
+        originalUrl = await activePageUrlForTab(tab, hasWorkContext);
+        if (!isFillCurrent()) return;
+        workRecord = activeWorkRecordForTab(tab, originalUrl);
+        if (hasWorkContext && workRecord == null) {
+          setError(
+            mainError,
+            "The enrollment form is no longer the active tab - switch back to it and try again.",
+          );
+          return;
+        }
+      }
     } catch (error) {
       setError(mainError, error instanceof Error ? error.message : "Could not select group");
       return;
     }
     if (!isFillCurrent()) return;
-    const tab = await queryActiveTab();
-    if (!isFillCurrent()) return;
-    const hasWorkContext = activeWorkState.status !== "none";
-    const originalUrl = await activePageUrlForTab(tab, hasWorkContext);
-    const workRecord = activeWorkRecordForTab(tab, originalUrl);
+    const fillGroupId = workRecord == null ? groupId : null;
     const clickPortal = hasWorkContext
       ? workRecord == null ? null : matchedActiveWorkPortal(workRecord)
       : matchPortalByUrl(tab?.url, portalRows);
@@ -3546,7 +3584,7 @@ fillBtn.addEventListener("click", () => {
           mappingGeneration: clickPortal.mappingGeneration,
           state,
           facilityId,
-          groupId,
+          groupId: fillGroupId,
         });
         if (!isFillCurrent()) return;
         if (prepared.ok) {
@@ -3592,7 +3630,7 @@ fillBtn.addEventListener("click", () => {
         mappingGeneration: clickPortal.mappingGeneration,
         state,
         facilityId,
-        groupId,
+        groupId: fillGroupId,
         ...(aiScanId ? { aiScanId, aiMatches } : {}),
         ...(aiStatus ? { aiStatus } : {}),
       });
