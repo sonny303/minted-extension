@@ -25,6 +25,7 @@ import {
   getCaseContext,
   getNextBestAction,
   getPortalFieldMaps,
+  getPortalFieldMapsWithMeta,
   getProviderProfile,
   getViewPrefs,
   postSubmissionTouch,
@@ -121,6 +122,13 @@ interface MockApi {
     viewPrefs: Map<string, string[]>;
     failTouches: number;
     failLearnings: number;
+    portalMapping: {
+      portalId: string;
+      orgId: string | null;
+      portalKey: string;
+      mappingGeneration: number;
+      requiresExplicitSelection: boolean;
+    };
     // S4.3: `${taskId}:${stepId}` for every step the mock accepted.
     completedSteps: Set<string>;
     // S5.1/S5.4: `${portalKey}:${selector}` -> the proposed row.
@@ -173,6 +181,33 @@ afterEach(() => {
   mock.state.learningRequests.length = 0;
   mock.state.failTouches = 0;
   mock.state.failLearnings = 0;
+  Object.assign(mock.state.portalMapping, {
+    portalId: "portal-1",
+    orgId: null,
+    portalKey: FIXTURES.PORTAL_KEY,
+    mappingGeneration: 1,
+    requiresExplicitSelection: false,
+  });
+});
+
+describe("MINT-60 — exact current mapping metadata", () => {
+  it("preserves the selected org-over-global id and generation from the fresh map response", async () => {
+    mock.state.portalMapping.portalId = "org-portal-config";
+    mock.state.portalMapping.orgId = FIXTURES.PRIMARY_ORG;
+    mock.state.portalMapping.mappingGeneration = 4;
+
+    const current = await getPortalFieldMapsWithMeta(FIXTURES.PORTAL_KEY);
+
+    expect(current.portalMappings).toHaveLength(1);
+    expect(current.portalMappings[0]).toMatchObject({
+      portal_key: FIXTURES.PORTAL_KEY,
+      portal_id: "org-portal-config",
+      mapping_generation: 4,
+      mapping_ready: true,
+      effective_mapping_fingerprint: "sha256:fixture-4",
+    });
+    expect(current.maps.length).toBeGreaterThan(0);
+  });
 });
 
 const HANDOFF = {
@@ -308,6 +343,8 @@ async function seedAcceptedAiLearningReceipt(options: {
     providerId: FIXTURES.PROVIDER_ID,
     caseId: FIXTURES.CASE_ID,
     portalKey: FIXTURES.PORTAL_KEY,
+    portalId: "portal-1",
+    mappingGeneration: 1,
     state: "KS",
     facilityId,
     orgId: FIXTURES.PRIMARY_ORG,
@@ -2720,6 +2757,7 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       type: "FILL" as const, tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
       caseId: null, groupId: "group-A", facilityId: FIXTURES.FACILITY_ID,
       state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+      portalId: "portal-1", mappingGeneration: 1,
     };
     const pending = handleRequest(request);
     const rejected = expect(pending).rejects.toThrow();
@@ -2753,6 +2791,7 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
     await expect(handleRequest({
       type: "FILL", tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
       caseId: null, groupId, facilityId, state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+      portalId: "portal-1", mappingGeneration: 1,
     })).rejects.toThrow("Choose Ad hoc fill, a group, and a location");
     expect(mock.state.fillSessions.size).toBe(0);
   });
@@ -2830,6 +2869,8 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       providerId: FIXTURES.PROVIDER_ID,
       caseId: FIXTURES.CASE_ID,
       portalKey: FIXTURES.PORTAL_KEY,
+      portalId: "portal-1",
+      mappingGeneration: 1,
       state: "CO",
       facilityId: FIXTURES.FACILITY_ID,
     }) as import("../shared/fill").AiFillPreparation;
@@ -2841,6 +2882,8 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       providerId: FIXTURES.PROVIDER_ID,
       caseId: FIXTURES.CASE_ID,
       portalKey: FIXTURES.PORTAL_KEY,
+      portalId: "portal-1",
+      mappingGeneration: 1,
       state: "CO",
       facilityId: FIXTURES.FACILITY_ID,
       aiScanId: prepared.scanId,
@@ -2877,6 +2920,8 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       providerId: FIXTURES.PROVIDER_ID,
       caseId: FIXTURES.CASE_ID,
       portalKey: FIXTURES.PORTAL_KEY,
+      portalId: "portal-1",
+      mappingGeneration: 1,
       state: "CO",
       facilityId: FIXTURES.FACILITY_ID,
     }) as import("../shared/fill").FillSummary;

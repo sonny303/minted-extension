@@ -19,6 +19,22 @@ export interface ApiMeta {
   registry_empty?: boolean;
   /** Present only when fill-event V2 storage is available on this API route. */
   fill_event_schema_version?: number;
+  /** Exact-key current mapping state returned by the Panel map/portal routes. */
+  portal_mappings?: PortalMappingMetadata[];
+}
+
+/** Value-free metadata for one selected exact portal configuration. The Panel
+ * resolves organization overrides over the shared row before returning it. */
+export interface PortalMappingMetadata {
+  portal_key: string;
+  portal_id: string | null;
+  case_type: string | null;
+  requires_explicit_selection: boolean;
+  mapping_generation: number | null;
+  active_field_count: number;
+  mapping_ready: boolean;
+  is_verified: boolean;
+  effective_mapping_fingerprint: string | null;
 }
 
 export interface ApiEnvelope<T> {
@@ -76,6 +92,8 @@ export interface BatchLearnPortalFieldMapsRequest {
   provider_id: string;
   fill_session_id: string;
   portal_key: string;
+  /** MINT-57 generation guard. Legacy generation-one fills send 1 too. */
+  expected_mapping_generation?: number;
   page_url: string;
   mappings: Array<{
     selector: string;

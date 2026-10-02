@@ -12,8 +12,13 @@ import type {
 } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
 import type { AiLearningSummary } from "../shared/fill";
-import type { CaseTouchBody, QuickCardCatalogField } from "../shared/apiTypes";
-import { portalKeyEligibleForUrl, toMatchedPortal } from "../shared/portals";
+import type { CaseTouchBody, PortalMappingMetadata, QuickCardCatalogField } from "../shared/apiTypes";
+import {
+  portalKeyEligibleForUrl,
+  portalMappingState,
+  toMatchedPortal,
+  type PortalConfigurationTarget,
+} from "../shared/portals";
 import {
   EMPTY_TRAIN_TARGET,
   parseTrainTargetState,
@@ -39,6 +44,7 @@ import {
   recordCaqhAttestation,
   getNextBestAction,
   getProviderProfile,
+  getPortalFieldMapsWithMeta,
   getViewPrefs,
   listCases,
   listMyOrgs,
@@ -68,7 +74,9 @@ import {
   coveragePortal,
   fillPortal,
   invalidateActiveAiReviews,
+  invalidateAiFillStateForConfiguration,
   invalidatePendingAiScans,
+  PortalConfigurationValidationError,
   prepareAiFillPortal,
   readActiveAiReview,
   removeActiveAiReview,
@@ -240,7 +248,8 @@ function isAcceptedAiFillReceipt(value: unknown): value is AcceptedAiFillReceipt
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const receipt = value as AcceptedAiFillReceipt;
   const receiptKeys = [
-    "tabId", "fillSessionId", "providerId", "caseId", "portalKey", "state",
+    "tabId", "fillSessionId", "providerId", "caseId", "portalKey", "portalId",
+    "mappingGeneration", "state",
     "facilityId", "orgId", "actorId", "selectionRevision", "touchRecorded",
     "learning", "mappings",
   ];
@@ -248,6 +257,8 @@ function isAcceptedAiFillReceipt(value: unknown): value is AcceptedAiFillReceipt
     hasExactKeys(value, receiptKeys) &&
     typeof receipt.fillSessionId === "string" && typeof receipt.providerId === "string" &&
     typeof receipt.caseId === "string" && typeof receipt.portalKey === "string" &&
+    typeof receipt.portalId === "string" && receipt.portalId.length > 0 &&
+    Number.isSafeInteger(receipt.mappingGeneration) && receipt.mappingGeneration > 0 &&
     typeof receipt.state === "string" &&
     (receipt.facilityId == null || typeof receipt.facilityId === "string") &&
     (receipt.orgId == null || typeof receipt.orgId === "string") &&
@@ -280,6 +291,35 @@ async function writeAcceptedAiFillReceipt(receipt: AcceptedAiFillReceipt | null)
   const mutation = aiReceiptMutationTail.then(operation, operation);
   aiReceiptMutationTail = mutation.then(() => undefined, () => undefined);
   return mutation;
+}
+
+async function invalidateStoredAiReceiptForConfiguration(
+  target: PortalConfigurationTarget,
+): Promise<void> {
+  const operation = async (): Promise<AcceptedAiFillReceipt | null> => {
+    const receipt = await readAcceptedAiFillReceipt();
+    if (
+      !receipt || receipt.portalId !== target.portalId ||
+      receipt.portalKey !== target.portalKey ||
+      receipt.mappingGeneration !== target.mappingGeneration
+    ) return null;
+    await chrome.storage.session.set({ [AI_ACCEPTED_RECEIPT_KEY]: null });
+    return receipt;
+  };
+  const mutation = aiReceiptMutationTail.then(operation, operation);
+  aiReceiptMutationTail = mutation.then(() => undefined, () => undefined);
+  const receipt = await mutation;
+  if (!receipt) return;
+  aiLearningControllers.get(receipt.fillSessionId)?.abort();
+  aiLearningControllers.delete(receipt.fillSessionId);
+  const revoked: AiLearningSummary = {
+    state: "revoked",
+    confirmedSavedCount: 0,
+    insertedCount: 0,
+    preservedCount: 0,
+    reason: "context_changed",
+  };
+  await updateAiLearningReport(receipt, revoked).catch(() => undefined);
 }
 
 async function writeSessionString(
@@ -380,15 +420,28 @@ interface CreatedAiFillGuard {
   selectionRevision: number;
   tabUrl: string;
   validate: () => Promise<void>;
+  validateConfiguration?: (
+    expectedFingerprint?: string,
+    metadata?: PortalMappingMetadata[] | null,
+  ) => Promise<string>;
   work?: WorkFillAuthorization;
 }
 
 function workTupleMatchesFillRequest(
   work: ActiveWorkRecord,
-  request: { providerId: string; caseId?: string | null; portalKey: string; facilityId: string | null; groupId?: string | null },
+  request: {
+    providerId: string;
+    caseId?: string | null;
+    portalKey: string;
+    portalId: string;
+    mappingGeneration: number;
+    facilityId: string | null;
+    groupId?: string | null;
+  },
 ): boolean {
   const tuple = work.tuple;
   return request.providerId === tuple.providerId && request.portalKey === tuple.portalKey &&
+    request.portalId === tuple.portalId && request.mappingGeneration === tuple.mappingGeneration &&
     request.facilityId === tuple.facilityId && (request.groupId == null) &&
     (tuple.ownerKind === "case" ? request.caseId === tuple.ownerId : request.caseId == null);
 }
@@ -402,7 +455,16 @@ async function currentWorkTabUrl(tabId: number): Promise<string> {
 }
 
 async function createWorkFillGuard(
-  request: { tabId: number; providerId: string; caseId?: string | null; portalKey: string; facilityId: string | null; groupId?: string | null },
+  request: {
+    tabId: number;
+    providerId: string;
+    caseId?: string | null;
+    portalKey: string;
+    portalId: string;
+    mappingGeneration: number;
+    facilityId: string | null;
+    groupId?: string | null;
+  },
   work: ActiveWorkRecord,
 ): Promise<CreatedAiFillGuard> {
   const revision = fillSelectionRevision;
@@ -480,14 +542,29 @@ async function createAiFillGuard(request: {
   providerId: string;
   caseId?: string | null;
   portalKey: string;
+  portalId: string;
+  mappingGeneration: number;
   facilityId: string | null;
   groupId?: string | null;
 }): Promise<CreatedAiFillGuard> {
+  if (
+    typeof request.portalId !== "string" || request.portalId.trim() === "" ||
+    typeof request.portalKey !== "string" || request.portalKey.trim() === "" ||
+    !Number.isSafeInteger(request.mappingGeneration) || request.mappingGeneration < 1
+  ) {
+    throw new Error("Select the current form configuration before filling.");
+  }
   const work = await requireActiveWorkForTab(request.tabId);
   if (work) return createWorkFillGuard(request, work);
+  const target: PortalConfigurationTarget = {
+    portalId: request.portalId,
+    portalKey: request.portalKey,
+    mappingGeneration: request.mappingGeneration,
+  };
   const revision = fillSelectionRevision;
   const activeRevision = activeTabRevision;
   const navigationRevision = tabNavigationRevision.get(request.tabId) ?? 0;
+  let pinnedMappingFingerprint: string | undefined;
   await assertFillMatchesActiveCase(request);
   const [orgId, selectionRevision] = await Promise.all([
     readActiveOrgId(),
@@ -531,8 +608,44 @@ async function createAiFillGuard(request: {
     }
     await assertFillMatchesActiveCase(request);
   };
+  const validateConfiguration = async (
+    expectedFingerprint?: string,
+    knownMetadata?: PortalMappingMetadata[] | null,
+  ): Promise<string> => {
+    let metadata = knownMetadata;
+    if (metadata == null) {
+      try {
+        metadata = (await getPortalFieldMapsWithMeta(target.portalKey)).portalMappings;
+      } catch {
+        // A failed online read is not evidence of a reset. Preserve the
+        // draft, but never let it authorize a fill while the registry is
+        // unreachable.
+        throw new PortalConfigurationValidationError(
+          "Reconnect to Minted Panel to verify this form configuration before filling.",
+        );
+      }
+    }
+    const state = portalMappingState(
+      metadata,
+      target,
+      expectedFingerprint ?? pinnedMappingFingerprint,
+    );
+    if (state !== "ready") {
+      if (state === "changed" || state === "unready") {
+        await invalidateAiFillStateForConfiguration(target);
+        await invalidateStoredAiReceiptForConfiguration(target);
+      }
+      throw new PortalConfigurationValidationError(state === "missing"
+        ? "Minted Panel could not confirm this exact form configuration. Refresh the portal list while online, then reselect it before filling."
+        : "This form configuration changed or was reset. Reselect it and review its current mappings before filling.");
+    }
+    const row = metadata?.find((entry) => entry.portal_key === target.portalKey);
+    const fingerprint = row?.effective_mapping_fingerprint ?? "";
+    pinnedMappingFingerprint = fingerprint;
+    return fingerprint;
+  };
   await validate();
-  return { orgId, revision, selectionRevision, tabUrl, validate };
+  return { orgId, revision, selectionRevision, tabUrl, validate, validateConfiguration };
 }
 
 // S5.2 — the capture session lives in chrome.storage.session (dies with the
@@ -1005,6 +1118,7 @@ async function runAcceptedAiLearning(
         provider_id: working.providerId,
         fill_session_id: working.fillSessionId,
         portal_key: working.portalKey,
+        expected_mapping_generation: working.mappingGeneration,
         page_url: batch.pageUrl,
         mappings: batch.mappings.map(({ selector, token, confidence, fieldType }) => ({
           selector, token, confidence, field_type: fieldType,
@@ -1887,6 +2001,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         providerId: request.providerId,
         caseId: request.caseId,
         portalKey: request.portalKey,
+        portalId: request.portalId,
+        mappingGeneration: request.mappingGeneration,
         state: request.state,
         facilityId: request.facilityId,
         groupId: request.groupId,
@@ -1913,6 +2029,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         providerId: request.providerId,
         caseId: request.caseId,
         portalKey: request.portalKey,
+        portalId: request.portalId,
+        mappingGeneration: request.mappingGeneration,
         state: request.state,
         facilityId: request.facilityId,
         groupId: request.groupId,
@@ -1922,6 +2040,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         aiStatus: request.aiStatus,
         orgId: guard.orgId,
         validate: guard.validate,
+        validateConfiguration: guard.validateConfiguration,
         ...(guard.work ? {
           maps: guard.work.maps,
           fillEventV2: true,
@@ -1993,6 +2112,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         providerId: active.request.providerId,
         caseId: active.request.caseId,
         portalKey: active.request.portalKey,
+        portalId: active.request.portalId ?? "",
+        mappingGeneration: active.request.mappingGeneration ?? 0,
         state: active.request.state,
         facilityId: active.request.facilityId,
         orgId: active.guard.orgId,

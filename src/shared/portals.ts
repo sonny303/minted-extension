@@ -7,9 +7,56 @@
 // origin + path prefix (query/hash ignored — enrollment forms carry volatile
 // state there). Rows with no formUrl never match: a portal that hasn't named
 // its form page can't be recognized, only launched into via the handoff.
-import type { PortalRegistryRow } from "./apiTypes";
+import type { PortalMappingMetadata, PortalRegistryRow } from "./apiTypes";
+
+export interface PortalConfigurationTarget {
+  portalId: string;
+  portalKey: string;
+  mappingGeneration: number;
+}
+
+export type PortalMappingState = "ready" | "missing" | "changed" | "unready";
+
+/** Validate the exact configuration metadata returned alongside current maps.
+ * URL and row ordering never identify a configuration. */
+export function portalMappingState(
+  metadata: PortalMappingMetadata[] | null | undefined,
+  target: PortalConfigurationTarget,
+  expectedFingerprint?: string | null,
+): PortalMappingState {
+  if (!Array.isArray(metadata) || metadata.length === 0) return "missing";
+  const rows = metadata.filter((row) => row?.portal_key === target.portalKey);
+  if (rows.length !== 1) return "missing";
+  const row = rows[0];
+  if (!row) return "missing";
+  if (
+    row.portal_id !== target.portalId ||
+    row.mapping_generation !== target.mappingGeneration
+  ) {
+    return "changed";
+  }
+  if (
+    !row.mapping_ready ||
+    row.requires_explicit_selection !== false ||
+    !Number.isSafeInteger(row.active_field_count) ||
+    row.active_field_count < 1 ||
+    typeof row.effective_mapping_fingerprint !== "string" ||
+    row.effective_mapping_fingerprint.length === 0
+  ) {
+    return "unready";
+  }
+  if (
+    expectedFingerprint != null &&
+    row.effective_mapping_fingerprint !== expectedFingerprint
+  ) {
+    return "changed";
+  }
+  return "ready";
+}
 
 export interface MatchedPortal {
+  portalId: string;
+  orgId: string | null;
   key: string;
   label: string;
   formUrl: string | null;
@@ -30,6 +77,8 @@ export interface MatchedPortal {
 export function toMatchedPortal(row: PortalRegistryRow): MatchedPortal {
   const generation = row.mappingGeneration;
   return {
+    portalId: row.id,
+    orgId: row.orgId,
     key: row.portalKey,
     label: row.name,
     formUrl: row.formUrl,
@@ -127,18 +176,34 @@ export function matchPortalByUrl(
   }
   let best: PortalRegistryRow | null = null;
   let bestLength = -1;
+  const equallySpecific: PortalRegistryRow[] = [];
   for (const row of rows) {
     if (!row.formUrl) continue;
     try {
       const parsed = new URL(row.formUrl);
       const prefix = `${parsed.origin}${parsed.pathname}`;
-      if (target.startsWith(prefix) && prefix.length > bestLength) {
+      if (!target.startsWith(prefix)) continue;
+      if (prefix.length > bestLength) {
         best = row;
         bestLength = prefix.length;
+        equallySpecific.length = 0;
+        equallySpecific.push(row);
+      } else if (prefix.length === bestLength) {
+        equallySpecific.push(row);
       }
     } catch {
       // A malformed registry URL does not match this page.
     }
+  }
+  // /api/portals includes both the shared row and the active organization's
+  // override for an unflagged legacy key. Preserve the existing first-match
+  // behavior between distinct keys, but if that first match is the shared row
+  // and an equally specific active-org row for the same key is present, pin
+  // the org row so exact map metadata resolves to the same configuration.
+  if (best?.orgId == null && best != null) {
+    best = equallySpecific.find(
+      (candidate) => candidate.portalKey === best?.portalKey && candidate.orgId != null,
+    ) ?? best;
   }
   return best ? toMatchedPortal(best) : null;
 }

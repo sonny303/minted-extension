@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bestPortalCandidatesByUrl,
   matchPortalByUrl,
+  portalMappingState,
   portalCandidatesByUrl,
   portalKeyEligibleForUrl,
   portalOriginPatterns,
@@ -122,6 +123,8 @@ describe("matched portal identity", () => {
       row({ formUrl: "https://p.example.com/form", payerId: "payer-1" }),
     ]);
     expect(matched?.payerId).toBe("payer-1");
+    expect(matched?.portalId).toBe("id");
+    expect(matched?.mappingGeneration).toBe(1);
   });
 
   it("is null for a registry row that names no payer", () => {
@@ -129,5 +132,40 @@ describe("matched portal identity", () => {
       row({ formUrl: "https://p.example.com/form" }),
     ]);
     expect(matched?.payerId).toBeNull();
+  });
+});
+
+describe("current portal mapping identity", () => {
+  const target = { portalId: "org-config", portalKey: "enrollment", mappingGeneration: 3 };
+  const metadata = {
+    portal_key: "enrollment",
+    portal_id: "org-config",
+    case_type: "enrollment",
+    requires_explicit_selection: false,
+    mapping_generation: 3,
+    active_field_count: 2,
+    mapping_ready: true,
+    is_verified: true,
+    effective_mapping_fingerprint: "sha256:current",
+  };
+
+  it("requires the selected exact id, key, generation, and a ready map set", () => {
+    expect(portalMappingState([metadata], target)).toBe("ready");
+    expect(portalMappingState([metadata], { ...target, portalId: "shared-config" })).toBe("changed");
+    expect(portalMappingState([metadata], { ...target, mappingGeneration: 2 })).toBe("changed");
+    expect(portalMappingState([], target)).toBe("missing");
+    expect(portalMappingState([{ ...metadata, active_field_count: 0, mapping_ready: false }], target)).toBe("unready");
+    expect(portalMappingState([{ ...metadata, requires_explicit_selection: true }], target)).toBe("unready");
+  });
+
+  it("fails closed when URL matching picked the shared row but org-over-global metadata selected the org row", () => {
+    const sharedCandidate = { ...target, portalId: "shared-config" };
+    expect(portalMappingState([metadata], sharedCandidate)).toBe("changed");
+    expect(portalMappingState([metadata, metadata], target)).toBe("missing");
+  });
+
+  it("detects reset or mapping edits while an AI review is open", () => {
+    expect(portalMappingState([{ ...metadata, mapping_generation: 4 }], target)).toBe("changed");
+    expect(portalMappingState([metadata], target, "sha256:before-edit")).toBe("changed");
   });
 });

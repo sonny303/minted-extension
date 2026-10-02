@@ -533,6 +533,8 @@ function activeWorkStateIdentity(state: ActiveWorkState): string {
 
 function matchedActiveWorkPortal(record: ActiveWorkRecord): MatchedPortal {
   return {
+    portalId: record.tuple.portalId,
+    orgId: record.tuple.orgId,
     key: record.tuple.portalKey,
     label: `${record.tuple.portalKey} · selected Work`,
     formUrl: `${record.formOrigin}${record.formPath}`,
@@ -2943,7 +2945,7 @@ async function detectPortal(): Promise<void> {
     : matchPortalByUrl(pageUrl, portalRows);
   const nextIdentity = nextPortal == null
     ? null
-    : `${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
+    : `${nextPortal.portalId}:${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
   if (portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
       detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
   detectedPageUrl = pageUrl;
@@ -3414,6 +3416,8 @@ fillBtn.addEventListener("click", () => {
           providerId,
           caseId: caseId ?? null,
           portalKey: clickPortal.key,
+          portalId: clickPortal.portalId,
+          mappingGeneration: clickPortal.mappingGeneration,
           state,
           facilityId,
           groupId,
@@ -3444,7 +3448,9 @@ fillBtn.addEventListener("click", () => {
       if (
         !isFillCurrent() || currentTab?.id !== tab.id ||
         currentPageUrl !== originalUrl ||
-        currentPortal?.key !== clickPortal.key
+        currentPortal?.portalId !== clickPortal.portalId ||
+        currentPortal?.key !== clickPortal.key ||
+        currentPortal?.mappingGeneration !== clickPortal.mappingGeneration
       ) {
         setError(mainError, "The portal page changed during AI review. Run Fill again.");
         return;
@@ -3456,6 +3462,8 @@ fillBtn.addEventListener("click", () => {
         providerId,
         caseId: caseId ?? null,
         portalKey: clickPortal.key,
+        portalId: clickPortal.portalId,
+        mappingGeneration: clickPortal.mappingGeneration,
         state,
         facilityId,
         groupId,

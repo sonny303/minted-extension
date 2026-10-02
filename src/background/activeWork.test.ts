@@ -477,6 +477,8 @@ describe("exact tab lifecycle", () => {
       providerId: message.providerId,
       caseId: message.ownerId,
       portalKey: message.portalKey,
+      portalId: message.portalId,
+      mappingGeneration: message.mappingGeneration,
       state: "CO",
       facilityId: null,
     })).rejects.toThrow(/Could not reach the enrollment form/);
