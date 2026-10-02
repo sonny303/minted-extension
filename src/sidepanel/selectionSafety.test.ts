@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 import { matchPortalByUrl, portalMappingState } from "../shared/portals";
 import type { PortalMappingMetadata, PortalRegistryRow } from "../shared/apiTypes";
-import { workFormUrlMatchesPage } from "../shared/workContext";
+import { isActiveWorkExpired, workFormUrlMatchesPage, type ActiveWorkRecord, type WorkPortalPermissionTarget } from "../shared/workContext";
 
 // Execute the unchanged entry-point functions/listeners with controlled DOM,
 // network timing, and selection state. No copied implementation or source-text
@@ -298,5 +298,180 @@ describe("fill selection safety", () => {
     });
     runInContext(code(["selectedCaseState"]), scope);
     expect(runInContext("selectedCaseState()", scope)).toBe(state ?? "");
+  });
+});
+
+describe("Work portal host permission prompt", () => {
+  const workRecord: ActiveWorkRecord = {
+    tuple: {
+      protocolVersion: 2,
+      launchReceiptId: "receipt-work-1",
+      ownerKind: "contract",
+      ownerId: "contract-1",
+      contextVersion: 1,
+      sopTemplateId: "sop-1",
+      sopVersion: 1,
+      portalId: "portal-typed",
+      portalKey: "typed-payer",
+      mappingGeneration: 3,
+      effectiveMappingFingerprint: `sha256:${"a".repeat(64)}`,
+      providerId: "provider-1",
+      orgId: "org-1",
+      facilityId: null,
+      assignmentId: "assignment-1",
+      taskIndex: 0,
+      stepIndex: 0,
+      stepIdentity: "contract:assignment-1:step-1",
+    },
+    boundTabId: 7,
+    formOrigin: "https://payer.test",
+    formPath: "/enroll",
+    caseType: "contract",
+    createdAt: new Date().toISOString(),
+    lastActivityAt: new Date().toISOString(),
+  };
+  const target: WorkPortalPermissionTarget = {
+    tabId: 7,
+    launchReceiptId: "receipt-work-1",
+    origin: "https://payer.test",
+  };
+
+  function promptHarness(options: {
+    tabId?: number;
+    state?: { status: string; record?: ActiveWorkRecord };
+    rows?: PortalRegistryRow[];
+    granted?: boolean;
+    registryLoaded?: boolean;
+  } = {}) {
+    const dom = new JSDOM('<div id="portal-access" hidden></div><button id="portal-access-grant"></button><div id="work-portal-access" hidden></div><button id="work-portal-access-grant"></button>');
+    const portalAccess = dom.window.document.querySelector<HTMLElement>("#portal-access")!;
+    const workPortalAccess = dom.window.document.querySelector<HTMLElement>("#work-portal-access")!;
+    const workPortalAccessGrant = dom.window.document.querySelector<HTMLButtonElement>("#work-portal-access-grant")!;
+    const permissionContains = vi.fn(async () => options.granted ?? false);
+    const sendToBackground = vi.fn(async () => ({ ok: true as const, data: target }));
+    const scope: Context = createContext({
+      URL,
+      chrome: { webNavigation: { getFrame: async () => ({ url: "https://payer.test/enroll?ref=synthetic" }) },
+        permissions: { contains: permissionContains } },
+      portalAccess, workPortalAccess, workPortalAccessGrant,
+      workPortalAccessCandidate: null, portalAccessPromptRevision: 0,
+      portalRegistryLoaded: options.registryLoaded ?? true, portalRows: options.rows ?? [],
+      portal: { portalId: workRecord.tuple.portalId, key: workRecord.tuple.portalKey },
+      portalTabId: 7, panelMode: "case",
+      activeWorkState: options.state ?? { status: "active", record: workRecord },
+      queryActiveTab: async () => ({ id: options.tabId ?? 7 }),
+      sendToBackground,
+      workFormUrlMatchesPage,
+      isActiveWorkExpired,
+    });
+    runInContext(code([
+      "activeWorkRecordForTab", "activePageUrlForTab", "workPortalAbsentFromRegistry",
+      "workPortalPermissionPattern", "workPortalGrantTargetMatches", "hasOriginPermissions",
+      "refreshPortalAccessPrompt",
+    ]), scope);
+    return { dom, scope, portalAccess, workPortalAccess, permissionContains, sendToBackground };
+  }
+
+  it("shows the separate Work prompt only for the server-validated, active bound tab and exact absent portal", async () => {
+    const harness = promptHarness();
+    await runInContext("refreshPortalAccessPrompt()", harness.scope);
+
+    expect(harness.workPortalAccess.hidden).toBe(false);
+    expect(harness.portalAccess.hidden).toBe(true);
+    expect(harness.sendToBackground).toHaveBeenCalledWith({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
+    expect(harness.permissionContains).toHaveBeenCalledWith({ origins: ["https://payer.test/*"] });
+  });
+
+  it("shows the Work prompt after LIST_PORTALS fails when the worker validates the active Work target", async () => {
+    const harness = promptHarness({ registryLoaded: false });
+    await runInContext("refreshPortalAccessPrompt()", harness.scope);
+
+    expect(harness.workPortalAccess.hidden).toBe(false);
+    expect(harness.portalAccess.hidden).toBe(true);
+    expect(harness.sendToBackground).toHaveBeenCalledWith({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
+    expect(harness.permissionContains).toHaveBeenCalledWith({ origins: ["https://payer.test/*"] });
+  });
+
+  it("accepts only a canonical HTTPS origin as a grant pattern", () => {
+    const scope = createContext({ URL });
+    runInContext(code(["workPortalPermissionPattern"]), scope);
+
+    expect(runInContext('workPortalPermissionPattern("https://payer.test")', scope)).toBe("https://payer.test/*");
+    expect(runInContext('workPortalPermissionPattern("https://payer.test/form")', scope)).toBeNull();
+    expect(runInContext('workPortalPermissionPattern("http://payer.test")', scope)).toBeNull();
+    expect(runInContext('workPortalPermissionPattern("https://user:pass@payer.test")', scope)).toBeNull();
+  });
+
+  it("keeps the Work prompt hidden after the exact origin was already granted", async () => {
+    const harness = promptHarness({ granted: true });
+    await runInContext("refreshPortalAccessPrompt()", harness.scope);
+
+    expect(harness.workPortalAccess.hidden).toBe(true);
+    expect(harness.permissionContains).toHaveBeenCalledWith({ origins: ["https://payer.test/*"] });
+  });
+
+  it.each([
+    ["wrong active tab", { tabId: 8 }],
+    ["blocked Work", { state: { status: "blocked" } }],
+    ["expired Work", { state: { status: "expired", record: workRecord } }],
+    ["portal listed by Panel", { rows: [{ id: workRecord.tuple.portalId, orgId: "org-1", portalKey: workRecord.tuple.portalKey, name: "Known", payerId: null, caseType: "enrollment", mappingGeneration: 1, formUrl: "https://payer.test/enroll", isVerified: true, lastVerifiedAt: null, provenAt: null, urlChangedAt: null, createdAt: "", updatedAt: "" }] }],
+  ])("keeps the Work prompt hidden for %s", async (_label, options) => {
+    const harness = promptHarness(options as Parameters<typeof promptHarness>[0]);
+    await runInContext("refreshPortalAccessPrompt()", harness.scope);
+
+    expect(harness.workPortalAccess.hidden).toBe(true);
+    expect(harness.sendToBackground).not.toHaveBeenCalled();
+  });
+
+  it("hides the grant when the bound record's idle window has elapsed", async () => {
+    const expiredRecord = {
+      ...workRecord,
+      lastActivityAt: new Date(Date.now() - 60 * 60 * 1000 - 1).toISOString(),
+    };
+    const harness = promptHarness({ state: { status: "active", record: expiredRecord } });
+    await runInContext("refreshPortalAccessPrompt()", harness.scope);
+
+    expect(harness.workPortalAccess.hidden).toBe(true);
+    expect(harness.permissionContains).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unchanged Work", target, false],
+    ["changed Work receipt", { ...target, launchReceiptId: "new-work" }, true],
+  ])("requests only the candidate origin in the click gesture and revalidates after grant (%s)", async (_label, updatedTarget, revoke) => {
+    const dom = new JSDOM('<div id="work-portal-access"></div><button id="work-portal-access-grant"></button>');
+    const workPortalAccess = dom.window.document.querySelector<HTMLElement>("#work-portal-access")!;
+    const grantButton = dom.window.document.querySelector<HTMLButtonElement>("#work-portal-access-grant")!;
+    let finishGrant!: (granted: boolean) => void;
+    const request = vi.fn(() => new Promise<boolean>((resolve) => { finishGrant = resolve; }));
+    const remove = vi.fn(async () => true);
+    const sendToBackground = vi.fn(async () => ({ ok: true as const, data: updatedTarget }));
+    const refreshActiveWork = vi.fn(async () => {});
+    const refreshPortalAccessPrompt = vi.fn(async () => {});
+    const scope = createContext({
+      chrome: { permissions: { request, remove } },
+      workPortalAccess, workPortalAccessGrant: grantButton,
+      workPortalAccessCandidate: { ...target, pattern: "https://payer.test/*" },
+      activeWorkState: { status: "active", record: workRecord },
+      portalTabId: 7, portalRows: [], portalRegistryLoaded: false, panelMode: "case",
+      sendToBackground, refreshActiveWork, refreshPortalAccessPrompt,
+      mainError: {}, setError: vi.fn(),
+      isActiveWorkExpired,
+    });
+    runInContext(code([
+      "workPortalAbsentFromRegistry", "workPortalGrantTargetMatches",
+    ], ["workPortalAccessGrant"]), scope);
+
+    grantButton.click();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith({ origins: ["https://payer.test/*"] });
+    finishGrant(true);
+    await vi.waitFor(() => expect(refreshActiveWork).toHaveBeenCalledWith(false));
+    if (revoke) {
+      expect(remove).toHaveBeenCalledWith({ origins: ["https://payer.test/*"] });
+    } else {
+      expect(remove).not.toHaveBeenCalled();
+    }
+    expect(sendToBackground).toHaveBeenCalledWith({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
   });
 });

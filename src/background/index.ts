@@ -113,6 +113,7 @@ import {
   clearActiveWork,
   currentActiveWorkEpoch,
   getActiveWorkState,
+  getWorkPortalPermissionTarget,
   profileOptionsForActiveWork,
   registerActiveWorkListeners,
   registerValidatedWorkSelectionCommitter,
@@ -1351,6 +1352,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return getActiveCaseState();
     case "GET_ACTIVE_WORK":
       return getActiveWorkState();
+    case "GET_WORK_PORTAL_PERMISSION_TARGET":
+      return getWorkPortalPermissionTarget();
     case "CLEAR_ACTIVE_WORK":
       await clearActiveWork();
       return null;
