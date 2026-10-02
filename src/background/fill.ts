@@ -1107,9 +1107,11 @@ export async function fillPortal(
 
   const combinePageResult = (): FillPageResult => ({
     filled: [...pageResultStatic.filled, ...aiPageResult.filled],
+    attemptedLabels: [...(pageResultStatic.attemptedLabels ?? []), ...(aiPageResult.attemptedLabels ?? [])],
     writes: [...(pageResultStatic.writes ?? []), ...(aiPageResult.writes ?? [])],
     skipped: [...pageResultStatic.skipped, ...aiPageResult.skipped],
     pageFields: pageResultStatic.pageFields,
+    fieldOutcomes: [...(pageResultStatic.fieldOutcomes ?? []), ...(aiPageResult.fieldOutcomes ?? [])],
   });
   let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
