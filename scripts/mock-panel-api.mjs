@@ -1,11 +1,9 @@
 #!/usr/bin/env node
-// In-repo mock of the Minted Panel /api surface the extension consumes — the
-// TE-10 mock harness. This mirrors the CONTRACT of the merged panel server
-// (sonny303/mintedpanel origin/redesign: src/server/api.ts,
-// src/server/extensionRoutes.ts and the services they inject — envelope
-// shape, camelCased rows, org scoping, status codes, idempotency), not its
-// implementation. It follows the panel repo's own scripts/mock-api-server.mjs
-// pattern; keep it in sync when the panel contract changes.
+// In-repo synthetic mock of the Minted Panel /api surface used by extension
+// tests. The MINT-64 /api/work-context/validate fixture is pinned to Panel M60
+// baseline 78204da977249ca784d44d4f7901290edd2f17cb; other routes are local
+// scenario fixtures and do not claim live API or database parity. Keep the
+// relevant shapes aligned when a verified Panel contract changes.
 //
 // CI never hits a real payer portal or the real panel — every harness test
 // runs against this server. `delayMs` injects per-request latency so the
@@ -551,6 +549,12 @@ export async function createMockPanelApi(options = {}) {
     sharedProposed: new Map(),
     sharedTestFills: new Map(),
     sharedOrgHeaders: [],
+    // MINT-64 protocol-v2 fixture registry. Entries are keyed by portal key
+    // and carry the immutable owner/config tuple plus the value-free maps the
+    // real validation route would resolve from it.
+    workContexts: new Map(),
+    workContextRequests: [],
+    beforeWorkContextResponse: null,
   };
 
   const server = createServer((req, res) => {
@@ -595,6 +599,35 @@ export async function createMockPanelApi(options = {}) {
     if (/^\/api\/me\/orgs\/?$/.test(url.pathname)) {
       const rows = [{ orgId: FIXTURES.PRIMARY_ORG, orgName: "Lakeside Physical Therapy", role: "admin" }];
       return envelope(res, 200, rows, null, { total: rows.length });
+    }
+
+    // --- /api/work-context/validate (MINT-64 exact Work integration) ---
+    if (/^\/api\/work-context\/validate\/?$/.test(url.pathname)) {
+      if (method !== "POST") return envelope(res, 405, null, "Method not allowed");
+      const tuple = await readBody(req);
+      state.workContextRequests.push(tuple);
+      const configured = tuple && state.workContexts.get(tuple.portalKey);
+      if (typeof state.beforeWorkContextResponse === "function") {
+        await state.beforeWorkContextResponse(tuple, configured);
+      }
+      const canonicalTuple = Object.fromEntries(
+        Object.entries(tuple ?? {}).filter(([key]) => key !== "protocolVersion"),
+      );
+      if (
+        !configured ||
+        JSON.stringify(Object.entries(configured.tuple ?? {}).sort()) !== JSON.stringify(Object.entries(canonicalTuple).sort())
+      ) {
+        return envelope(res, 409, null, "The Work context or portal mapping changed.");
+      }
+      return envelope(res, 200, {
+        tuple: canonicalTuple,
+        caseType: configured.caseType,
+        formUrl: configured.formUrl,
+        requiresExplicitSelection: configured.requiresExplicitSelection ?? true,
+        mappingGeneration: configured.mappingGeneration,
+        effectiveMappingFingerprint: configured.effectiveMappingFingerprint,
+        effectiveWebMaps: configured.effectiveWebMaps,
+      });
     }
 
     // --- /api/tasks/:id/steps (S4.3 step tick) ---
@@ -1184,7 +1217,30 @@ export async function createMockPanelApi(options = {}) {
       if (state.fillSessions.has(body.id)) {
         return envelope(res, 200, state.fillSessions.get(body.id));
       }
-      const session = { ...body, performedBy: FIXTURES.USER_ID };
+      const tuple = body.workContext;
+      const session = {
+        ...body,
+        performedBy: FIXTURES.USER_ID,
+        ...(tuple ? {
+          isTest: false,
+          eventSchemaVersion: body.schemaVersion === 2 ? 2 : 1,
+          contextVersion: tuple.contextVersion,
+          sopTemplateId: tuple.sopTemplateId,
+          sopVersion: tuple.sopVersion,
+          portalId: tuple.portalId,
+          mappingGeneration: tuple.mappingGeneration,
+          effectiveMappingFingerprint: tuple.effectiveMappingFingerprint,
+          launchReceiptId: tuple.launchReceiptId,
+          stepIdentity: tuple.stepIdentity,
+          facilityId: tuple.facilityId,
+          caseTaskId: tuple.ownerKind === "case" ? tuple.taskId : null,
+          caseStepId: tuple.ownerKind === "case" ? tuple.stepId : null,
+          contractId: tuple.ownerKind === "contract" ? tuple.ownerId : null,
+          contractSopAssignmentId: tuple.ownerKind === "contract" ? tuple.assignmentId : null,
+          taskIndex: tuple.ownerKind === "contract" ? tuple.taskIndex : null,
+          stepIndex: tuple.ownerKind === "contract" ? tuple.stepIndex : null,
+        } : {}),
+      };
       state.fillSessions.set(body.id, session);
       return envelope(res, 201, session);
     }

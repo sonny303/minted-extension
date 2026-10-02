@@ -211,6 +211,70 @@ describe("applyFillAcrossFrames public probe/apply boundary", () => {
     });
   });
 
+  it("revalidates after a delayed probe and propagates a stale mapping before apply", async () => {
+    let releaseProbe!: () => void;
+    const blockedProbe = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>((resolve) => { markProbeStarted = resolve; });
+    let stale = false;
+    const appliedMapIds: string[] = [];
+    installFrames(async (message) => {
+      if (message.type === "PROBE_FILL") {
+        markProbeStarted();
+        await blockedProbe;
+        return { ok: true, data: [probeRow()] };
+      }
+      if (message.type === "APPLY_FILL") {
+        appliedMapIds.push(message.instructions[0]?.mapId ?? "missing");
+      }
+      throw new Error("stale mapping must not reach APPLY_FILL");
+    });
+    const validate = vi.fn(async () => {
+      if (stale) throw new Error("mapping generation changed");
+    });
+
+    const pending = applyFillAcrossFrames(1, [instruction], { validate });
+    await probeStarted;
+    stale = true;
+    releaseProbe();
+
+    await expect(pending).rejects.toThrow("mapping generation changed");
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(appliedMapIds).toEqual([]);
+  });
+
+  it("revalidates immediately before each map apply and stops after a stale first dispatch", async () => {
+    const mapTwo = "52b2323d-902c-4cef-8f46-a9e60a67421e";
+    const appliedMapIds: string[] = [];
+    let stale = false;
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") {
+        return { ok: true, data: [probeRow(), probeRow({ mapId: mapTwo })] };
+      }
+      if (message.type === "APPLY_FILL") {
+        const routed = message.instructions[0];
+        appliedMapIds.push(routed?.mapId ?? "missing");
+        stale = true;
+        return {
+          ok: true,
+          data: { filled: [routed?.label ?? "missing"], writes: [], skipped: [], pageFields: 1 },
+        };
+      }
+      throw new Error("unexpected message type");
+    });
+    const validate = vi.fn(async () => {
+      if (stale) throw new Error("mapping generation changed");
+    });
+
+    await expect(applyFillAcrossFrames(1, [
+      instruction,
+      { ...instruction, mapId: mapTwo, label: "Dependent field", selector: "#dependent" },
+    ], { validate })).rejects.toThrow("mapping generation changed");
+
+    expect(validate).toHaveBeenCalledTimes(4);
+    expect(appliedMapIds).toEqual([mapId]);
+  });
+
   it("invalidates later absence snapshots after an earlier apply can reveal a panel", async () => {
     const mapTwo = "52b2323d-902c-4cef-8f46-a9e60a67421e";
     installFrames((message) => {
@@ -470,6 +534,32 @@ describe("Nano learned page scopes", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(7, { type: "APPLY_FILL", instructions: [] }, { frameId: 0 });
     expect(result.pageFields).toBe(48);
+  });
+
+  it("revalidates before every empty-plan frame apply and aborts after a stale first frame", async () => {
+    const appliedFrames: number[] = [];
+    let stale = false;
+    const sendMessage = vi.fn((_tabId: number, message: ContentRequest, options: { frameId: number }) => {
+      if (message.type !== "APPLY_FILL") throw new Error("empty plans do not probe");
+      appliedFrames.push(options.frameId);
+      stale = true;
+      return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 1 } };
+    });
+    vi.stubGlobal("chrome", {
+      tabs: { sendMessage },
+      webNavigation: { getAllFrames: vi.fn().mockResolvedValue([
+        { frameId: 0, url: "https://portal.example/form" },
+        { frameId: 3, url: "https://portal.example/embedded" },
+      ]) },
+    });
+    const validate = vi.fn(async () => {
+      if (stale) throw new Error("mapping generation changed");
+    });
+
+    await expect(applyFillAcrossFrames(1, [], { validate })).rejects.toThrow("mapping generation changed");
+
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(appliedFrames).toEqual([0]);
   });
 
   it("stops after invalidation during a delayed frame response and clears late writes", async () => {
