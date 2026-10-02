@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { CasePortalTask } from "./apiTypes";
 import { buildSubmissionTouchBody, matchPortalTasks } from "./submission";
+import { canonicalizeWorkContextTuple } from "./workContext";
 
 function task(overrides: Partial<CasePortalTask> = {}): CasePortalTask {
   return {
@@ -112,5 +113,31 @@ describe("buildSubmissionTouchBody", () => {
   it("carries a null fill_session_id through unchanged", () => {
     const body = buildSubmissionTouchBody({ ...base, fillSessionId: null });
     expect(body.fill_session_id).toBeNull();
+  });
+
+  it("sends a canonical exact Work tuple only under the snake-case outer key", () => {
+    const workContext = canonicalizeWorkContextTuple({
+      protocolVersion: 2,
+      launchReceiptId: "11111111-1111-4111-8111-111111111111",
+      ownerKind: "case",
+      ownerId: "22222222-2222-4222-8222-222222222222",
+      contextVersion: 4,
+      sopTemplateId: "33333333-3333-4333-8333-333333333333",
+      sopVersion: 3,
+      portalId: "44444444-4444-4444-8444-444444444444",
+      portalKey: "regional_enrollment",
+      mappingGeneration: 2,
+      effectiveMappingFingerprint: `sha256:${"a".repeat(64)}`,
+      providerId: "55555555-5555-4555-8555-555555555555",
+      orgId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      facilityId: null,
+      taskId: "66666666-6666-4666-8666-666666666666",
+      stepId: "77777777-7777-4777-8777-777777777777",
+      stepIdentity: "case:task-1:step-2",
+    });
+    const body = buildSubmissionTouchBody({ ...base, workContext });
+    expect(body.work_context).toEqual(workContext);
+    expect(body.work_context).not.toHaveProperty("protocolVersion");
+    expect(body).not.toHaveProperty("workContext");
   });
 });

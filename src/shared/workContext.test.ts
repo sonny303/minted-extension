@@ -3,6 +3,7 @@ import {
   ACTIVE_WORK_IDLE_MS,
   activeWorkTupleKey,
   canonicalizeWorkContextTuple,
+  isCanonicalWorkContextTuple,
   isActiveWorkExpired,
   parseSetActiveWork,
   parseWorkContextValidationResponse,
@@ -139,6 +140,14 @@ describe("SET_ACTIVE_WORK protocol v2", () => {
 });
 
 describe("work-context validation response", () => {
+  it("accepts only the exact protocol-free tuple used in receipts", () => {
+    const tuple = canonicalizeWorkContextTuple(activeTuple());
+    expect(isCanonicalWorkContextTuple(tuple)).toBe(true);
+    expect(isCanonicalWorkContextTuple({ ...tuple, protocolVersion: 2 })).toBe(false);
+    expect(isCanonicalWorkContextTuple({ ...tuple, unexpected: true })).toBe(false);
+    expect(isCanonicalWorkContextTuple({ ...tuple, stepId: undefined })).toBe(false);
+  });
+
   it("accepts only an exact canonical tuple and same-key web maps", () => {
     const tuple = canonicalizeWorkContextTuple(activeTuple());
     const map = {

@@ -44,7 +44,9 @@ export interface ContractWorkContextTuple extends WorkContextCommonTuple {
 }
 
 export type WorkContextTuple = CaseWorkContextTuple | ContractWorkContextTuple;
-export type CanonicalWorkContextTuple = Omit<WorkContextTuple, "protocolVersion">;
+export type CanonicalWorkContextTuple =
+  | Omit<CaseWorkContextTuple, "protocolVersion">
+  | Omit<ContractWorkContextTuple, "protocolVersion">;
 export type SetActiveWorkMessage = WorkContextTuple & { type: "SET_ACTIVE_WORK"; portalUrl: string };
 
 export interface WorkContextValidationResponse {
@@ -189,6 +191,19 @@ export function parseSetActiveWork(value: unknown): SetActiveWorkParseResult {
 
 export function isWorkContextTuple(value: unknown): value is WorkContextTuple {
   return parseTuple(value, false) != null;
+}
+
+/** Strictly validate the protocol-free tuple stored in reports and nested API
+ * payloads. The live handoff carries protocolVersion; canonical receipts do
+ * not. */
+export function parseCanonicalWorkContextTuple(value: unknown): CanonicalWorkContextTuple | null {
+  if (!isObject(value) || Object.prototype.hasOwnProperty.call(value, "protocolVersion")) return null;
+  const parsed = parseTuple({ ...value, protocolVersion: SET_ACTIVE_WORK_PROTOCOL_VERSION }, false);
+  return parsed == null ? null : canonicalizeWorkContextTuple(parsed);
+}
+
+export function isCanonicalWorkContextTuple(value: unknown): value is CanonicalWorkContextTuple {
+  return parseCanonicalWorkContextTuple(value) != null;
 }
 
 export function isSafePortalFormUrl(value: unknown): value is string {

@@ -313,6 +313,8 @@ export type BgRequest =
       caseId: string;
       portalKey: string;
       fillSessionId: string | null;
+      /** UI marker only; the worker still requires the matching saved report. */
+      isWorkFill?: boolean;
       payerReferenceId?: string | null;
       wipNote?: string | null;
       taskId?: string | null;

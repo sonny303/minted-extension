@@ -35,6 +35,7 @@ import {
   parseWorkContextValidationResponse,
   workTuplesEqual,
   type WorkContextTuple,
+  type CanonicalWorkContextTuple,
   type WorkContextValidationResponse,
 } from "../shared/workContext";
 
@@ -530,6 +531,39 @@ export interface FillEventBody {
   fieldsFilled: number;
   fieldsSkipped: unknown;
   v2?: FillEventV2Metadata;
+  /** Canonical tuple copied from the validated worker Work guard. */
+  workContext?: CanonicalWorkContextTuple;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function persistedFillMatchesWorkContext(
+  row: Record<string, unknown>,
+  tuple: CanonicalWorkContextTuple,
+): boolean {
+  const common: Array<[string, unknown]> = [
+    ["contextVersion", tuple.contextVersion],
+    ["sopTemplateId", tuple.sopTemplateId],
+    ["sopVersion", tuple.sopVersion],
+    ["portalId", tuple.portalId],
+    ["portalKey", tuple.portalKey],
+    ["mappingGeneration", tuple.mappingGeneration],
+    ["effectiveMappingFingerprint", tuple.effectiveMappingFingerprint],
+    ["providerId", tuple.providerId],
+    ["facilityId", tuple.facilityId],
+    ["launchReceiptId", tuple.launchReceiptId],
+    ["stepIdentity", tuple.stepIdentity],
+  ];
+  if (common.some(([key, expected]) => row[key] !== expected)) return false;
+  if (tuple.ownerKind === "case") {
+    return row.caseId === tuple.ownerId && row.caseTaskId === tuple.taskId && row.caseStepId === tuple.stepId &&
+      row.contractId == null && row.contractSopAssignmentId == null && row.taskIndex == null && row.stepIndex == null;
+  }
+  return row.caseId == null && row.contractId === tuple.ownerId &&
+    row.contractSopAssignmentId === tuple.assignmentId && row.taskIndex === tuple.taskIndex &&
+    row.stepIndex === tuple.stepIndex && row.caseTaskId == null && row.caseStepId == null;
 }
 
 export async function postFillEvent(
@@ -537,12 +571,20 @@ export async function postFillEvent(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const { v2, ...base } = body;
-  await apiFetch("/api/fill-events", {
+  const { data } = await apiFetch<unknown>("/api/fill-events", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...base, ...(v2 ?? {}) }),
     ...(options.signal ? { signal: options.signal } : {}),
   });
+  if (!isRecord(data) || data.id !== body.id || data.providerId !== body.providerId ||
+    data.portalKey !== body.portalKey || (data.caseId ?? null) !== (body.caseId ?? null) ||
+    data.fillMode !== "web" || data.isTest === true ||
+    (v2 != null && data.eventSchemaVersion !== 2) ||
+    (body.workContext != null && (data.isTest !== false || data.eventSchemaVersion !== 2 ||
+      !persistedFillMatchesWorkContext(data, body.workContext)))) {
+    throw new ApiError(502, "Minted Panel returned a fill receipt that does not match this fill.");
+  }
 }
 
 /** Persist only a value-free receipt after the successful portal touch. The

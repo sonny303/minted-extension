@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PortalFieldMap, ProviderProfileResponse } from "../shared/apiTypes";
 import type { FillPageResult } from "../shared/fill";
 import type { ControlSummary } from "../shared/nanoAi";
+import { canonicalizeWorkContextTuple } from "../shared/workContext";
 
 const mocks = vi.hoisted(() => ({
   getPortalFieldMaps: vi.fn(),
@@ -94,6 +95,55 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("local AI fill orchestration", () => {
+  it("records a value-free canonical Work tuple with forced V2 telemetry and the successful fill id", async () => {
+    const tuple = {
+      protocolVersion: 2 as const,
+      launchReceiptId: "11111111-1111-4111-8111-111111111111",
+      ownerKind: "case" as const,
+      ownerId: "22222222-2222-4222-8222-222222222222",
+      contextVersion: 4,
+      sopTemplateId: "33333333-3333-4333-8333-333333333333",
+      sopVersion: 3,
+      portalId: "44444444-4444-4444-8444-444444444444",
+      portalKey: "known-portal",
+      mappingGeneration: 2,
+      effectiveMappingFingerprint: `sha256:${"a".repeat(64)}`,
+      providerId: "55555555-5555-4555-8555-555555555555",
+      orgId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      facilityId: null,
+      taskId: "66666666-6666-4666-8666-666666666666",
+      stepId: "77777777-7777-4777-8777-777777777777",
+      stepIdentity: "case:task-1:step-2",
+    };
+    const canonical = canonicalizeWorkContextTuple(tuple);
+    const workRequest = { ...request, caseId: tuple.ownerId, providerId: tuple.providerId, facilityId: null };
+    mocks.applyFillAcrossFrames.mockResolvedValue(pageResult([{ selector: "#npi", kind: "static" }]));
+
+    const summary = await fillPortal(workRequest, {
+      maps: [portalMap("#npi")],
+      fillEventV2: true,
+      workContext: tuple,
+      workCaseType: "enrollment",
+    });
+
+    expect(mocks.postFillEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.postFillEvent.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      id: summary.fillSessionId,
+      caseId: tuple.ownerId,
+      providerId: tuple.providerId,
+      workContext: canonical,
+      v2: { schemaVersion: 2 },
+    });
+    expect(event.workContext).not.toHaveProperty("protocolVersion");
+    expect(summary).toMatchObject({
+      eventRecorded: true,
+      workContext: canonical,
+      workCaseType: "enrollment",
+    });
+    expect(JSON.stringify(summary)).not.toContain("1234567890");
+  });
+
   it("scans a recognized zero-map portal and writes the valid suggestion in the single fill log", async () => {
     const guard = { orgId: "org-1", revision: 1, selectionRevision: 1, tabUrl: "https://portal.example/form", validate: vi.fn() };
     const prepared = await prepareAiFillPortal(request, guard);

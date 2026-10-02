@@ -501,6 +501,7 @@ export async function createMockPanelApi(options = {}) {
       fieldMapRow(FIXTURES.UNTRAINED_MAP_ID, FIXTURES.PORTAL_KEY, "label:Group Medicare PTAN", null),
     ],
     touches: new Map(), // idempotency_id -> stored touch row
+    touchBodies: [], // every touch body, including injected network failures
     fillSessions: new Map(),
     learnedMaps: new Map(),
     learningRequests: [],
@@ -850,6 +851,7 @@ export async function createMockPanelApi(options = {}) {
       if (!UUID_RE.test(body.idempotency_id ?? "")) {
         return envelope(res, 422, null, "idempotency_id must be a client-generated UUID");
       }
+      state.touchBodies.push({ ...body });
       if (body.kind === "structured_touch") {
         for (const field of PORTAL_SUBMISSION_ONLY) {
           if (body[field] != null) {

@@ -12,7 +12,7 @@ import type {
 } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
 import type { AiLearningSummary } from "../shared/fill";
-import type { QuickCardCatalogField } from "../shared/apiTypes";
+import type { CaseTouchBody, QuickCardCatalogField } from "../shared/apiTypes";
 import { portalKeyEligibleForUrl, toMatchedPortal } from "../shared/portals";
 import {
   EMPTY_TRAIN_TARGET,
@@ -112,7 +112,10 @@ import {
   requireActiveWorkForTab,
   revalidateActiveWork,
 } from "./activeWork";
-import type { ActiveWorkRecord } from "../shared/workContext";
+import {
+  parseCanonicalWorkContextTuple,
+  type ActiveWorkRecord,
+} from "../shared/workContext";
 import {
   captureSessionMatchesTarget,
   applyRowEdit,
@@ -147,6 +150,10 @@ const SELECTED_GROUP_PREFIX = "minted.selectedGroupId.";
 const SELECTED_CASE_PREFIX = "minted.selectedCaseId.";
 const SELECTED_FACILITY_PREFIX = "minted.selectedFacilityId.";
 const SUBMIT_TOUCH_ID_PREFIX = "minted.submitTouchId.";
+const SUBMIT_TOUCH_BODY_HASH_PREFIX = "minted.submitTouchBodyHash.";
+// Free-form submission values live here only while this worker is alive. The
+// session store retains just their normalized SHA-256 for safe retries.
+const typedSubmissionBodies = new Map<string, string>();
 // Persisted fill reports, keyed `<prefix><providerId>.<portalKey>` (both ids
 // are dot-free). Labels, counts, and reasons only — never field values.
 const FILL_REPORT_PREFIX = "minted.fillReport.";
@@ -299,10 +306,12 @@ async function clearOrgSelections(): Promise<void> {
       key.startsWith(SELECTED_GROUP_PREFIX) ||
       key.startsWith(SELECTED_FACILITY_PREFIX) ||
       key.startsWith(SUBMIT_TOUCH_ID_PREFIX) ||
+      key.startsWith(SUBMIT_TOUCH_BODY_HASH_PREFIX) ||
       key.startsWith(FILL_REPORT_PREFIX) ||
       key === AI_ACCEPTED_RECEIPT_KEY,
   );
   if (keys.length) await chrome.storage.session.remove(keys);
+  typedSubmissionBodies.clear();
 }
 
 async function clearOrgScopedState(
@@ -780,6 +789,70 @@ async function readFillReport(
       },
     },
   };
+}
+
+async function readFillReportForSession(
+  providerId: string,
+  fillSessionId: string,
+): Promise<FillReportRecord | null> {
+  const all = await chrome.storage.session.get(null);
+  return Object.entries(all)
+    .filter(([key]) => key.startsWith(`${FILL_REPORT_PREFIX}${providerId}.`))
+    .map(([, value]) => value)
+    .filter(isFillReportRecord)
+    .find((record) => record.providerId === providerId && record.summary.fillSessionId === fillSessionId) ?? null;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value != null && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const SUBMISSION_RETRY_CONFLICT =
+  "This submission may already be recorded. Retry with the original payer reference and note, or review the case activity before logging another submission.";
+
+async function stableTypedSubmissionBody(
+  idKey: string,
+  hashKey: string,
+  idempotencyId: string,
+  body: CaseTouchBody,
+  createdIdThisAttempt: boolean,
+): Promise<CaseTouchBody> {
+  const cacheKey = idKey;
+  const serialized = canonicalJson(body);
+  const digest = await sha256Hex(serialized);
+  const [storedDigest, cached] = await Promise.all([
+    readSessionString(hashKey),
+    Promise.resolve(typedSubmissionBodies.get(cacheKey) ?? null),
+  ]);
+  if (cached != null && cached !== serialized) throw new ApiError(409, SUBMISSION_RETRY_CONFLICT);
+  if (storedDigest != null && !/^[0-9a-f]{64}$/.test(storedDigest)) {
+    throw new ApiError(409, SUBMISSION_RETRY_CONFLICT);
+  }
+  if (storedDigest != null && storedDigest !== digest) throw new ApiError(409, SUBMISSION_RETRY_CONFLICT);
+  if (storedDigest == null) {
+    // An existing ID with no digest may have been used by an older worker.
+    // Never bind a new payload to it after restart.
+    if (!createdIdThisAttempt) throw new ApiError(409, SUBMISSION_RETRY_CONFLICT);
+    await chrome.storage.session.set({ [hashKey]: digest });
+  }
+  typedSubmissionBodies.set(cacheKey, serialized);
+  const parsed = JSON.parse(serialized) as unknown;
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed) ||
+    (parsed as Record<string, unknown>).idempotency_id !== idempotencyId) {
+    throw new ApiError(409, SUBMISSION_RETRY_CONFLICT);
+  }
+  return parsed as CaseTouchBody;
 }
 
 async function acceptedReceiptMatchesCurrentContext(
@@ -1819,6 +1892,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         groupId: request.groupId,
       }, guard, guard.work ? {
         maps: guard.work.maps,
+        fillEventV2: true,
         profileOptions: profileOptionsForActiveWork(guard.work.record),
       } : {});
     }
@@ -1850,7 +1924,10 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         validate: guard.validate,
         ...(guard.work ? {
           maps: guard.work.maps,
+          fillEventV2: true,
           profileOptions: profileOptionsForActiveWork(guard.work.record),
+          workContext: guard.work.record.tuple,
+          workCaseType: guard.work.record.caseType,
         } : {}),
       });
       // Context invalidation can race the awaited content apply or fill-event
@@ -1995,34 +2072,86 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       return cleared;
     }
     case "MARK_SUBMITTED": {
+      // A M56 fill is submitted from its value-free report tuple. The panel's
+      // current selection and portal key never supply owner or step identity.
+      const fillReport = request.fillSessionId
+        ? await readFillReportForSession(request.providerId, request.fillSessionId)
+        : null;
+      const summary = fillReport?.summary as (FillReportRecord["summary"] & Record<string, unknown>) | undefined;
+      const workContextPresent = summary != null && Object.prototype.hasOwnProperty.call(summary, "workContext");
+      const workContext = workContextPresent
+        ? parseCanonicalWorkContextTuple(summary?.workContext)
+        : null;
+      if (workContextPresent && workContext == null) {
+        throw new ApiError(409, "The saved fill report has an invalid Work receipt. Reopen the task and fill again.");
+      }
+      if (workContext?.ownerKind === "contract") {
+        throw new ApiError(422, "Contract Work has no case submission action. Return to the Contract task in Minted Panel.");
+      }
+      if (request.isWorkFill && workContext == null) {
+        throw new ApiError(409, "The exact Work fill receipt is unavailable. Reopen the task and fill again before marking submitted.");
+      }
+
+      const typedEnrollment = workContext?.ownerKind === "case" ? workContext : null;
+      if (typedEnrollment) {
+        if (!request.fillSessionId || fillReport == null ||
+          summary?.fillSessionId !== request.fillSessionId || summary.eventRecorded !== true ||
+          summary.workCaseType !== "enrollment" ||
+          fillReport.providerId !== typedEnrollment.providerId ||
+          fillReport.caseId !== typedEnrollment.ownerId ||
+          fillReport.portalKey !== typedEnrollment.portalKey ||
+          request.caseId !== typedEnrollment.ownerId ||
+          request.providerId !== typedEnrollment.providerId ||
+          request.portalKey !== typedEnrollment.portalKey) {
+          throw new ApiError(409, "Only a saved successful Enrollment Work fill can be marked submitted. Reopen the exact task and fill again.");
+        }
+      }
+
+      const caseId = typedEnrollment?.ownerId ?? request.caseId;
+      const portalKey = typedEnrollment?.portalKey ?? request.portalKey;
+      const fillSessionId = request.fillSessionId;
       // One idempotency id per (case, fill session), remembered for the
-      // browser session: a retry after a network failure replays the same id,
-      // so the server returns the stored touch instead of appending a second
-      // one. A new fill session gets a fresh id.
-      await assertCaseWriteMatchesActiveCase(request.caseId);
-      const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${request.caseId}.${request.fillSessionId ?? "none"}`;
+      // browser session. Typed Work additionally binds one normalized request
+      // digest to this ID so retries cannot change the payload.
+      await assertCaseWriteMatchesActiveCase(caseId);
+      const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${caseId}.${fillSessionId ?? "none"}`;
       let idempotencyId = await readSessionString(idKey);
+      let createdIdThisAttempt = false;
       if (!idempotencyId) {
         idempotencyId = crypto.randomUUID();
         await writeSessionString(idKey, idempotencyId);
+        createdIdThisAttempt = true;
       }
       // PR C write-back (Stories 5-7) + Phase 4 close-out: the payer reference,
       // an optional WIP note, and the SOP task the human closed ride on the same
       // POST. buildSubmissionTouchBody drops blank fields to null (a no-op
       // server-side) and OMITS task_id unless one was selected — never sends it
       // as null/empty.
-      const { touch, statusBump } = await postSubmissionTouch(
-        request.caseId,
-        buildSubmissionTouchBody({
-          portalKey: request.portalKey,
-          fillSessionId: request.fillSessionId,
-          idempotencyId,
-          payerReferenceId: request.payerReferenceId,
-          wipNote: request.wipNote,
+      let submissionBody: CaseTouchBody = buildSubmissionTouchBody({
+        portalKey,
+        fillSessionId,
+        idempotencyId,
+        payerReferenceId: request.payerReferenceId,
+        wipNote: request.wipNote,
+        ...(typedEnrollment ? { workContext: typedEnrollment } : {
           taskId: request.taskId,
           bumpStatus: request.bumpStatus,
         }),
-      );
+      });
+      if (typedEnrollment && fillSessionId) {
+        submissionBody = await stableTypedSubmissionBody(
+          idKey,
+          `${SUBMIT_TOUCH_BODY_HASH_PREFIX}${caseId}.${fillSessionId}`,
+          idempotencyId,
+          submissionBody,
+          createdIdThisAttempt,
+        );
+      }
+      const { touch, statusBump } = await postSubmissionTouch(caseId, submissionBody);
+      if (typedEnrollment && (touch.id !== idempotencyId || touch.caseId !== caseId ||
+        touch.fillSessionId !== fillSessionId)) {
+        throw new ApiError(502, "Minted Panel returned a submission receipt that does not match this Work fill.");
+      }
       // Logging the submission is user activity on the case — reset the
       // active-case idle clock.
       await touchActiveCaseActivity().catch(() => undefined);
