@@ -2,6 +2,8 @@
 // provider list projection in src/services/providers.ts over there). Every
 // response is `{ data, error, meta }`; rows come back camelCased.
 
+import type { CanonicalWorkContextTuple } from "./workContext";
+
 export interface ApiMeta {
   total?: number;
   page?: number;
@@ -449,6 +451,8 @@ export interface SubmissionTouchBody {
   // explicit and per-request. The outcome rides meta.status_bump, never the
   // touch itself, so a rejected transition can't look like a failed touch.
   bump_status?: boolean;
+  /** Exact authorized Enrollment Work owner/step tuple (MINT-58). */
+  work_context?: CanonicalWorkContextTuple;
 }
 
 // POST /api/cases/:id/touches with kind 'structured_touch' — E4.3 TE-5 /
@@ -495,6 +499,8 @@ export interface SubmissionTouch {
   outcome: string | null;
   notes: string | null;
   source: string;
+  /** Present for typed Enrollment submissions returned by MINT-58. */
+  fillSessionId?: string | null;
 }
 
 // One group a provider works under, as carried on a list row. The grain is

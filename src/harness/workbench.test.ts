@@ -114,6 +114,7 @@ interface MockApi {
       [key: string]: unknown;
     }>;
     touches: Map<string, unknown>;
+    touchBodies: Array<Record<string, unknown>>;
     fillSessions: Map<string, Record<string, unknown>>;
     learnedMaps: Map<string, Record<string, unknown>>;
     learningRequests: Array<{ body: Record<string, unknown>; orgId: string | null }>;
@@ -167,6 +168,7 @@ beforeEach(() => {
 
 afterEach(() => {
   mock.state.touches.clear();
+  mock.state.touchBodies.length = 0;
   mock.state.fillSessions.clear();
   mock.state.learningRequests.length = 0;
   mock.state.failTouches = 0;
@@ -192,6 +194,93 @@ const AI_MAPPING = {
   fieldType: "text" as const,
   pageUrl: AI_PAGE_URL,
 };
+
+const WORK_FILL_SESSION = "88888888-8888-4888-8888-888888888888";
+const WORK_CHANGED_FILL_SESSION = "88888888-8888-4888-8888-999999999999";
+const WORK_RESTARTED_FILL_SESSION = "88888888-8888-4888-8888-aaaaaaaaaaaa";
+const WORK_CASE_TUPLE = {
+  protocolVersion: 2 as const,
+  launchReceiptId: "11111111-1111-4111-8111-111111111111",
+  ownerKind: "case" as const,
+  ownerId: FIXTURES.CASE_ID as string,
+  contextVersion: 4,
+  sopTemplateId: "33333333-3333-4333-8333-333333333333",
+  sopVersion: 3,
+  portalId: "44444444-4444-4444-8444-444444444444",
+  portalKey: FIXTURES.PORTAL_KEY as string,
+  mappingGeneration: 2,
+  effectiveMappingFingerprint: `sha256:${"a".repeat(64)}`,
+  providerId: FIXTURES.PROVIDER_ID as string,
+  orgId: FIXTURES.PRIMARY_ORG as string,
+  facilityId: null,
+  taskId: "66666666-6666-4666-8666-666666666666",
+  stepId: "77777777-7777-4777-8777-777777777777",
+  stepIdentity: "case:task-1:step-2",
+};
+const WORK_CONTRACT_TUPLE = {
+  protocolVersion: 2 as const,
+  launchReceiptId: "11111111-1111-4111-8111-111111111111",
+  ownerKind: "contract" as const,
+  ownerId: "99999999-9999-4999-8999-999999999999",
+  contextVersion: 4,
+  sopTemplateId: "33333333-3333-4333-8333-333333333333",
+  sopVersion: 3,
+  portalId: "44444444-4444-4444-8444-444444444444",
+  portalKey: FIXTURES.PORTAL_KEY as string,
+  mappingGeneration: 2,
+  effectiveMappingFingerprint: `sha256:${"a".repeat(64)}`,
+  providerId: FIXTURES.PROVIDER_ID as string,
+  orgId: FIXTURES.PRIMARY_ORG as string,
+  facilityId: null,
+  assignmentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  taskIndex: 0,
+  stepIndex: 1,
+  stepIdentity: "contract:assignment-1:task-1:step-2",
+};
+
+async function seedWorkFillReceipt(
+  tuple: typeof WORK_CASE_TUPLE | typeof WORK_CONTRACT_TUPLE = WORK_CASE_TUPLE,
+  caseType: "enrollment" | "contract" = tuple.ownerKind === "contract" ? "contract" : "enrollment",
+  fillSessionId = WORK_FILL_SESSION,
+) {
+  const { canonicalizeWorkContextTuple } = await import("../shared/workContext");
+  const canonicalTuple = canonicalizeWorkContextTuple(tuple);
+  const reportKey = `minted.fillReport.${tuple.providerId}.${tuple.portalKey}`;
+  await enterActiveCase({
+    caseId: FIXTURES.CASE_ID,
+    providerId: FIXTURES.PROVIDER_ID,
+    orgId: FIXTURES.PRIMARY_ORG,
+  });
+  await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+  await writePanelMode("case");
+  stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+  stub.sessionStore.set("minted.selectedProviderId", FIXTURES.PROVIDER_ID);
+  stub.sessionStore.set(`minted.selectedCaseId.${FIXTURES.PROVIDER_ID}`, FIXTURES.CASE_ID);
+  stub.sessionStore.set(reportKey, {
+    tabId: 21,
+    providerId: tuple.providerId,
+    portalKey: tuple.portalKey,
+    caseId: tuple.ownerKind === "case" ? tuple.ownerId : null,
+    completedAt: "2026-09-26T12:00:00.000Z",
+    submitted: false,
+    summary: {
+      filled: 1,
+      filledLabels: ["NPI"],
+      skipped: [],
+      manual: [],
+      eventRecorded: true,
+      eventError: null,
+      fillSessionId,
+      pageFields: 1,
+      staticFilled: 1,
+      aiFilled: 0,
+      writtenSelectors: ["#npi"],
+      workContext: canonicalTuple,
+      workCaseType: caseType,
+    },
+  });
+  return { reportKey, tuple: canonicalTuple };
+}
 
 async function seedAcceptedAiLearningReceipt(options: {
   mappings?: typeof AI_MAPPING[];
@@ -271,6 +360,112 @@ async function seedAcceptedAiLearningReceipt(options: {
   mock.state.learningRequests.length = 0;
   return { reportKey, mappings, learning };
 }
+
+describe("MINT-58 — exact Work fill submission telemetry", () => {
+  async function markWorkSubmitted(overrides: Record<string, unknown> = {}) {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({
+      type: "MARK_SUBMITTED",
+      providerId: FIXTURES.PROVIDER_ID,
+      caseId: FIXTURES.CASE_ID,
+      portalKey: FIXTURES.PORTAL_KEY,
+      fillSessionId: WORK_FILL_SESSION,
+      isWorkFill: true,
+      ...overrides,
+    });
+  }
+
+  it("uses the saved exact Enrollment tuple and replays a byte-stable touch after a failed write", async () => {
+    const { reportKey, tuple } = await seedWorkFillReceipt();
+    const payerReferenceId = "MANUAL-REF-SENTINEL";
+    const wipNote = "manual note sentinel";
+    mock.state.failTouches = 1;
+
+    await expect(markWorkSubmitted({ payerReferenceId, wipNote })).rejects.toThrow(ApiError);
+    expect(mock.state.touchBodies).toHaveLength(1);
+    const firstBody = mock.state.touchBodies[0];
+    expect(firstBody).toMatchObject({
+      kind: "portal_submission",
+      portal_key: tuple.portalKey,
+      fill_session_id: WORK_FILL_SESSION,
+      payer_reference_id: payerReferenceId,
+      wip_note: wipNote,
+      work_context: tuple,
+    });
+    expect(firstBody?.work_context).not.toHaveProperty("protocolVersion");
+    expect(firstBody).not.toHaveProperty("task_id");
+    expect(firstBody).not.toHaveProperty("bump_status");
+
+    const result = await markWorkSubmitted({ payerReferenceId, wipNote }) as {
+      touch: { fillSessionId: string; caseId: string };
+    };
+    expect(result.touch).toMatchObject({ fillSessionId: WORK_FILL_SESSION, caseId: FIXTURES.CASE_ID });
+    expect(mock.state.touchBodies).toHaveLength(2);
+    expect(mock.state.touchBodies[1]).toEqual(firstBody);
+    expect(mock.state.touches.size).toBe(1);
+    // Only the value-free tuple and a digest may survive in session storage.
+    const storedSession = JSON.stringify(Object.fromEntries(stub.sessionStore));
+    expect(storedSession).not.toContain(payerReferenceId);
+    expect(storedSession).not.toContain(wipNote);
+    expect(stub.sessionStore.get(reportKey)).toMatchObject({ submitted: true });
+  });
+
+  it("blocks a changed manual payload from reusing a Work touch idempotency key", async () => {
+    await seedWorkFillReceipt(WORK_CASE_TUPLE, "enrollment", WORK_CHANGED_FILL_SESSION);
+    mock.state.failTouches = 1;
+    await expect(markWorkSubmitted({
+      fillSessionId: WORK_CHANGED_FILL_SESSION,
+      payerReferenceId: "REF-ONE",
+    })).rejects.toThrow(ApiError);
+    expect(mock.state.touchBodies).toHaveLength(1);
+
+    // Simulate the MV3 worker stopping after the failed write. The digest is
+    // durable, while the first manual body and in-memory cache are gone.
+    vi.resetModules();
+    await expect(markWorkSubmitted({
+      fillSessionId: WORK_CHANGED_FILL_SESSION,
+      payerReferenceId: "REF-TWO",
+    })).rejects.toThrow(
+      /original payer reference and note|review the case activity/i,
+    );
+    expect(mock.state.touchBodies).toHaveLength(1);
+    expect(mock.state.touches.size).toBe(0);
+  });
+
+  it("permits an identical manual payload after worker restart using only its saved digest", async () => {
+    await seedWorkFillReceipt(WORK_CASE_TUPLE, "enrollment", WORK_RESTARTED_FILL_SESSION);
+    mock.state.failTouches = 1;
+    await expect(markWorkSubmitted({
+      fillSessionId: WORK_RESTARTED_FILL_SESSION,
+      payerReferenceId: "REF-REENTERED",
+      wipNote: "note re-entered by the human",
+    })).rejects.toMatchObject({ status: 500 });
+    expect(mock.state.touchBodies).toHaveLength(1);
+    const firstBody = mock.state.touchBodies[0];
+
+    // A new module instance has an empty in-memory cache, as after an MV3
+    // worker restart; the human re-enters the values to match the digest.
+    vi.resetModules();
+    const result = await markWorkSubmitted({
+      fillSessionId: WORK_RESTARTED_FILL_SESSION,
+      payerReferenceId: "REF-REENTERED",
+      wipNote: "note re-entered by the human",
+    }) as { touch: { fillSessionId: string } };
+
+    expect(result.touch.fillSessionId).toBe(WORK_RESTARTED_FILL_SESSION);
+    expect(mock.state.touchBodies).toHaveLength(2);
+    expect(mock.state.touchBodies[1]).toEqual(firstBody);
+    expect(mock.state.touches.size).toBe(1);
+  });
+
+  it("does not turn a Contract Work fill receipt into a case touch", async () => {
+    await seedWorkFillReceipt(WORK_CONTRACT_TUPLE);
+
+    await expect(markWorkSubmitted()).rejects.toThrow(/Contract Work has no case submission action/);
+    expect(mock.state.touchBodies).toHaveLength(0);
+    expect(mock.state.touches.size).toBe(0);
+  });
+});
 
 async function forceIdle(minutes: number): Promise<void> {
   const record = (await readActiveCaseRecord()) as ActiveCaseRecord;
@@ -604,7 +799,7 @@ describe("Step6 — accepted AI learning follows the logged human touch", () => 
     await seedAcceptedAiLearningReceipt();
     mock.state.failTouches = 1;
 
-    await expect(markSubmitted()).rejects.toThrow(ApiError);
+    await expect(markSubmitted()).rejects.toMatchObject({ status: 500 });
     expect(mock.state.touches.size).toBe(0);
     expect(mock.state.learningRequests).toHaveLength(0);
     expect(stub.sessionStore.get("minted.aiAcceptedReceipt")).toMatchObject({

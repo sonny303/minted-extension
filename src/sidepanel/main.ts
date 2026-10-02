@@ -47,7 +47,12 @@ import type {
 import { matchPortalTasks } from "../shared/submission";
 import { API_BASE_URL } from "../shared/config";
 import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
-import { workFormUrlMatchesPage, type ActiveWorkRecord, type ActiveWorkState } from "../shared/workContext";
+import {
+  workFormUrlMatchesPage,
+  type ActiveWorkRecord,
+  type ActiveWorkState,
+  type CanonicalWorkContextTuple,
+} from "../shared/workContext";
 import {
   caseReturnUrl,
   evaluateHandoffApplication,
@@ -297,6 +302,7 @@ const submitDetails = el<HTMLElement>("submit-details");
 const payerRefInput = el<HTMLInputElement>("payer-ref-input");
 const wipNoteInput = el<HTMLTextAreaElement>("wip-note-input");
 const taskLink = el<HTMLElement>("task-link");
+const taskLinkLabel = el<HTMLLabelElement>("task-link-label");
 const taskLinkSingle = el<HTMLElement>("task-link-single");
 const taskSelect = el<HTMLSelectElement>("task-select");
 const submitHint = el<HTMLElement>("submit-hint");
@@ -326,6 +332,9 @@ interface LastFill {
   caseId: string | null;
   portalKey: string;
   fillSessionId: string | null;
+  isWorkFill: boolean;
+  workContext: CanonicalWorkContextTuple | null;
+  workCaseType: FillSummary["workCaseType"] | null;
   submitted: boolean;
 }
 
@@ -391,9 +400,8 @@ let trainRecognitionRevision = 0;
 let trainRegistryRevision = 0;
 let trainUrlCandidates: MatchedPortal[] = [];
 let lastFill: LastFill | null = null;
-// SOP task to close via "Mark submitted", matched from portalTasks on the case
-// against the current page's portal. null = no match (or user chose none).
-// Re-derived by renderTaskLink(); cleared on selection change / fresh fill.
+// Legacy SOP task selected by portal key. Typed Work submissions bypass this
+// picker and use the exact step pinned to LastFill.workContext.
 let selectedTaskId: string | null = null;
 // First "Mark submitted" click on a recently submitted case shows a warning;
 // the next click logs anyway. Reset on selection change or a fresh fill.
@@ -1469,6 +1477,56 @@ function resetSubmitInputs(): void {
   wipNoteInput.value = "";
 }
 
+type WorkSubmissionMode = "legacy" | "enrollment" | "contract" | "recredentialing" | "unavailable";
+
+function workSubmissionMode(context: LastFill | null): WorkSubmissionMode {
+  if (!context?.isWorkFill) return "legacy";
+  if (context.workContext?.ownerKind === "contract") return "contract";
+  if (context.workContext?.ownerKind === "case" &&
+      context.workCaseType === "enrollment" && context.fillSessionId != null) return "enrollment";
+  if (context.workCaseType === "recredentialing") return "recredentialing";
+  return "unavailable";
+}
+
+function exactWorkStepLabel(
+  context: LastFill | null,
+  caseContext: CaseContext | null,
+): string {
+  const tuple = context?.workContext;
+  if (tuple?.ownerKind !== "case") return "this exact Work step";
+  const task = caseContext?.openTasks?.find((entry) => entry.id === tuple.taskId);
+  const step = task?.steps?.find((entry) => entry.id === tuple.stepId);
+  return task && step ? `${task.title} · ${step.label}` : "this exact Enrollment Work step";
+}
+
+function submissionUnavailableMessage(mode: WorkSubmissionMode): string {
+  if (mode === "contract") {
+    return "Contract Work has no case submission action. Return to the Contract task in Minted Panel.";
+  }
+  if (mode === "recredentialing") {
+    return "Mark submitted is available only for Enrollment Work. Return to the exact Recredentialing task in Minted Panel.";
+  }
+  return "The exact Enrollment Work case or fill receipt is unavailable. Reopen the task in Minted Panel.";
+}
+
+function submissionSuccessLine(
+  context: LastFill | null,
+  touchFillSessionId: string | null,
+  legacyTaskTitle: string | null,
+  caseContext: CaseContext | null,
+): string {
+  const mode = workSubmissionMode(context);
+  if (mode === "enrollment" && touchFillSessionId === context?.fillSessionId) {
+    return `Logged for ${exactWorkStepLabel(context, caseContext)}.`;
+  }
+  if (context?.isWorkFill) {
+    return "Submission logged, but the exact Work receipt could not be confirmed. Review the case activity.";
+  }
+  return legacyTaskTitle
+    ? `Logged to the case. Task closed: ${legacyTaskTitle}`
+    : "Logged to the case.";
+}
+
 // Portal tasks on the filled case matching the current page — tasks "Mark submitted"
 // could close. Matched against lastFill, not the current picker selection.
 function matchingPortalTasks(): CasePortalTask[] {
@@ -1478,18 +1536,25 @@ function matchingPortalTasks(): CasePortalTask[] {
   return matchPortalTasks(caseItem?.portalTasks, portal.key);
 }
 
-// Render the "close a task" affordance and set selectedTaskId. Zero matches →
-// hidden, no task closed (today's behavior). One → auto-selected, shown as
-// "Will close task: <title>". Several → a dropdown preselecting NONE (the human
-// picks which), with a "Don't link a task" escape. Never blocks or changes the
-// submit itself.
+// Legacy portal-key matches keep their existing picker. Typed Work fills show
+// the receipt-pinned step and never infer a task from a shared portal key.
 function renderTaskLink(): void {
-  const matches = matchingPortalTasks();
-  const first = matches[0];
   selectedTaskId = null;
   taskSelect.replaceChildren();
   taskSelect.hidden = true;
   taskLinkSingle.hidden = true;
+
+  if (workSubmissionMode(lastFill) === "enrollment") {
+    taskLink.hidden = false;
+    taskLinkLabel.textContent = "Work step";
+    taskLinkSingle.hidden = false;
+    taskLinkSingle.textContent = `This fill is pinned to ${exactWorkStepLabel(lastFill, caseContextData)}.`;
+    return;
+  }
+
+  taskLinkLabel.textContent = "Checklist task";
+  const matches = matchingPortalTasks();
+  const first = matches[0];
 
   if (!first) {
     taskLink.hidden = true;
@@ -2014,6 +2079,72 @@ function fmtReportTime(iso: string): string {
     : `${formatDisplayDate(iso)}, ${time}`;
 }
 
+function renderSubmissionActions(
+  restored?: { completedAt: string; submitted: boolean },
+): void {
+  const context = lastFill;
+  const mode = workSubmissionMode(context);
+  const hasCase = mode === "enrollment"
+    ? context?.caseId != null
+    : (context?.caseId ?? selectedCaseId()) != null;
+
+  if (mode === "contract" || mode === "recredentialing" || mode === "unavailable" ||
+      (mode === "enrollment" && !hasCase)) {
+    submitDetails.hidden = true;
+    taskLink.hidden = true;
+    selectedTaskId = null;
+    submitHint.hidden = true;
+    dupWarn.hidden = true;
+    dupConfirmPending = false;
+    markSubmittedBtn.hidden = true;
+    markSubmittedBtn.disabled = false;
+    markSubmittedBtn.textContent = "Mark submitted";
+    submitStatus.hidden = false;
+    submitStatus.classList.remove("partial");
+    submitStatus.textContent = submissionUnavailableMessage(
+      mode === "enrollment" ? "unavailable" : mode,
+    );
+    return;
+  }
+
+  if (!hasCase) {
+    submitDetails.hidden = true;
+    taskLink.hidden = true;
+    selectedTaskId = null;
+    submitHint.hidden = true;
+    dupWarn.hidden = true;
+    dupConfirmPending = false;
+    markSubmittedBtn.hidden = true;
+    submitStatus.hidden = false;
+    submitStatus.classList.remove("partial");
+    submitStatus.textContent = "Ad hoc fill completed — logged under provider.";
+    return;
+  }
+
+  const submitted = restored?.submitted === true;
+  submitDetails.hidden = submitted;
+  if (!submitted) {
+    resetSubmitInputs();
+    renderTaskLink();
+  } else {
+    taskLink.hidden = true;
+    selectedTaskId = null;
+  }
+  submitHint.hidden = submitted;
+  dupWarn.hidden = true;
+  dupConfirmPending = false;
+  markSubmittedBtn.hidden = submitted;
+  markSubmittedBtn.disabled = false;
+  markSubmittedBtn.textContent = "Mark submitted";
+  submitStatus.hidden = !submitted;
+  submitStatus.classList.remove("partial");
+  if (submitted) {
+    submitStatus.textContent = mode === "enrollment"
+      ? submissionSuccessLine(context, context?.fillSessionId ?? null, null, caseContextData)
+      : "Logged to the case.";
+  }
+}
+
 // The review state: filled count, the skipped/manual lists, and the
 // "Mark submitted" button the human presses only after submitting the portal
 // form themselves (the extension never automates the portal's submit).
@@ -2088,38 +2219,7 @@ function renderFillSummary(
   gapFlag.hidden = warning == null;
   gapFlag.textContent = warning ?? "";
 
-  const hasCase = (lastFill?.caseId ?? selectedCaseId()) != null;
-  if (!hasCase) {
-    submitDetails.hidden = true;
-    taskLink.hidden = true;
-    selectedTaskId = null;
-    submitHint.hidden = true;
-    dupWarn.hidden = true;
-    dupConfirmPending = false;
-    markSubmittedBtn.hidden = true;
-    submitStatus.hidden = false;
-    submitStatus.textContent = "Ad hoc fill completed — logged under provider.";
-  } else {
-    const submitted = restored?.submitted === true;
-    // Payer-reference and WIP-note boxes show while the human can
-    // still act; an already-logged (restored) report hides them.
-    submitDetails.hidden = submitted;
-    if (!submitted) {
-      resetSubmitInputs();
-      renderTaskLink();
-    } else {
-      taskLink.hidden = true;
-      selectedTaskId = null;
-    }
-    submitHint.hidden = submitted;
-    dupWarn.hidden = true;
-    dupConfirmPending = false;
-    markSubmittedBtn.hidden = submitted;
-    markSubmittedBtn.disabled = false;
-    markSubmittedBtn.textContent = "Mark submitted";
-    submitStatus.hidden = !submitted;
-    if (submitted) submitStatus.textContent = "Logged to the case.";
-  }
+  renderSubmissionActions(restored);
 }
 
 function renderAiReview(review: AiFillReview | null, restored: { completedAt: string; submitted: boolean } | null = null): void {
@@ -2270,6 +2370,9 @@ async function restoreFillReport(
     caseId: record.caseId ?? null,
     portalKey: record.portalKey,
     fillSessionId: record.summary.fillSessionId,
+    isWorkFill: record.summary.workContext != null,
+    workContext: record.summary.workContext ?? null,
+    workCaseType: record.summary.workCaseType ?? null,
     submitted: record.submitted,
   };
   renderFillSummary(record.summary, {
@@ -3381,6 +3484,9 @@ fillBtn.addEventListener("click", () => {
       caseId: caseId ?? null,
       portalKey: clickPortal.key,
       fillSessionId: response.data.fillSessionId,
+      isWorkFill: response.data.workContext != null,
+      workContext: response.data.workContext ?? null,
+      workCaseType: response.data.workCaseType ?? null,
       submitted: false,
     };
     lastFillTabId = tab.id;
@@ -3411,11 +3517,13 @@ async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
 
 // Pressed by the human only after they submit the portal form themselves.
 // The background reuses one idempotency id per (case, fill session), so a
-// retry after a failure can never double-log the touch. On submit it also
-// carries the payer reference, WIP note, and matched task_id when one was chosen.
+// retry after a failure can never double-log the touch. Legacy fills may carry
+// a portal-key task choice; typed Work is bound only to its saved exact tuple.
 markSubmittedBtn.addEventListener("click", () => {
   const context = lastFill;
   if (!context || !context.caseId) return;
+  const submissionMode = workSubmissionMode(context);
+  if (submissionMode !== "legacy" && submissionMode !== "enrollment") return;
   const caseId = context.caseId;
 
   // On a case submitted inside the duplicate window, the first click
@@ -3434,9 +3542,9 @@ markSubmittedBtn.addEventListener("click", () => {
       return;
     }
   }
-  // Capture the task to close BEFORE the async work: a successful submit refetches
-  // cases (mutating matchingPortalTasks), so read the id + title now.
-  const closedTaskId = selectedTaskId;
+  // Capture a legacy task choice before the async request; typed Work never
+  // sends a task inferred from the case's portal-key list.
+  const closedTaskId = submissionMode === "legacy" ? selectedTaskId : null;
   const closedTaskTitle = closedTaskId
     ? (matchingPortalTasks().find((t) => t.taskId === closedTaskId)?.title ??
       null)
@@ -3451,6 +3559,7 @@ markSubmittedBtn.addEventListener("click", () => {
       caseId,
       portalKey: context.portalKey,
       fillSessionId: context.fillSessionId,
+      isWorkFill: context.isWorkFill,
       payerReferenceId: payerRefInput.value,
       wipNote: wipNoteInput.value,
       taskId: closedTaskId,
@@ -3494,11 +3603,12 @@ markSubmittedBtn.addEventListener("click", () => {
     // skipped bump is not a failed touch: the submission IS recorded, and the
     // reason (illegal edge, role, concurrency) comes from the server.
     const bump = response.data.statusBump;
-    const lines = [
-      closedTaskTitle
-        ? `Logged to the case. Task closed: ${closedTaskTitle}`
-        : "Logged to the case.",
-    ];
+    const lines = [submissionSuccessLine(
+      context,
+      response.data.touch.fillSessionId ?? null,
+      closedTaskTitle,
+      caseContextData,
+    )];
     if (bump?.applied) lines.push("Case moved to Submitted.");
     else if (bump && !bump.applied) {
       lines.push(

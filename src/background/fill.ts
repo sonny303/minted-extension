@@ -53,6 +53,11 @@ import {
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
 import { isExactGroupRecordPath } from "../shared/fixit";
+import {
+  canonicalizeWorkContextTuple,
+  type WorkContextTuple,
+  type WorkContextValidationResponse,
+} from "../shared/workContext";
 
 const CONTRACT_CONTACT_TOKENS = new Set([
   "group.contractingContactName",
@@ -733,6 +738,9 @@ export interface FillPortalOptions {
   maps?: PortalFieldMap[];
   fillEventV2?: boolean;
   profileOptions?: ProviderProfileRequestOptions;
+  /** Supplied only from the validated active Work guard. */
+  workContext?: WorkContextTuple;
+  workCaseType?: WorkContextValidationResponse["caseType"];
 }
 
 export async function fillPortal(
@@ -740,6 +748,9 @@ export async function fillPortal(
   options: FillPortalOptions = {},
 ): Promise<FillSummary> {
   const startedAt = new Date().toISOString();
+  const workContext = options.workContext == null
+    ? undefined
+    : canonicalizeWorkContextTuple(options.workContext);
   // The attempt's idempotency id doubles as the fill_sessions row PK; the
   // panel passes it back as fill_session_id when the human marks the
   // submission, tying the business log to this machine log.
@@ -996,6 +1007,7 @@ export async function fillPortal(
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ]),
       ...(telemetry ? { v2: telemetry } : {}),
+      ...(workContext ? { workContext } : {}),
     }, { signal: operation?.abortController.signal });
   } catch (error) {
     eventRecorded = false;
@@ -1093,6 +1105,7 @@ export async function fillPortal(
     orgId: prepared?.guard.orgId ?? options.orgId ?? null,
     facilityId: request.facilityId,
     state: request.state,
+    ...(workContext ? { workContext, workCaseType: options.workCaseType ?? null } : {}),
   };
   if (prepared && operation) await finishAiOperation(prepared, operation);
   return summary;

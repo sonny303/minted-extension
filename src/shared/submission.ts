@@ -3,6 +3,7 @@
 // fetch) so the two behaviors the spec pins — the portal-key task match and the
 // touch-body shape — can be exercised in isolation.
 import type { CasePortalTask, SubmissionTouchBody } from "./apiTypes";
+import type { CanonicalWorkContextTuple } from "./workContext";
 
 // Match the current page's portal_key against a selected case's portal-linked
 // open SOP tasks. LITERAL string compare on already-normalized keys: the server
@@ -33,6 +34,8 @@ export interface SubmissionTouchInput {
   taskId?: string | null;
   // S4.4: request the In Progress -> Submitted bump alongside the touch.
   bumpStatus?: boolean;
+  /** Exact protocol-free owner/step tuple for typed Enrollment submissions. */
+  workContext?: CanonicalWorkContextTuple;
 }
 
 // Blank/whitespace → null so an empty field is a no-op server-side (the server
@@ -59,5 +62,6 @@ export function buildSubmissionTouchBody(input: SubmissionTouchInput): Submissio
     // Omitted entirely when not requested, so a server predating S4.4 sees the
     // exact pre-bump body it already understands.
     ...(input.bumpStatus ? { bump_status: true } : {}),
+    ...(input.workContext ? { work_context: input.workContext } : {}),
   };
 }

@@ -4,6 +4,7 @@
 // needs — selectors and final values — never tokens or auth material.
 import type { PortalFieldType } from "./apiTypes";
 import type { FillEventV2FieldOutcome, FillEventV2Metadata } from "./fillEventV2";
+import type { CanonicalWorkContextTuple, WorkContextValidationResponse } from "./workContext";
 
 export interface FillInstruction {
   mapId: string;
@@ -244,6 +245,10 @@ export interface FillSummary {
   facilityId?: string | null;
   /** Portal state used to resolve profile tokens when this fill was planned. */
   state?: string | null;
+  /** Exact value-free M56 owner/step tuple, copied only from the worker guard. */
+  workContext?: CanonicalWorkContextTuple;
+  /** Validation result used to gate typed Enrollment submission. */
+  workCaseType?: WorkContextValidationResponse["caseType"];
 }
 
 // One persisted fill outcome, keyed per (provider, portal) in
