@@ -216,7 +216,7 @@ export function validateBundleText(text, target, publicKey) {
   for (const match of text.matchAll(/https:\/\/([a-z0-9]{20})\.supabase\.co/g))
     if (match[1] !== expected.ref) fail("BUNDLE_WRONG_TARGET");
   if (
-    /(?:sb_secret_|sbp_(?:oauth_)?[a-f0-9]{20}|gh[pousr]_[A-Za-z0-9]{20}|SUPABASE_SERVICE_ROLE_KEY|VERCEL_AUTOMATION_BYPASS_SECRET|x-vercel-protection-bypass|CWS_CLIENT_SECRET|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----)/.test(
+    /(?:sb_secret_[A-Za-z0-9_-]{10,}|sbp_(?:oauth_)?[a-f0-9]{20}|gh[pousr]_[A-Za-z0-9]{20}|SUPABASE_SERVICE_ROLE_KEY|VERCEL_AUTOMATION_BYPASS_SECRET|x-vercel-protection-bypass|CWS_CLIENT_SECRET|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----)/.test(
       text,
     )
   )
