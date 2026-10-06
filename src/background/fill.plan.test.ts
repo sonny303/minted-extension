@@ -84,6 +84,30 @@ describe("applyTransform", () => {
     expect(applyTransform("Ada", "mystery")).toBe("Ada");
     expect(applyTransform("Ada", null)).toBe("Ada");
   });
+
+  it("shapes TIN to 9 digits or dashed format, and preserves invalid values", () => {
+    // 9 digits (no dash)
+    expect(applyTransform("12-3456789", "tin_digits")).toBe("123456789");
+    expect(applyTransform("123456789", "tin_digits")).toBe("123456789");
+    expect(applyTransform(" 12-3456789 ", "tin_digits")).toBe("123456789");
+    expect(applyTransform("12 3456789", "tin_digits")).toBe("123456789");
+    expect(applyTransform("123-45-6789", "tin_digits")).toBe("123456789");
+
+    // Dashed (XX-XXXXXXX)
+    expect(applyTransform("123456789", "tin_dashed")).toBe("12-3456789");
+    expect(applyTransform("12-3456789", "tin_dashed")).toBe("12-3456789");
+    expect(applyTransform(" 123456789 ", "tin_dashed")).toBe("12-3456789");
+    expect(applyTransform("12 3456789", "tin_dashed")).toBe("12-3456789");
+    expect(applyTransform("123-45-6789", "tin_dashed")).toBe("12-3456789");
+
+    // Invalid / malformed TINs pass through unchanged
+    expect(applyTransform("12-3456", "tin_digits")).toBe("12-3456");
+    expect(applyTransform("12-3456", "tin_dashed")).toBe("12-3456");
+    expect(applyTransform("1234567890", "tin_digits")).toBe("1234567890");
+    expect(applyTransform("1234567890", "tin_dashed")).toBe("1234567890");
+    expect(applyTransform("ABC-1234567", "tin_digits")).toBe("ABC-1234567");
+    expect(applyTransform("ABC-1234567", "tin_dashed")).toBe("ABC-1234567");
+  });
 });
 
 describe("planFill", () => {

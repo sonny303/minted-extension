@@ -157,6 +157,17 @@ function formatZip5(value: string): string {
   return match ? match[1] as string : value;
 }
 
+function formatTin(value: string, format: "digits" | "dashed"): string {
+  const trimmed = value.trim();
+  if (!/^(\d{9}|\d{2}[-\s]\d{7}|\d{3}[-\s]\d{2}[-\s]\d{4})$/.test(trimmed)) {
+    return value;
+  }
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length !== 9) return value;
+  if (format === "digits") return digits;
+  return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+}
+
 export function applyTransform(value: string, transform: string | null): string {
   switch (transform) {
     case null:
@@ -183,6 +194,10 @@ export function applyTransform(value: string, transform: string | null): string 
       return formatPhone(value, "country_dashed");
     case "phone_e164":
       return formatPhone(value, "e164");
+    case "tin_digits":
+      return formatTin(value, "digits");
+    case "tin_dashed":
+      return formatTin(value, "dashed");
     case "state_abbrev": {
       const trimmed = value.trim();
       if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
