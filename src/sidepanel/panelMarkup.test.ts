@@ -283,4 +283,10 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(doc.getElementById("malpractice-row")).toBeNull();
     expect(codeOf(MAIN).toLowerCase()).not.toContain("malpractice");
   });
+
+  it("carries the version indicator in the panel footer and avatar menu", () => {
+    expect(doc.getElementById("panel-footer")).not.toBeNull();
+    expect(doc.getElementById("panel-version")).not.toBeNull();
+    expect(doc.getElementById("account-version")).not.toBeNull();
+  });
 });

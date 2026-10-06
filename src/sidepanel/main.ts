@@ -3,6 +3,7 @@ import { AD_HOC_CASE_SELECTION } from "../shared/messages";
 // All API calls run in the background worker; this file renders state and
 // sends typed messages. Portal detection follows the active tab.
 import "./sidepanel.css";
+import { getExtensionVersionInfo } from "../shared/version";
 import type {
   CaseContext,
   CaseListItem,
@@ -200,6 +201,8 @@ const signinBtn = el<HTMLButtonElement>("signin-btn");
 const signinError = el<HTMLElement>("signin-error");
 const signinHandoffHint = el<HTMLElement>("signin-handoff-hint");
 const accountEmail = el<HTMLElement>("account-email");
+const accountVersion = el<HTMLElement>("account-version");
+const panelVersion = el<HTMLElement>("panel-version");
 const identityGuard = el<HTMLElement>("identity-guard");
 const orgSelect = el<HTMLSelectElement>("org-select");
 const handoffBanner = el<HTMLElement>("handoff-banner");
@@ -341,6 +344,15 @@ interface LastFill {
   workCaseType: FillSummary["workCaseType"] | null;
   submitted: boolean;
 }
+
+function renderExtensionVersion(): void {
+  const info = getExtensionVersionInfo();
+  panelVersion.textContent = info.displayVersion;
+  panelVersion.setAttribute("title", info.tooltip);
+  accountVersion.textContent = info.displayVersion;
+  accountVersion.setAttribute("title", info.tooltip);
+}
+renderExtensionVersion();
 
 let selectedGroupId: string | null = null;
 let fillSelectionRevision = 0;
