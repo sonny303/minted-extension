@@ -66,6 +66,11 @@ export function installChromeStub(): ChromeStub {
     },
     runtime: {
       id: "test-extension-id",
+      getManifest: () => ({
+        manifest_version: 3,
+        name: "Minted Panel Workbench",
+        version: "0.1.4",
+      }),
       // Worker → panel broadcast lands here; tests read `broadcasts`.
       sendMessage: async (message: unknown) => {
         broadcasts.push(message);
