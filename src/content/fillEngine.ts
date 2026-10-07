@@ -62,6 +62,9 @@ interface ProbedTarget {
   radioNodes: HTMLInputElement[] | null;
   mutationVersion: number;
   expiresAt: number;
+  resolvedPage?: string | null;
+  probedLabel?: string;
+  probedOptionsSignature?: string | null;
 }
 
 // DOM references stay only in this content-script frame's short-lived memory.
@@ -69,15 +72,64 @@ interface ProbedTarget {
 const probedTargets = new Map<string, ProbedTarget>();
 let probeMutationObserver: MutationObserver | null = null;
 let probeMutationVersion = 0;
+let activePrimeFacesMenu: NonNullable<ReturnType<typeof primeFacesSelectMenu>> | null = null;
+
+function isDecorationMutation(record: MutationRecord, decorated: Fillable, title: string | undefined): boolean {
+  if (record.type === "childList") {
+    const isStyle = (n: Node) => {
+      const el = n as unknown as { id?: string; tagName?: string };
+      return (
+        typeof el.tagName === "string" && el.tagName.toLowerCase() === "style" && el.id === "__minted-panel-fill-style"
+      );
+    };
+    const addedOnlyStyle = Array.from(record.addedNodes).every(isStyle);
+    const removedOnlyStyle = Array.from(record.removedNodes).every(isStyle);
+    if ((record.addedNodes.length > 0 || record.removedNodes.length > 0) && addedOnlyStyle && removedOnlyStyle) {
+      return true;
+    }
+  }
+  if (record.type === "attributes" && record.target === decorated) {
+    if (record.attributeName === "class") {
+      const portalClasses = (value: string) => value.split(/\s+/)
+        .filter((name) => name && name !== "mp-fill-static" && name !== "mp-fill-ai").sort().join(" ");
+      return portalClasses(record.oldValue ?? "") === portalClasses(decorated.className);
+    }
+    return record.attributeName === "title" && title !== undefined && decorated.getAttribute("title") === title;
+  }
+  return false;
+}
+
+function isPrimeFacesInteractionMutation(record: MutationRecord): boolean {
+  const menu = activePrimeFacesMenu;
+  if (!menu) return false;
+  const panel = primeFacesPanel(menu);
+  if (panel?.contains(record.target)) return true;
+  if (panel && record.type === "childList") {
+    const changed = [...record.addedNodes, ...record.removedNodes];
+    if (changed.length > 0 && changed.every((node) => node === panel)) return true;
+  }
+  const label = menu.wrapper.querySelector(".ui-selectonemenu-label");
+  if (label?.contains(record.target) && (record.type === "childList" || record.type === "characterData")) return true;
+  // Only presentation changes on this menu are expected during a selection.
+  // Labels/options and all mutations elsewhere must invalidate pending probes.
+  return record.type === "attributes" &&
+    [menu.wrapper, menu.focusInput, label, menu.wrapper.querySelector(".ui-selectonemenu-trigger")].includes(record.target as Element) &&
+    ["class", "style", "aria-expanded", "aria-activedescendant", "tabindex"].includes(record.attributeName ?? "");
+}
+
+function hasMeaningfulMutations(records: MutationRecord[]): boolean {
+  return records.some((r) => !isPrimeFacesInteractionMutation(r));
+}
 
 function ensureProbeMutationObserver(): boolean {
   if (probeMutationObserver) return true;
   if (typeof MutationObserver === "undefined" || !document.documentElement) return false;
   probeMutationObserver = new MutationObserver((records) => {
-    if (records.length > 0) probeMutationVersion += 1;
+    if (hasMeaningfulMutations(records)) probeMutationVersion += 1;
   });
   probeMutationObserver.observe(document.documentElement, {
     attributes: true,
+    attributeOldValue: true,
     childList: true,
     characterData: true,
     subtree: true,
@@ -87,7 +139,7 @@ function ensureProbeMutationObserver(): boolean {
 
 function currentProbeMutationVersion(): number {
   const records = probeMutationObserver?.takeRecords() ?? [];
-  if (records.length > 0) probeMutationVersion += 1;
+  if (hasMeaningfulMutations(records)) probeMutationVersion += 1;
   return probeMutationVersion;
 }
 
@@ -314,6 +366,37 @@ function labelTextOf(input: HTMLInputElement): string {
   return label?.textContent ?? "";
 }
 
+function associatedLabelText(target: Fillable): string {
+  if (target instanceof HTMLInputElement) {
+    const text = labelTextOf(target);
+    if (text) return normalize(text);
+  }
+  const label = target.labels?.[0] ?? target.closest("label") ??
+    (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
+  if (label?.textContent) return normalize(label.textContent);
+  const menu = target instanceof HTMLSelectElement ? primeFacesSelectMenu(target) : null;
+  if (menu) {
+    const menuLabel = menu.wrapper.closest("label") ??
+      (menu.wrapper.id ? document.querySelector(`label[for="${CSS.escape(menu.wrapper.id)}"]`) : null) ??
+      (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
+    if (menuLabel?.textContent) return normalize(menuLabel.textContent);
+  }
+  const ariaLabel = target.getAttribute("aria-label");
+  if (ariaLabel) return normalize(ariaLabel);
+  const ariaLabelledBy = target.getAttribute("aria-labelledby");
+  if (ariaLabelledBy) {
+    const el = document.getElementById(ariaLabelledBy);
+    if (el?.textContent) return normalize(el.textContent);
+  }
+  return "";
+}
+
+function getOptionsSignature(select: HTMLSelectElement): string {
+  return Array.from(select.options)
+    .map((o) => `${o.value}:${normalize(o.text)}`)
+    .join("|");
+}
+
 type ApplyOutcome =
   | {
       ok: true;
@@ -513,9 +596,16 @@ function installFillStyle(el: Element): void {
 }
 
 export function decorateFill(el: Fillable, kind: "static" | "ai", token?: string): void {
+  // Account for portal event-handler changes before exempting our own writes.
+  currentProbeMutationVersion();
+  const title = kind === "ai" && token ? `AI Suggested: ${token}` : undefined;
   installFillStyle(el);
   el.classList.add(kind === "ai" ? "mp-fill-ai" : "mp-fill-static");
-  if (kind === "ai" && token) el.setAttribute("title", `AI Suggested: ${token}`);
+  if (title !== undefined) el.setAttribute("title", title);
+  const records = probeMutationObserver?.takeRecords() ?? [];
+  if (hasMeaningfulMutations(records.filter((record) => !isDecorationMutation(record, el, title)))) {
+    probeMutationVersion += 1;
+  }
 }
 
 /** Write once a content-local scan has verified the exact empty target. */
@@ -674,11 +764,14 @@ async function waitForPageSettled(quietMs = 120, maxWaitMs = 700): Promise<boole
 }
 
 /** Shape-only probe used to route each map to at most one accessible frame. */
-export async function probeFillOnPage(instructions: FillProbeInstruction[]): Promise<FillProbeResult[]> {
+export async function probeFillOnPage(
+  instructions: FillProbeInstruction[],
+  explicitPageUrl: string | null = null,
+): Promise<FillProbeResult[]> {
   const pageSettled = await waitForPageSettled();
   pruneProbedTargets();
   const mutationWatchAvailable = ensureProbeMutationObserver();
-  const pageUrl = typeof location !== "undefined" ? location.href : null;
+  const pageUrl = explicitPageUrl ?? (typeof location !== "undefined" ? location.href : null);
   const currentPage = resolveFillPage(
     pageUrl,
     instructions.map((instruction) => instruction.pageStep),
@@ -687,10 +780,10 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
   const results: FillProbeResult[] = instructions.map((instruction) => {
     probedTargets.delete(instruction.probeKey);
     if (isOtherPageInstruction(instruction, currentPage)) {
-      return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
     if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
-      return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
 
     let invalid = false;
@@ -708,7 +801,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
       }
       const fillable = matches.map(asFillable).filter((item): item is Fillable => item !== null);
       if (fillable.length === 0) {
-        if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields };
+        if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
         continue;
       }
       let visible = [...new Set(fillable)].filter((control) => !isHiddenTarget(control));
@@ -727,7 +820,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
           }
         }
       }
-      if (visible.length === 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "hidden", pageSettled, radioGroup: false, pageFields };
+      if (visible.length === 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "hidden", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
       const targetStatus = visible.length === 1 || radioGroup ? "unique" : "ambiguous";
       if (targetStatus === "unique" && visible[0] && mutationWatchAvailable) {
         probedTargets.set(instruction.probeKey, {
@@ -738,11 +831,14 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
           radioNodes: radioGroup ? radioGroupNodes(visible[0]) : null,
           mutationVersion: currentProbeMutationVersion(),
           expiresAt: Date.now() + 30_000,
+          resolvedPage: currentPage,
+          probedLabel: associatedLabelText(visible[0]),
+          probedOptionsSignature: visible[0] instanceof HTMLSelectElement ? getOptionsSignature(visible[0]) : null,
         });
       }
-      return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus, pageSettled, radioGroup, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus, pageSettled, radioGroup, pageFields, resolvedPage: currentPage };
     }
-    return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields };
+    return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
   });
   stopProbeMutationObserverIfUnused();
   return results;
@@ -790,7 +886,8 @@ export function applyFillOnPage(
   };
   // Exact URL-tail identity only. Ambiguous / missing → null; all nonempty
   // step-bound instructions are withheld as page_unknown below.
-  const currentPage = resolveFillPage(
+  const resolvedInstructionPage = instructions.find((i) => i.resolvedPage)?.resolvedPage ?? null;
+  const currentPage = resolvedInstructionPage ?? resolveFillPage(
     pageUrl,
     instructions.map((i) => i.pageStep),
   );
@@ -800,8 +897,9 @@ export function applyFillOnPage(
     const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
     if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
     stopProbeMutationObserverIfUnused();
+    const effectivePage = instruction.resolvedPage ?? probedTarget?.resolvedPage ?? currentPage;
     try {
-      if (isOtherPageInstruction(instruction, currentPage)) {
+      if (isOtherPageInstruction(instruction, effectivePage)) {
         skipped.push(otherPageReport(instruction));
         recordOutcome(instruction, false, "other_page", "other_page");
         continue;
@@ -816,7 +914,7 @@ export function applyFillOnPage(
         recordOutcome(instruction, false, "other_page", "other_page");
         continue;
       }
-      if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+      if (effectivePage == null && Boolean(instruction.pageStep?.trim()) && !probedTarget) {
         skipped.push(pageUnknownReport(instruction));
         recordOutcome(instruction, false, "page_unknown", "page_unknown");
         continue;
@@ -853,14 +951,23 @@ export function applyFillOnPage(
         recordOutcome(instruction, false, "unsupported", "unsupported_control");
         continue;
       }
+      const labelMatches = !probedTarget?.probedLabel ||
+        associatedLabelText(resolution.target) === probedTarget.probedLabel;
+      const optionsMatch = !probedTarget?.probedOptionsSignature ||
+        !(resolution.target instanceof HTMLSelectElement) ||
+        getOptionsSignature(resolution.target) === probedTarget.probedOptionsSignature;
+
       if (strictRevalidation && (
         !probedTarget ||
         probedTarget.mapId !== instruction.mapId ||
         probedTarget.pageStep !== instruction.pageStep ||
         probedTarget.pageUrl !== pageUrl ||
         probedTarget.target !== resolution.target ||
+        !resolution.target.isConnected ||
+        !sameNodeList(probedTarget.radioNodes, radioGroupNodes(resolution.target)) ||
         probedTarget.mutationVersion !== mutationVersion ||
-        !sameNodeList(probedTarget.radioNodes, radioGroupNodes(resolution.target))
+        !labelMatches ||
+        !optionsMatch
       )) {
         skipped.push({
           label: instruction.label,
@@ -956,11 +1063,15 @@ function waitForValue<T>(read: () => T | null, timeoutMs: number): Promise<T | n
   });
 }
 
-function primeFacesItems(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>, option: HTMLOptionElement): HTMLElement[] {
+function primeFacesPanel(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>): Element | null {
   const panelId = menu.select.id.endsWith("_input")
     ? `${menu.select.id.slice(0, -"_input".length)}_panel`
     : `${menu.wrapper.id}_panel`;
-  const panel = document.getElementById(panelId) ?? querySelectorDeep(`#${CSS.escape(panelId)}`);
+  return document.getElementById(panelId) ?? querySelectorDeep(`#${CSS.escape(panelId)}`);
+}
+
+function primeFacesItems(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>, option: HTMLOptionElement): HTMLElement[] {
+  const panel = primeFacesPanel(menu);
   if (!panel) return [];
   return querySelectorAllDeep(".ui-selectonemenu-item", panel)
     .filter((item): item is HTMLElement => item instanceof HTMLElement)
@@ -1103,14 +1214,15 @@ async function applyPrimeFacesSelect(
   strictRevalidation: boolean,
 ): Promise<FillPageResult> {
   const pageUrl = typeof location !== "undefined" ? location.href : null;
-  const currentPage = resolveFillPage(pageUrl, [instruction.pageStep]);
+  const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
+  const currentPage = instruction.resolvedPage ?? probedTarget?.resolvedPage ?? resolveFillPage(pageUrl, [instruction.pageStep]);
   if (isOtherPageInstruction(instruction, currentPage)) {
     return skippedResult(instruction, "field belongs to another page", "other_page", "other_page", "other_page");
   }
   if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
     return skippedResult(instruction, "mapping is scoped to a different page", "other_page", "other_page", "other_page");
   }
-  if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+  if (currentPage == null && Boolean(instruction.pageStep?.trim()) && !probedTarget) {
     return skippedResult(instruction, "current wizard page could not be confirmed", "page_unknown", "page_unknown", "page_unknown");
   }
   const resolution = resolveTarget(instruction);
@@ -1137,9 +1249,15 @@ async function applyPrimeFacesSelect(
   const mutationVersion = currentProbeMutationVersion();
   if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
   stopProbeMutationObserverIfUnused();
+  const labelMatches = !probe?.probedLabel ||
+    associatedLabelText(select) === probe.probedLabel;
+  const optionsMatch = !probe?.probedOptionsSignature ||
+    getOptionsSignature(select) === probe.probedOptionsSignature;
+
   if (strictRevalidation && (
     !probe || probe.mapId !== instruction.mapId || probe.pageStep !== instruction.pageStep ||
-    probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion
+    probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion ||
+    !labelMatches || !optionsMatch
   )) {
     return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed");
   }
@@ -1162,10 +1280,15 @@ async function applyPrimeFacesSelect(
   const unchanged = select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text);
   if (!unchanged) {
     let selected: boolean;
+    activePrimeFacesMenu = menu;
     try {
       selected = await selectPrimeFacesItem(menu, option, isCurrent);
     } catch {
       return skippedResult(instruction, "field could not be applied; review it on the portal", "unverified", "unverified", "context_changed", true);
+    } finally {
+      // Drain this interaction's records while its narrow widget scope is active.
+      currentProbeMutationVersion();
+      activePrimeFacesMenu = null;
     }
     if (!isCurrent()) {
       return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed", true);
@@ -1187,7 +1310,9 @@ async function applyPrimeFacesSelect(
     ...(instruction.token ? { token: instruction.token } : {}),
     ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
   }];
-  if (!unchanged) decorateFill(select, instruction.kind ?? "static", instruction.token);
+  if (!unchanged) {
+    decorateFill(select, instruction.kind ?? "static", instruction.token);
+  }
   return {
     filled: [instruction.label],
     attemptedLabels: unchanged ? [] : [instruction.label],

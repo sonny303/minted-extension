@@ -41,6 +41,7 @@ function instr(
     ...(over.nativeDateValue ? { nativeDateValue: over.nativeDateValue } : {}),
     ...(over.exactSelectValue ? { exactSelectValue: true } : {}),
     ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
+    ...(over.resolvedPage ? { resolvedPage: over.resolvedPage } : {})
   };
 }
 
@@ -831,6 +832,335 @@ describe("probe-to-apply binding", () => {
       outcome: "unverified",
       reasonCode: "context_changed",
     });
+  });
+
+  it("permits consecutive field writes with decoration without rejecting subsequent fields as context_changed", async () => {
+    document.body.innerHTML = `
+      <input id="first-name" type="text" />
+      <input id="last-name" type="text" />
+    `;
+    const probeKey1 = createFillEventV2OpaqueKey("t");
+    const probeKey2 = createFillEventV2OpaqueKey("t");
+    const instr1 = instr({
+      label: "First Name",
+      selector: "#first-name",
+      value: "Jane",
+      mapId: "m-first",
+      probeKey: probeKey1,
+      telemetry: { targetKey: probeKey1, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    const instr2 = instr({
+      label: "Last Name",
+      selector: "#last-name",
+      value: "Doe",
+      mapId: "m-last",
+      probeKey: probeKey2,
+      telemetry: { targetKey: probeKey2, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+
+    const probe = await probeFillOnPage([
+      { mapId: instr1.mapId, probeKey: probeKey1, selector: instr1.selector, selectorFallbacks: [], fieldType: "text", pageStep: null },
+      { mapId: instr2.mapId, probeKey: probeKey2, selector: instr2.selector, selectorFallbacks: [], fieldType: "text", pageStep: null },
+    ]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+    expect(probe[1]?.targetStatus).toBe("unique");
+
+    const result1 = applyFillOnPage([instr1], window.location.href, true);
+    expect(result1.filled).toEqual(["First Name"]);
+    expect((document.getElementById("first-name") as HTMLInputElement).value).toBe("Jane");
+    expect(document.getElementById("first-name")?.classList.contains("mp-fill-static")).toBe(true);
+
+    const result2 = applyFillOnPage([instr2], window.location.href, true);
+    expect(result2.filled).toEqual(["Last Name"]);
+    expect((document.getElementById("last-name") as HTMLInputElement).value).toBe("Doe");
+    expect(result2.skipped).toEqual([]);
+    expect(result2.fieldOutcomes?.[0]?.reasonCode).not.toBe("context_changed");
+  });
+
+  it.each(["legend", "form", "class"])("rejects remaining fields when a native change handler changes their %s context", async (change) => {
+    document.body.innerHTML = `
+      <input id="entity-type" class="mp-fill-static" />
+      <form id="practitioner"><fieldset><legend id="context">Practitioner</legend>
+        <div id="npi-row"><label for="npi">NPI</label><input id="npi" /></div>
+      </fieldset></form>
+      <form id="group"></form>
+    `;
+    const npi = document.getElementById("npi") as HTMLInputElement;
+    const instructions = [
+      instr({ label: "Entity type", selector: "#entity-type", value: "Group" }),
+      instr({ label: "Practitioner NPI", selector: "#npi", value: "1234567890" }),
+    ].map((instruction, index) => ({
+      ...instruction,
+      mapId: `context-${index}`,
+      probeKey: createFillEventV2OpaqueKey("t"),
+      telemetry: { targetKey: createFillEventV2OpaqueKey("t"), frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    }));
+    document.getElementById("entity-type")!.addEventListener("change", () => {
+      if (change === "legend") document.getElementById("context")!.textContent = "Group";
+      else if (change === "form") document.getElementById("group")!.append(document.getElementById("npi-row")!);
+      else document.getElementById("entity-type")!.classList.add("group-context");
+    });
+    const probes = await probeFillOnPage(instructions);
+    expect(probes.every((probe) => probe.targetStatus === "unique")).toBe(true);
+
+    const first = await applyFillSettled([instructions[0]!], true);
+    expect(first.filled).toEqual(["Entity type"]);
+    const second = await applyFillSettled([instructions[1]!], true);
+    expect(document.getElementById("npi")).toBe(npi);
+    expect(npi.isConnected).toBe(true);
+    expect(npi.labels?.[0]?.textContent).toBe("NPI");
+    expect(npi.value).toBe("");
+    expect(second.fieldOutcomes?.[0]).toMatchObject({ attempted: false, reasonCode: "context_changed" });
+  });
+
+  it("rejects remaining fields when their context changes while a PrimeFaces menu is opening", async () => {
+    document.body.innerHTML = `
+      <div id="entity" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select One</span>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="entity_focus" />
+        <select id="entity_input" aria-hidden="true">
+          <option value="">Select One</option><option value="group">Group</option>
+        </select>
+      </div>
+      <div id="entity_panel" class="ui-selectonemenu-panel" style="display:none"><ul></ul></div>
+      <fieldset><legend id="context">Practitioner</legend>
+        <label for="npi">NPI</label><input id="npi" />
+      </fieldset>
+    `;
+    const instructions = [
+      instr({ label: "Entity type", selector: "#entity_focus", value: "Group", fieldType: "select" }),
+      instr({ label: "Practitioner NPI", selector: "#npi", value: "1234567890" }),
+    ].map((instruction, index) => ({
+      ...instruction,
+      mapId: `async-context-${index}`,
+      probeKey: createFillEventV2OpaqueKey("t"),
+      telemetry: { targetKey: createFillEventV2OpaqueKey("t"), frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    }));
+    document.querySelector<HTMLElement>(".ui-selectonemenu-trigger")!.addEventListener("click", () => {
+      const panel = document.getElementById("entity_panel")!;
+      panel.style.display = "block";
+      setTimeout(() => {
+        document.getElementById("context")!.textContent = "Group";
+        panel.querySelector("ul")!.innerHTML = '<li class="ui-selectonemenu-item" data-value="group">Group</li>';
+        panel.querySelector<HTMLElement>("li")!.addEventListener("click", () => {
+          (document.getElementById("entity_input") as HTMLSelectElement).value = "group";
+          document.querySelector(".ui-selectonemenu-label")!.textContent = "Group";
+        });
+      }, 20);
+    });
+    const probes = await probeFillOnPage(instructions);
+    expect(probes.every((probe) => probe.targetStatus === "unique")).toBe(true);
+
+    const first = await applyFillSettled([instructions[0]!], true);
+    expect(first.filled).toEqual(["Entity type"]);
+    expect(document.getElementById("context")!.textContent).toBe("Group");
+    const second = await applyFillSettled([instructions[1]!], true);
+    expect((document.getElementById("npi") as HTMLInputElement).value).toBe("");
+    expect(second.fieldOutcomes?.[0]).toMatchObject({ attempted: false, reasonCode: "context_changed" });
+  });
+
+  it("rejects fill when a field's associated label changes after probing", async () => {
+    document.body.innerHTML = `
+      <label id="npi-label" for="npi">Practitioner NPI</label>
+      <input id="npi" type="text" />
+    `;
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "Practitioner NPI",
+      selector: "#npi",
+      value: "1234567890",
+      mapId: "m-npi",
+      probeKey,
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+
+    const probe = await probeFillOnPage([
+      { mapId: instruction.mapId, probeKey, selector: instruction.selector, selectorFallbacks: [], fieldType: "text", pageStep: null },
+    ]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+
+    // Meaningful DOM change: label changes from Practitioner NPI to Group NPI
+    document.getElementById("npi-label")!.textContent = "Group NPI";
+
+    const applied = applyFillOnPage([instruction], window.location.href, true);
+    expect(applied.filled).toEqual([]);
+    expect((document.getElementById("npi") as HTMLInputElement).value).toBe("");
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({
+      attempted: false,
+      outcome: "unverified",
+      reasonCode: "context_changed",
+    });
+  });
+
+  it("rejects fill when a select option text changes after probing", async () => {
+    document.body.innerHTML = `
+      <label for="provider-type">Provider Type</label>
+      <select id="provider-type">
+        <option value="1">Specialist</option>
+      </select>
+    `;
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "Provider Type",
+      selector: "#provider-type",
+      value: "Specialist",
+      mapId: "m-type",
+      probeKey,
+      fieldType: "select",
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+
+    const probe = await probeFillOnPage([
+      { mapId: instruction.mapId, probeKey, selector: instruction.selector, selectorFallbacks: [], fieldType: "select", pageStep: null },
+    ]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+
+    // Meaningful DOM change: option text changes from Specialist to Hospitalist
+    document.querySelector("#provider-type option")!.textContent = "Hospitalist";
+
+    const applied = applyFillOnPage([instruction], window.location.href, true);
+    expect(applied.filled).toEqual([]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({
+      attempted: false,
+      outcome: "unverified",
+      reasonCode: "context_changed",
+    });
+  });
+
+  it.each(["batch", "singleton"])("fills sequential PrimeFaces dropdowns with strictRevalidation (%s)", async (mode) => {
+    document.body.innerHTML = `
+      <div id="dropdown1" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select Option</span>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="dropdown1_focus" type="text" aria-label="Dropdown 1" />
+        <select id="dropdown1_input" aria-hidden="true" aria-label="Dropdown 1">
+          <option value="">Select Option</option>
+          <option value="optA">Option A</option>
+        </select>
+      </div>
+      <div id="dropdown1_panel" class="ui-selectonemenu-panel" style="display:none">
+        <ul id="dropdown1_items"></ul>
+      </div>
+
+      <div id="dropdown2" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select Option</span>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="dropdown2_focus" type="text" aria-label="Dropdown 2" />
+        <select id="dropdown2_input" aria-hidden="true" aria-label="Dropdown 2">
+          <option value="">Select Option</option>
+          <option value="optB">Option B</option>
+        </select>
+      </div>
+      <div id="dropdown2_panel" class="ui-selectonemenu-panel" style="display:none">
+        <ul id="dropdown2_items"></ul>
+      </div>
+    `;
+
+    const wirePrimeFacesMenu = (id: string) => {
+      const wrapper = document.getElementById(id)!;
+      const select = wrapper.querySelector<HTMLSelectElement>(`#${id}_input`)!;
+      const label = wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label")!;
+      const panel = document.getElementById(`${id}_panel`)!;
+      wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger")!.addEventListener("click", () => {
+        panel.style.display = "block";
+        panel.querySelector("ul")!.innerHTML = Array.from(select.options)
+          .filter((opt) => opt.value)
+          .map((opt) => `<li class="ui-selectonemenu-item" role="option" data-value="${opt.value}" data-label="${opt.text}">${opt.text}</li>`)
+          .join("");
+        panel.querySelectorAll<HTMLElement>(".ui-selectonemenu-item").forEach((item) => {
+          item.addEventListener("click", () => {
+            select.value = item.getAttribute("data-value") ?? "";
+            label.textContent = item.getAttribute("data-label") ?? "";
+            panel.style.display = "none";
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        });
+      });
+    };
+
+    wirePrimeFacesMenu("dropdown1");
+    wirePrimeFacesMenu("dropdown2");
+
+    const probeKey1 = createFillEventV2OpaqueKey("t");
+    const probeKey2 = createFillEventV2OpaqueKey("t");
+    const instr1 = instr({
+      label: "Dropdown 1",
+      selector: "#dropdown1_focus",
+      fieldType: "select",
+      value: "Option A",
+      mapId: "m-d1",
+      probeKey: probeKey1,
+      telemetry: { targetKey: probeKey1, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    const instr2 = instr({
+      label: "Dropdown 2",
+      selector: "#dropdown2_focus",
+      fieldType: "select",
+      value: "Option B",
+      mapId: "m-d2",
+      probeKey: probeKey2,
+      telemetry: { targetKey: probeKey2, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+
+    const probe = await probeFillOnPage([
+      { mapId: instr1.mapId, probeKey: probeKey1, selector: instr1.selector, selectorFallbacks: [], fieldType: "select", pageStep: null },
+      { mapId: instr2.mapId, probeKey: probeKey2, selector: instr2.selector, selectorFallbacks: [], fieldType: "select", pageStep: null },
+    ]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+    expect(probe[1]?.targetStatus).toBe("unique");
+
+    const results = mode === "batch"
+      ? [await applyFillSettled([instr1, instr2], true)]
+      : [await applyFillSettled([instr1], true), await applyFillSettled([instr2], true)];
+    expect(results.flatMap((result) => result.filled)).toEqual(["Dropdown 1", "Dropdown 2"]);
+    expect(results.flatMap((result) => result.skipped)).toEqual([]);
+    expect((document.getElementById("dropdown1_input") as HTMLSelectElement).value).toBe("optA");
+    expect((document.getElementById("dropdown2_input") as HTMLSelectElement).value).toBe("optB");
+    expect(results.every((result) => result.fieldOutcomes?.every((f) => f.reasonCode !== "context_changed"))).toBe(true);
+  });
+
+  it("does not withhold singleton sequence-page instruction as page_unknown when resolvedPage is provided", async () => {
+    document.body.innerHTML = `<input id="field" type="text" />`;
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "Step Field",
+      selector: "#field",
+      value: "Value",
+      pageStep: "Page 2",
+      resolvedPage: "enrollment",
+      probeKey,
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    // In production, the probe runs over the full batch including the URL-tail step
+    const probe = await probeFillOnPage([
+      {
+        mapId: "m-tail",
+        probeKey: createFillEventV2OpaqueKey("t"),
+        selector: "#field",
+        selectorFallbacks: [],
+        fieldType: "text",
+        pageStep: "enrollment",
+      },
+      {
+        mapId: instruction.mapId,
+        probeKey,
+        selector: instruction.selector,
+        selectorFallbacks: [],
+        fieldType: "text",
+        pageStep: "Page 2",
+      },
+    ], "https://payer.example/enroll/enrollment");
+
+    expect(probe[1]?.targetStatus).toBe("unique");
+    expect(probe[1]?.pageStatus).toBe("eligible");
+    expect(probe[1]?.resolvedPage).toBe("enrollment");
+
+    // Single-instruction apply receives the singleton routed instruction
+    const result = applyFillOnPage([instruction], "https://payer.example/enroll/enrollment", true);
+    expect(result.filled).toEqual(["Step Field"]);
+    expect((document.getElementById("field") as HTMLInputElement).value).toBe("Value");
+    expect(result.skipped).toEqual([]);
   });
 
   it("waits for a delayed panel before declaring a unique target", async () => {

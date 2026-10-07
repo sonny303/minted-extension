@@ -18,6 +18,7 @@ import { pageScopeMatches } from "../shared/pageScope";
 export interface TabFrame {
   frameId: number;
   url: string;
+  parentFrameId?: number;
 }
 
 function isFillProbeResult(value: unknown): value is FillProbeResult {
@@ -27,7 +28,8 @@ function isFillProbeResult(value: unknown): value is FillProbeResult {
     ["eligible", "other_page", "page_unknown"].includes(String(row.pageStatus)) &&
     ["unique", "hidden", "ambiguous", "missing", "unsupported"].includes(String(row.targetStatus)) &&
     typeof row.pageSettled === "boolean" && typeof row.radioGroup === "boolean" &&
-    typeof row.pageFields === "number" && Number.isFinite(row.pageFields) && row.pageFields >= 0;
+    typeof row.pageFields === "number" && Number.isFinite(row.pageFields) && row.pageFields >= 0 &&
+    (row.resolvedPage === undefined || row.resolvedPage === null || typeof row.resolvedPage === "string");
 }
 
 function isReportedField(value: unknown): value is ReportedField {
@@ -53,11 +55,14 @@ function safeReason(field: ReportedField): string {
   if (field.kind === "skipped" && field.reason === FIELD_NOT_FOUND_REASON) return FIELD_NOT_FOUND_REASON;
   if (field.kind === "hidden") return "field is hidden on this page";
   if (field.kind === "other_page") return OTHER_PAGE_REASON;
-  if (field.kind === "page_unknown") return PAGE_UNKNOWN_REASON;
+  if (field.kind === "page_unknown") return `${PAGE_UNKNOWN_REASON} (page_unknown)`;
   if (field.kind === "no_mapping") return "mapping needs review";
   if (field.kind === "no_value") return "required provider value is unavailable";
   if (field.kind === "manual" || field.kind === "file" || field.kind === "review") return "manual review is required";
   if (/option|dropdown|radio/i.test(field.reason)) return "field option mismatch; review options on the portal";
+  if (/context|form changed|still changing/i.test(field.reason)) {
+    return "form changed during fill (context_changed)";
+  }
   if (field.kind === "unverified" || field.kind === "skipped") return "field could not be verified; review it on the portal";
   return "field could not be verified; review it on the portal";
 }
@@ -92,10 +97,74 @@ export async function listTabFrames(tabId: number): Promise<TabFrame[]> {
     }
     const frames = await chrome.webNavigation.getAllFrames({ tabId });
     if (!frames || frames.length === 0) return [{ frameId: 0, url: "" }];
-    return frames.map((f) => ({ frameId: f.frameId, url: f.url ?? "" }));
+    return frames.map((f) => ({ frameId: f.frameId, url: f.url ?? "", parentFrameId: f.parentFrameId }));
   } catch {
     return [{ frameId: 0, url: "" }];
   }
+}
+
+/** A failed child probe is ignorable only when its accessible parent proves
+ * that it is the sole hidden iframe in the frame tree and DOM. */
+async function isHiddenLeafFrame(
+  tabId: number,
+  frame: TabFrame,
+  frames: TabFrame[],
+  responses: FrameResponse[],
+): Promise<boolean> {
+  const parentFrameId = frame.parentFrameId;
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(frame.url);
+  } catch {
+    return false;
+  }
+  if (
+    parentFrameId == null ||
+    !frames.some((candidate) => candidate.frameId === parentFrameId) ||
+    !["http:", "https:"].includes(parsedUrl.protocol) ||
+    frames.some((candidate) => candidate.parentFrameId === frame.frameId) ||
+    frames.filter((candidate) => candidate.parentFrameId === parentFrameId).length !== 1 ||
+    frames.filter((candidate) => candidate.parentFrameId === parentFrameId)[0]?.frameId !== frame.frameId ||
+    !responses.some((response) => response.frameId === parentFrameId && response.ok) ||
+    !chrome.scripting?.executeScript
+  ) {
+    return false;
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [parentFrameId] },
+      args: [frame.url],
+      func: (loadedUrl: string): boolean => {
+        const elements = Array.from(document.querySelectorAll("iframe, frame"));
+        if (elements.length !== 1) return false;
+        const element = elements[0] as HTMLIFrameElement | HTMLFrameElement | undefined;
+        if (!element || element.src !== loadedUrl) return false;
+
+        for (let current: Element | null = element; current; current = current.parentElement) {
+          if (getComputedStyle(current).display === "none") return true;
+        }
+        const visibility = getComputedStyle(element).visibility;
+        if (visibility === "hidden" || visibility === "collapse") return true;
+        const rect = element.getBoundingClientRect();
+        return rect.width === 0 && rect.height === 0;
+      },
+    });
+    return results.length === 1 && results[0]?.frameId === parentFrameId && results[0]?.result === true;
+  } catch {
+    return false;
+  }
+}
+
+function sameFrameInventory(left: TabFrame[], right: TabFrame[]): boolean {
+  if (left.length !== right.length) return false;
+  const orderedLeft = [...left].sort((a, b) => a.frameId - b.frameId);
+  const orderedRight = [...right].sort((a, b) => a.frameId - b.frameId);
+  return orderedLeft.every((frame, index) => {
+    const live = orderedRight[index];
+    return live?.frameId === frame.frameId && live.url === frame.url &&
+      live.parentFrameId === frame.parentFrameId;
+  });
 }
 
 export async function sendToFrame(
@@ -524,6 +593,14 @@ export async function applyFillAcrossFrames(
   if (responses.every((response) => !response.ok)) throw new Error("Could not reach the enrollment form in any frame");
 
   const probeByFrame = new Map<number, Map<string, FillProbeResult>>();
+  const hiddenInaccessibleFrameIds = new Set<number>();
+  for (const response of responses) {
+    if (response.ok) continue;
+    const frame = frames.find((candidate) => candidate.frameId === response.frameId);
+    if (frame && await isHiddenLeafFrame(tabId, frame, frames, responses)) {
+      hiddenInaccessibleFrameIds.add(frame.frameId);
+    }
+  }
   let pageFields = 0;
   for (const response of responses) {
     if (!response.ok) continue;
@@ -575,6 +652,10 @@ export async function applyFillAcrossFrames(
   };
 
   for (const instruction of instructions) {
+    const inaccessibleFrames = responses
+      .filter((response) => !response.ok)
+      .map((response) => frames.find((frame) => frame.frameId === response.frameId))
+      .filter((frame): frame is TabFrame => Boolean(frame) && pageScopeMatches(instruction.pageUrlScope, frame?.url));
     const reachableFrames = responses.filter((response) => {
       if (!response.ok) return false;
       const frameUrl = frames.find((f) => f.frameId === response.frameId)?.url;
@@ -591,7 +672,6 @@ export async function applyFillAcrossFrames(
       const probe = probeByFrame.get(response.frameId)?.get(instruction.mapId);
       return probe ? [{ frameId: response.frameId, probe }] : [];
     });
-    const hasInaccessibleFrame = responses.some((response) => !response.ok);
     const knownPage = isExactFillPageIdentity(instruction.pageStep);
     const eligible = rows.filter(({ probe }) => probe.pageStatus === "eligible");
     const unknownPage = rows.some(({ probe }) => probe.pageStatus === "page_unknown");
@@ -600,6 +680,11 @@ export async function applyFillAcrossFrames(
     const hidden = eligible.find(({ probe }) => probe.targetStatus === "hidden");
     const unsupported = eligible.find(({ probe }) => probe.targetStatus === "unsupported");
     const candidates = eligible.filter(({ probe }) => probe.targetStatus === "unique");
+    const hasInaccessibleFrame = inaccessibleFrames.some((frame) => !hiddenInaccessibleFrameIds.has(frame.frameId)) ||
+      (inaccessibleFrames.length > 0 && candidates.length === 0);
+    const unknownPageMayContainFields = rows.some(({ probe }) =>
+      probe.pageStatus === "page_unknown" && probe.pageFields > 0,
+    );
 
     if (ambiguous || candidates.length > 1 || hidden && candidates.length > 0) {
       skip(instruction, "needs_mapping", "ambiguous_target", "multiple visible controls or frames match this mapping", "no_mapping");
@@ -609,7 +694,7 @@ export async function applyFillAcrossFrames(
       skip(instruction, "unverified", "frame_inaccessible", "a form frame could not be checked", "unverified");
       continue;
     }
-    if (unknownPage && knownPage) {
+    if (unknownPage && knownPage && (candidates.length === 0 || unknownPageMayContainFields)) {
       skip(instruction, "page_unknown", "page_unknown", PAGE_UNKNOWN_REASON, "page_unknown");
       continue;
     }
@@ -664,6 +749,7 @@ export async function applyFillAcrossFrames(
     const routed: FillInstruction = {
       ...instruction,
       probeKey: targetKeys.get(instruction) as string,
+      resolvedPage: targetFrame.probe.resolvedPage ?? null,
       ...(captureV2 ? {
         telemetry: {
           targetKey: targetKeys.get(instruction) as string,
@@ -674,6 +760,22 @@ export async function applyFillAcrossFrames(
     };
     // Keep stale-context failures distinct from page/frame failures. The guard
     // must pass immediately before each value-bearing dispatch.
+    if (inaccessibleFrames.length > 0) {
+      const liveFrames = await listTabFrames(tabId);
+      const sameInventory = sameFrameInventory(frames, liveFrames);
+      const hiddenAtDispatch = sameInventory
+        ? await Promise.all(inaccessibleFrames.map((frame) => {
+            const liveFrame = liveFrames.find((candidate) => candidate.frameId === frame.frameId);
+            return liveFrame ? isHiddenLeafFrame(tabId, liveFrame, liveFrames, responses) : false;
+          }))
+        : [];
+      if (!sameInventory || hiddenAtDispatch.some((isHidden) => !isHidden)) {
+        skip(instruction, "unverified", "frame_inaccessible", "a form frame could not be checked", "unverified");
+        continue;
+      }
+    }
+    // Inspection above may await browser APIs. Revalidate the active case and
+    // mapping generation after those awaits, immediately before value dispatch.
     await validate?.();
     try {
       priorApplyMayHaveChangedPage = true;
