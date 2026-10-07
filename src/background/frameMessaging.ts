@@ -758,21 +758,19 @@ export async function applyFillAcrossFrames(
         },
       } : {}),
     };
-    // Keep stale-context failures distinct from page/frame failures. The guard
-    // must pass immediately before each value-bearing dispatch.
-    if (inaccessibleFrames.length > 0) {
-      const liveFrames = await listTabFrames(tabId);
-      const sameInventory = sameFrameInventory(frames, liveFrames);
-      const hiddenAtDispatch = sameInventory
-        ? await Promise.all(inaccessibleFrames.map((frame) => {
-            const liveFrame = liveFrames.find((candidate) => candidate.frameId === frame.frameId);
-            return liveFrame ? isHiddenLeafFrame(tabId, liveFrame, liveFrames, responses) : false;
-          }))
-        : [];
-      if (!sameInventory || hiddenAtDispatch.some((isHidden) => !isHidden)) {
-        skip(instruction, "unverified", "frame_inaccessible", "a form frame could not be checked", "unverified");
-        continue;
-      }
+    // A frame may navigate into this mapping's scope while probes run, so
+    // validate the full inventory before each value-bearing dispatch.
+    const liveFrames = await listTabFrames(tabId);
+    const sameInventory = sameFrameInventory(frames, liveFrames);
+    const hiddenAtDispatch = sameInventory && inaccessibleFrames.length > 0
+      ? await Promise.all(inaccessibleFrames.map((frame) => {
+          const liveFrame = liveFrames.find((candidate) => candidate.frameId === frame.frameId);
+          return liveFrame ? isHiddenLeafFrame(tabId, liveFrame, liveFrames, responses) : false;
+        }))
+      : [];
+    if (!sameInventory || hiddenAtDispatch.some((isHidden) => !isHidden)) {
+      skip(instruction, "unverified", "frame_inaccessible", "a form frame could not be checked", "unverified");
+      continue;
     }
     // Inspection above may await browser APIs. Revalidate the active case and
     // mapping generation after those awaits, immediately before value dispatch.

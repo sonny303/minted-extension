@@ -694,6 +694,19 @@ describe("applyFillAcrossFrames public probe/apply boundary", () => {
     expect(result.filled).toEqual([instruction.label]);
     expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(true);
   });
+
+  it("blocks a write when an initially out-of-scope inaccessible frame navigates into scope", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({
+      frameUrlOnSecondInventory: "https://payer.example/enroll/enrollment/credentials",
+    });
+    const scoped = { ...instruction, pageUrlScope: "https://payer.example/enroll/enrollment/credentials" };
+
+    const result = await applyFillAcrossFrames(1, [scoped], { captureV2: true });
+
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
 });
 
 describe("AI frame binding", () => {

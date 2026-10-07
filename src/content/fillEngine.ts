@@ -1269,10 +1269,15 @@ async function applyPrimeFacesSelect(
       : skippedResult(instruction, vocabularyMismatchReason("dropdown"), "skipped", "option_mismatch", "option_missing");
   }
   const option = selection.option;
+  const optionValue = option.value;
+  const optionText = option.text;
+  const optionSetSignature = probe?.probedOptionsSignature ?? getOptionsSignature(select);
   const isCurrent = (): boolean => {
     if (typeof location !== "undefined" && location.href !== pageUrl) return false;
     const current = resolveTarget(instruction);
     return current.status === "unique" && current.target === select && select.isConnected &&
+      Array.from(select.options).includes(option) && option.value === optionValue && option.text === optionText &&
+      getOptionsSignature(select) === optionSetSignature &&
       menu.wrapper.isConnected && !isHiddenTarget(select) && !select.disabled &&
       !menu.wrapper.matches(":disabled, .ui-state-disabled") &&
       menu.wrapper.getAttribute("aria-disabled") !== "true";

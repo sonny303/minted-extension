@@ -1120,6 +1120,75 @@ describe("probe-to-apply binding", () => {
     expect(results.every((result) => result.fieldOutcomes?.every((f) => f.reasonCode !== "context_changed"))).toBe(true);
   });
 
+  it("rejects a PrimeFaces selection if the option changes while the menu opens", async () => {
+    document.body.innerHTML = `
+      <div id="dropdown" class="ui-selectonemenu" role="combobox">
+        <span class="ui-selectonemenu-label">Select Option</span>
+        <span class="ui-selectonemenu-trigger"></span>
+        <input id="dropdown_focus" type="text" aria-label="Dropdown" />
+        <select id="dropdown_input" aria-hidden="true" aria-label="Dropdown">
+          <option value="">Select Option</option>
+          <option value="optA">Option A</option>
+        </select>
+      </div>
+      <div id="dropdown_panel" class="ui-selectonemenu-panel" style="display:none">
+        <ul id="dropdown_items"></ul>
+      </div>
+    `;
+
+    const wrapper = document.getElementById("dropdown")!;
+    const select = wrapper.querySelector<HTMLSelectElement>("#dropdown_input")!;
+    const label = wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label")!;
+    const trigger = wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger")!;
+    const panel = document.getElementById("dropdown_panel")!;
+    trigger.addEventListener("click", () => {
+      panel.style.display = "block";
+      setTimeout(() => {
+        const option = select.options[1]!;
+        option.value = "replacement";
+        option.textContent = "Replacement Option";
+        panel.querySelector("ul")!.innerHTML =
+          `<li class="ui-selectonemenu-item" role="option" data-value="${option.value}" data-label="${option.text}">${option.text}</li>`;
+        panel.querySelector<HTMLElement>(".ui-selectonemenu-item")!.addEventListener("click", () => {
+          select.value = option.value;
+          label.textContent = option.text;
+          panel.style.display = "none";
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      }, 30);
+    });
+
+    const probeKey = createFillEventV2OpaqueKey("t");
+    const instruction = instr({
+      label: "Dropdown",
+      selector: "#dropdown_focus",
+      fieldType: "select",
+      value: "Option A",
+      probeKey,
+      telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+    });
+    const probe = await probeFillOnPage([{
+      mapId: instruction.mapId,
+      probeKey,
+      selector: instruction.selector,
+      selectorFallbacks: [],
+      fieldType: "select",
+      pageStep: null,
+    }]);
+    expect(probe[0]?.targetStatus).toBe("unique");
+
+    const result = await applyFillSettled([instruction], true);
+
+    expect(result.filled).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({ kind: "unverified" });
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      attempted: true,
+      outcome: "unverified",
+      reasonCode: "context_changed",
+    });
+    expect(select.value).toBe("");
+  });
+
   it("does not withhold singleton sequence-page instruction as page_unknown when resolvedPage is provided", async () => {
     document.body.innerHTML = `<input id="field" type="text" />`;
     const probeKey = createFillEventV2OpaqueKey("t");
