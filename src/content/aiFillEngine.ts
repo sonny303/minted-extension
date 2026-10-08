@@ -3,6 +3,8 @@ import { scannedControlForAi } from "./controlScanner";
 import {
   applyAiValue,
   decorateFill,
+  isCheckboxChecked,
+  isCustomCheckboxElement,
   restoreAiValue,
   type Fillable,
 } from "./fillEngine";
@@ -24,7 +26,13 @@ function liveValue(control: Fillable): string | boolean {
   if (control instanceof HTMLInputElement && (control.type === "radio" || control.type === "checkbox")) {
     return control.checked;
   }
-  return control.value;
+  if (isCustomCheckboxElement(control) && control instanceof HTMLElement) {
+    return isCheckboxChecked(control);
+  }
+  if ("value" in control && typeof (control as HTMLInputElement).value === "string") {
+    return (control as HTMLInputElement).value;
+  }
+  return "";
 }
 
 function resetDecoration(snapshot: UndoSnapshot): void {

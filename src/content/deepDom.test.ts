@@ -263,7 +263,7 @@ describe("shadow-aware capture and fill", () => {
     ]);
 
     expect(result.filled).toEqual(["Group already enrolled"]);
-    expect((host as any).checked).toBe(true);
+    expect((host as MockCheckboxHost).checked).toBe(true);
     const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
     expect(shadowInner?.getAttribute("aria-checked")).toBe("true");
   });
@@ -286,7 +286,7 @@ describe("shadow-aware capture and fill", () => {
     ]);
 
     expect(result.filled).toEqual(["Group enrolled"]);
-    expect((host as any).checked).toBe(false);
+    expect((host as MockCheckboxHost).checked).toBe(false);
     const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
     expect(shadowInner?.getAttribute("aria-checked")).toBe("false");
   });
@@ -297,7 +297,7 @@ describe("shadow-aware capture and fill", () => {
       value: "true",
       label: "Group enrolled",
     });
-    (host as any).checked = true;
+    (host as MockCheckboxHost).checked = true;
     const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
     shadowInner?.setAttribute("aria-checked", "true");
     document.body.append(host);
@@ -312,10 +312,14 @@ describe("shadow-aware capture and fill", () => {
     ]);
 
     expect(result.filled).toEqual(["Group enrolled"]);
-    expect((host as any).checked).toBe(false);
+    expect((host as MockCheckboxHost).checked).toBe(false);
     expect(shadowInner?.getAttribute("aria-checked")).toBe("false");
   });
 });
+
+interface MockCheckboxHost extends HTMLElement {
+  checked: boolean;
+}
 
 function mountShadowCheckbox(opts: {
   tag?: string;
@@ -323,10 +327,10 @@ function mountShadowCheckbox(opts: {
   value?: string;
   label: string;
 }): HTMLElement {
-  const host = document.createElement(opts.tag ?? "cf-checkbox");
+  const host = document.createElement(opts.tag ?? "cf-checkbox") as MockCheckboxHost;
   host.setAttribute("name", opts.name);
   if (opts.value !== undefined) host.setAttribute("value", opts.value);
-  (host as any).checked = false;
+  host.checked = false;
   host.textContent = opts.label;
 
   const shadow = host.attachShadow({ mode: "open" });
@@ -334,8 +338,8 @@ function mountShadowCheckbox(opts: {
   inner.setAttribute("role", "checkbox");
   inner.setAttribute("aria-checked", "false");
   inner.addEventListener("click", () => {
-    (host as any).checked = !(host as any).checked;
-    inner.setAttribute("aria-checked", String((host as any).checked));
+    host.checked = !host.checked;
+    inner.setAttribute("aria-checked", String(host.checked));
   });
   shadow.append(inner);
   stubVisibleBox(host);

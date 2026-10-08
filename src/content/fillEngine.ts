@@ -329,8 +329,8 @@ function setNativeValue(el: Fillable, value: string): void {
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
   if (descriptor?.set) {
     descriptor.set.call(el, value);
-  } else {
-    el.value = value;
+  } else if ("value" in el) {
+    (el as HTMLElement & { value: string }).value = value;
   }
   fireChanged(el);
 }
@@ -347,8 +347,8 @@ export function isCheckboxChecked(el: HTMLElement): boolean {
   if (el instanceof HTMLInputElement && el.type === "checkbox") {
     return el.checked;
   }
-  if ("checked" in el && typeof (el as any).checked === "boolean") {
-    return (el as any).checked;
+  if ("checked" in el && typeof (el as HTMLElement & { checked?: unknown }).checked === "boolean") {
+    return (el as HTMLElement & { checked: boolean }).checked;
   }
   const ariaChecked = el.getAttribute("aria-checked");
   if (ariaChecked != null) return ariaChecked === "true";
@@ -417,7 +417,7 @@ export function clearPortalForm(): number {
         // is the honest reset when there is no placeholder to fall back to.
         el.selectedIndex = el.options.length > 0 ? 0 : -1;
         fireChanged(el);
-      } else {
+      } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
         if (el.value === "") continue;
         setNativeValue(el, "");
       }
@@ -439,7 +439,8 @@ function associatedLabelText(target: Fillable): string {
     const text = labelTextOf(target);
     if (text) return normalize(text);
   }
-  const label = target.labels?.[0] ?? target.closest("label") ??
+  const labels = "labels" in target ? (target as HTMLInputElement).labels : undefined;
+  const label = labels?.[0] ?? target.closest("label") ??
     (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
   if (label?.textContent) return normalize(label.textContent);
   if (target.tagName.includes("-")) {
@@ -633,6 +634,9 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
     // Belt and braces: the background never plans file fields.
     return { ok: false, reason: "file inputs cannot be filled" };
   }
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+    return { ok: false, reason: "unsupported control type", outcome: "unsupported", reasonCode: "unsupported_control" };
+  }
   if (el instanceof HTMLInputElement && (el.disabled || el.readOnly)) {
     return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
   }
@@ -654,7 +658,7 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   if (el.value !== nextValue) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.willValidate && !el.validity.valid) {
+  if (el.willValidate && !el.validity.valid) {
     return {
       ok: false,
       reason: "form rejected the field format; review it on the portal",
@@ -731,7 +735,7 @@ export function applyAiValue(
       ? el.checked
       : isCustomCheckboxElement(el)
         ? isCheckboxChecked(el)
-        : (el as any).value ?? "";
+        : (el as HTMLElement & { value?: string }).value ?? "";
 
   const fieldType = el instanceof HTMLSelectElement
     ? "select"
@@ -758,7 +762,7 @@ export function applyAiValue(
           ? outcome.target.checked
           : isCustomCheckboxElement(outcome.target)
             ? isCheckboxChecked(outcome.target)
-            : (outcome.target as any).value ?? "";
+            : (outcome.target as HTMLElement & { value?: string }).value ?? "";
       // Restore only while the rejected value remains the immediate result of
       // this write; later user edits are never overwritten by the caller.
       if (currentValue !== previousValue) restoreAiValueWithoutEvents(outcome.target, previousValue);
@@ -785,7 +789,7 @@ function restoreAiValueWithoutEvents(el: Fillable, value: string | boolean): voi
   const next = typeof value === "string" ? value : "";
   const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
   if (descriptor?.set) descriptor.set.call(el, next);
-  else (el as any).value = next;
+  else (el as HTMLElement & { value?: string }).value = next;
 }
 
 export function restoreAiValue(el: Fillable, previous: string | boolean): void {
@@ -1489,14 +1493,15 @@ export async function applyFillSettled(
       rejectPostFill(result, instruction, target, "form changed after fill; review this field before submitting", "unverified", "context_changed");
       continue;
     }
+    const isInputOrTextarea = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
     const expected = target instanceof HTMLInputElement && target.type === "date"
       ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
       : instruction.value;
-    if (target.value !== expected) {
+    if (isInputOrTextarea && target.value !== expected) {
       rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
       continue;
     }
-    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.willValidate && !target.validity.valid) {
+    if (isInputOrTextarea && target.willValidate && !target.validity.valid) {
       rejectPostFill(result, instruction, target, "form rejected the field format; review this field on the portal", "write_rejected", "invalid_format");
     }
   }

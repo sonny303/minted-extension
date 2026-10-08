@@ -212,13 +212,13 @@ function structuralPath(el: Element): string {
  * structural path above. */
 function selectorFor(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
-  const name = (el as any).name ?? el.getAttribute("name");
+  const name = (el as HTMLElement & { name?: string }).name ?? el.getAttribute("name");
   if (name) {
     const tag = el.tagName.toLowerCase();
     const type = el instanceof HTMLInputElement ? el.type : "";
     const typePart = type ? `[type="${CSS.escape(type)}"]` : "";
     const cType = controlType(el);
-    const val = (el as any).value ?? el.getAttribute("value");
+    const val = (el as HTMLElement & { value?: string }).value ?? el.getAttribute("value");
     const isFixedOptionValue =
       cType === "checkbox" &&
       val != null &&
@@ -447,24 +447,24 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
   if (type === "radio") {
     // Name-matched radios may sit in sibling shadow trees under one group host;
     // search deep from the document (or the form) so the whole group is seen.
-    const name = (el as any).name ?? el.getAttribute("name");
+    const name = (el as HTMLElement & { name?: string }).name ?? el.getAttribute("name");
     const group = name
       ? querySelectorAllDeep(
           `input[type="radio"][name="${CSS.escape(name)}"]`,
-          (el as any).form ?? document,
+          (el as HTMLInputElement).form ?? document,
         )
       : [el];
     const options: { value: string; label: string }[] = [];
     for (const radio of group) {
       if (!isCapturableControl(radio)) continue;
-      const value = (radio as any).value ?? radio.getAttribute("value") ?? "";
+      const value = (radio as HTMLInputElement).value ?? radio.getAttribute("value") ?? "";
       if (value === "") continue;
       options.push({ value, label: labelFor(radio) || value });
     }
     return capOptions(options);
   }
   if (type === "checkbox") {
-    const value = (el as any).value ?? el.getAttribute("value");
+    const value = (el as HTMLElement & { value?: string }).value ?? el.getAttribute("value");
     if (value == null || value === "" || value === "on" || value === "true" || value === "false") return [];
     return [{ value, label: labelFor(el) || value }];
   }
@@ -562,7 +562,7 @@ export function scanCapturableFields(): CapturedField[] {
   for (const { el } of visible) {
     const type = controlType(el);
     if (type === "radio") {
-      const name = (el as any).name ?? el.getAttribute("name");
+      const name = (el as HTMLElement & { name?: string }).name ?? el.getAttribute("name");
       if (name) {
         if (seenRadioNames.has(name)) continue;
         seenRadioNames.add(name);
