@@ -34,9 +34,62 @@ const CONTROL_OPTIONS_CAP = 50;
 /** True when the control has a non-zero layout box (trainer can see it).
  * JSF multi-panel forms leave inactive panels in the DOM with no rects. */
 function hasLayoutBox(el: Element): boolean {
-  if (el.getClientRects().length === 0) return false;
-  const { width, height } = el.getBoundingClientRect();
-  return width > 0 && height > 0;
+  if (el.getClientRects().length > 0) {
+    const { width, height } = el.getBoundingClientRect();
+    if (width > 0 && height > 0) return true;
+  }
+  if (el.shadowRoot) {
+    for (const child of Array.from(el.shadowRoot.children)) {
+      if (child.getClientRects().length > 0) {
+        const { width, height } = child.getBoundingClientRect();
+        if (width > 0 && height > 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export const BOOLEAN_SENTINELS = new Set([
+  "true",
+  "false",
+  "yes",
+  "no",
+  "y",
+  "n",
+  "1",
+  "0",
+  "x",
+  "on",
+  "off",
+  "checked",
+  "unchecked",
+]);
+
+/** Resolves shadow-internal controls (like `<div role="checkbox">` in `<cf-checkbox>`)
+ * to the canonical custom-element host that holds name, value, and slotted text. */
+export function canonicalControl(el: Element): Element {
+  if (el.getRootNode() instanceof ShadowRoot) {
+    const host = (el.getRootNode() as ShadowRoot).host;
+    if (host && host.tagName.includes("-")) {
+      // If el is NOT a native input (e.g. <div role="checkbox"> in <cf-checkbox>):
+      if (
+        !(el instanceof HTMLInputElement) &&
+        el.getAttribute("role") === "checkbox"
+      ) {
+        return host;
+      }
+      // If el is a native input but has no id/name while host DOES have id or name:
+      if (
+        el instanceof HTMLInputElement &&
+        !el.id &&
+        !el.name &&
+        (host.hasAttribute("name") || host.hasAttribute("id"))
+      ) {
+        return host;
+      }
+    }
+  }
+  return el;
 }
 
 /** Same-row tolerance (px): tops within this band count as one reading row
@@ -92,7 +145,7 @@ export function isCapturableControl(el: Element): boolean {
   return hasLayoutBox(el) && !isHiddenControl(el);
 }
 
-function controlType(el: Element): PortalFieldType {
+export function controlType(el: Element): PortalFieldType {
   if (el instanceof HTMLSelectElement) return "select";
   if (el instanceof HTMLTextAreaElement) return "text";
   if (el instanceof HTMLInputElement) {
@@ -100,6 +153,13 @@ function controlType(el: Element): PortalFieldType {
     if (el.type === "checkbox") return "checkbox";
     if (el.type === "date") return "date";
     if (el.type === "file") return "file";
+  }
+  const role = el.getAttribute("role");
+  if (role === "checkbox") return "checkbox";
+  const tag = el.tagName.toLowerCase();
+  if (tag.endsWith("-checkbox") || tag.includes("checkbox")) return "checkbox";
+  if (el.shadowRoot) {
+    if (el.shadowRoot.querySelector('[role="checkbox"], input[type="checkbox"]')) return "checkbox";
   }
   return "text";
 }
@@ -152,12 +212,23 @@ function structuralPath(el: Element): string {
  * structural path above. */
 function selectorFor(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
-  const name = (el as HTMLInputElement).name;
+  const name = (el as any).name ?? el.getAttribute("name");
   if (name) {
     const tag = el.tagName.toLowerCase();
     const type = el instanceof HTMLInputElement ? el.type : "";
     const typePart = type ? `[type="${CSS.escape(type)}"]` : "";
-    return `${tag}${typePart}[name="${CSS.escape(name)}"]`;
+    const cType = controlType(el);
+    const val = (el as any).value ?? el.getAttribute("value");
+    const isFixedOptionValue =
+      cType === "checkbox" &&
+      val != null &&
+      val !== "" &&
+      !BOOLEAN_SENTINELS.has(String(val).toLowerCase().trim());
+    const escapedVal = isFixedOptionValue
+      ? String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      : "";
+    const valuePart = isFixedOptionValue ? `[value="${escapedVal}"]` : "";
+    return `${tag}${typePart}[name="${CSS.escape(name)}"]${valuePart}`;
   }
   return structuralPath(el);
 }
@@ -168,7 +239,7 @@ const NEARBY_LABEL_MAX_CHARS = 120;
 
 /** Label text from a custom-element host (Litehouse / Lit etc.) wrapping a
  * shadowed control — `label` / `aria-label` attrs, then light-DOM slotted text. */
-function hostLabel(host: Element): string {
+export function hostLabel(host: Element): string {
   const attr =
     host.getAttribute("label")?.trim() ||
     host.getAttribute("aria-label")?.trim() ||
@@ -214,6 +285,10 @@ function labelFor(el: Element): string {
       .filter(Boolean)
       .join(" ");
     if (text) return text;
+  }
+  if (el.tagName.includes("-")) {
+    const fromHost = hostLabel(el);
+    if (fromHost) return fromHost;
   }
   // Shadowed control: the visible caption often lives on the host
   // (`<lh-input label="CAQH ID Number">`) rather than a <label for>.
@@ -334,11 +409,15 @@ function nearbyLabel(el: Element): string {
 }
 
 function sectionFor(el: Element): string | null {
-  const fieldset = closestDeep(el, "fieldset");
-  const legend = fieldset
-    ? cleanLabelText(querySelectorDeep("legend", fieldset)?.textContent)
-    : "";
-  if (legend) return legend;
+  const group = closestDeep(el, "fieldset, [role='group'], lh-checkbox-group, [role='radiogroup']");
+  if (group) {
+    const legend = cleanLabelText(
+      querySelectorDeep("legend, [slot='legend'], lh-group-legend", group)?.textContent,
+    );
+    if (legend) return legend;
+    const aria = cleanLabelText(group.getAttribute("aria-label"));
+    if (aria) return aria;
+  }
   const section = closestDeep(el, "section, [role='group']");
   const heading = section
     ? cleanLabelText(querySelectorDeep("h1, h2, h3, h4", section)?.textContent)
@@ -365,27 +444,28 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
     }
     return capOptions(options);
   }
-  if (type === "radio" && el instanceof HTMLInputElement) {
+  if (type === "radio") {
     // Name-matched radios may sit in sibling shadow trees under one group host;
     // search deep from the document (or the form) so the whole group is seen.
-    const group = el.name
+    const name = (el as any).name ?? el.getAttribute("name");
+    const group = name
       ? querySelectorAllDeep(
-          `input[type="radio"][name="${CSS.escape(el.name)}"]`,
-          el.form ?? document,
-        ).filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
+          `input[type="radio"][name="${CSS.escape(name)}"]`,
+          (el as any).form ?? document,
+        )
       : [el];
     const options: { value: string; label: string }[] = [];
     for (const radio of group) {
       if (!isCapturableControl(radio)) continue;
-      const value = radio.getAttribute("value") ?? "";
+      const value = (radio as any).value ?? radio.getAttribute("value") ?? "";
       if (value === "") continue;
       options.push({ value, label: labelFor(radio) || value });
     }
     return capOptions(options);
   }
-  if (type === "checkbox" && el instanceof HTMLInputElement) {
-    const value = el.getAttribute("value");
-    if (value == null || value === "" || value === "on") return [];
+  if (type === "checkbox") {
+    const value = (el as any).value ?? el.getAttribute("value");
+    if (value == null || value === "" || value === "on" || value === "true" || value === "false") return [];
     return [{ value, label: labelFor(el) || value }];
   }
   return undefined;
@@ -433,38 +513,44 @@ export function describeControl(
  * on nothing mappable. */
 export function nearestCapturableControl(node: Element | null): Element | null {
   if (node == null) return null;
-  if (node.matches(FILLABLE)) return primeFacesSelectMenu(node)?.select ?? node;
+  if (node.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(node)?.select ?? node);
   for (const ancestor of ancestorsIncludingShadow(node)) {
-    if (ancestor.matches(FILLABLE)) return primeFacesSelectMenu(ancestor)?.select ?? ancestor;
+    if (ancestor.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(ancestor)?.select ?? ancestor);
   }
   const label = closestDeep(node, "label");
   if (label) {
     const forId = label.getAttribute("for");
     if (forId) {
       const target = querySelectorDeep(`#${CSS.escape(forId)}`);
-      if (target?.matches(FILLABLE)) return primeFacesSelectMenu(target)?.select ?? target;
+      if (target?.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(target)?.select ?? target);
     }
     const inner = querySelectorDeep(FILLABLE, label);
-    if (inner) return inner;
+    if (inner) return canonicalControl(inner);
   }
-  // Clicked a custom host (`<lh-input>`) — take the fillable in its shadow.
+  // Clicked a custom host (`<lh-input>`, `<cf-checkbox>`) — take the fillable in its shadow or host.
   if (node.shadowRoot) {
     const shadowed = querySelectorDeep(FILLABLE, node.shadowRoot);
-    if (shadowed) return shadowed;
+    if (shadowed) return canonicalControl(shadowed);
   }
-  return querySelectorDeep(FILLABLE, node);
+  const fillableNode = querySelectorDeep(FILLABLE, node);
+  return fillableNode ? canonicalControl(fillableNode) : null;
 }
 
 export function scanCapturableFields(): CapturedField[] {
   const seenRadioNames = new Set<string>();
+  const seenControls = new Set<Element>();
   const fields: CapturedField[] = [];
   const controls = querySelectorAllDeep(FILLABLE).map((el, index) => ({
-    el,
+    el: canonicalControl(el),
     index,
   }));
 
   const visible = controls
-    .filter(({ el }) => isCapturableControl(el))
+    .filter(({ el }) => {
+      if (seenControls.has(el)) return false;
+      seenControls.add(el);
+      return isCapturableControl(el);
+    })
     .sort(
       (a, b) => {
         const aMenu = primeFacesSelectMenu(a.el);
@@ -476,7 +562,7 @@ export function scanCapturableFields(): CapturedField[] {
   for (const { el } of visible) {
     const type = controlType(el);
     if (type === "radio") {
-      const name = (el as HTMLInputElement).name;
+      const name = (el as any).name ?? el.getAttribute("name");
       if (name) {
         if (seenRadioNames.has(name)) continue;
         seenRadioNames.add(name);

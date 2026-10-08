@@ -182,4 +182,163 @@ describe("shadow-aware capture and fill", () => {
       "non",
     ]);
   });
+
+  it("captures standalone open-shadow checkbox (BCBS cf-checkbox)", () => {
+    const host = mountShadowCheckbox({
+      name: "groupEnrolled",
+      value: "true",
+      label: "Group already enrolled or group enrollment form has already been submitted.",
+    });
+    document.body.append(host);
+
+    const fields = scanCapturableFields();
+    expect(fields).toHaveLength(1);
+    expect(fields[0]?.fieldType).toBe("checkbox");
+    expect(fields[0]?.selector).toBe('cf-checkbox[name="groupEnrolled"]');
+    expect(fields[0]?.label).toBe(
+      "Group already enrolled or group enrollment form has already been submitted.",
+    );
+  });
+
+  it("captures grouped checkboxes with fixed option values (BCBS ethnicity/languages)", () => {
+    const group = document.createElement("lh-checkbox-group");
+    const legend = document.createElement("lh-group-legend");
+    legend.setAttribute("slot", "legend");
+    legend.textContent = "Race / Ethnicity (select all that apply)";
+    group.append(legend);
+
+    const nativeEl = mountShadowCheckbox({
+      name: "ethnicity",
+      value: "American Indian or Alaska Native",
+      label: "American Indian or Alaska Native",
+    });
+    const asianEl = mountShadowCheckbox({
+      name: "ethnicity",
+      value: "Asian",
+      label: "Asian (Asian Indian, Bangladeshi, Bhutanese...)",
+    });
+    group.append(nativeEl, asianEl);
+    document.body.append(group);
+
+    const fields = scanCapturableFields();
+    expect(fields).toHaveLength(2);
+    expect(fields[0]?.fieldType).toBe("checkbox");
+    expect(fields[0]?.selector).toBe(
+      'cf-checkbox[name="ethnicity"][value="American Indian or Alaska Native"]',
+    );
+    expect(fields[0]?.formSection).toBe(
+      "Race / Ethnicity (select all that apply)",
+    );
+
+    expect(fields[1]?.fieldType).toBe("checkbox");
+    expect(fields[1]?.selector).toBe(
+      'cf-checkbox[name="ethnicity"][value="Asian"]',
+    );
+    expect(fields[1]?.label).toBe(
+      "Asian (Asian Indian, Bangladeshi, Bhutanese...)",
+    );
+    expect(fields[1]?.options).toEqual([
+      {
+        value: "Asian",
+        label: "Asian (Asian Indian, Bangladeshi, Bhutanese...)",
+      },
+    ]);
+  });
+
+  it("fills open-shadow checkbox and toggles checked state", () => {
+    const host = mountShadowCheckbox({
+      name: "groupEnrolled",
+      value: "true",
+      label: "Group already enrolled or group enrollment form has already been submitted.",
+    });
+    document.body.append(host);
+
+    const result = applyFill([
+      instr({
+        label: "Group already enrolled",
+        selector: 'cf-checkbox[name="groupEnrolled"]',
+        fieldType: "checkbox",
+        value: "true",
+      }),
+    ]);
+
+    expect(result.filled).toEqual(["Group already enrolled"]);
+    expect((host as any).checked).toBe(true);
+    const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
+    expect(shadowInner?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("never checks a checkbox when instruction value is 'false', even if value attribute is 'false'", () => {
+    const host = mountShadowCheckbox({
+      name: "groupEnrolled",
+      value: "false",
+      label: "Group enrolled",
+    });
+    document.body.append(host);
+
+    const result = applyFill([
+      instr({
+        label: "Group enrolled",
+        selector: 'cf-checkbox[name="groupEnrolled"]',
+        fieldType: "checkbox",
+        value: "false",
+      }),
+    ]);
+
+    expect(result.filled).toEqual(["Group enrolled"]);
+    expect((host as any).checked).toBe(false);
+    const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
+    expect(shadowInner?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("unchecks an already checked checkbox when instruction value is 'false'", () => {
+    const host = mountShadowCheckbox({
+      name: "groupEnrolled",
+      value: "true",
+      label: "Group enrolled",
+    });
+    (host as any).checked = true;
+    const shadowInner = host.shadowRoot?.querySelector('[role="checkbox"]');
+    shadowInner?.setAttribute("aria-checked", "true");
+    document.body.append(host);
+
+    const result = applyFill([
+      instr({
+        label: "Group enrolled",
+        selector: 'cf-checkbox[name="groupEnrolled"]',
+        fieldType: "checkbox",
+        value: "false",
+      }),
+    ]);
+
+    expect(result.filled).toEqual(["Group enrolled"]);
+    expect((host as any).checked).toBe(false);
+    expect(shadowInner?.getAttribute("aria-checked")).toBe("false");
+  });
 });
+
+function mountShadowCheckbox(opts: {
+  tag?: string;
+  name: string;
+  value?: string;
+  label: string;
+}): HTMLElement {
+  const host = document.createElement(opts.tag ?? "cf-checkbox");
+  host.setAttribute("name", opts.name);
+  if (opts.value !== undefined) host.setAttribute("value", opts.value);
+  (host as any).checked = false;
+  host.textContent = opts.label;
+
+  const shadow = host.attachShadow({ mode: "open" });
+  const inner = document.createElement("div");
+  inner.setAttribute("role", "checkbox");
+  inner.setAttribute("aria-checked", "false");
+  inner.addEventListener("click", () => {
+    (host as any).checked = !(host as any).checked;
+    inner.setAttribute("aria-checked", String((host as any).checked));
+  });
+  shadow.append(inner);
+  stubVisibleBox(host);
+  stubVisibleBox(inner);
+  return host;
+}

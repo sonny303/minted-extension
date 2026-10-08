@@ -7,7 +7,7 @@
 
 /** Same fillable set the scanner and fill engine share. */
 export const FILLABLE =
-  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea';
+  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]), select, textarea, [role="checkbox"], cf-checkbox, lh-checkbox';
 
 /**
  * Recursively query `selector` in `root` and every open shadow root beneath it.

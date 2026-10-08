@@ -25,7 +25,7 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // rather than copied so the two surfaces can never disagree about what an
 // inactive wizard panel looks like. The scanner's extra zero-box filter is
 // deliberately NOT applied here; see isHiddenControl's own comment.
-import { isHiddenControl } from "./captureScan";
+import { BOOLEAN_SENTINELS, canonicalControl, hostLabel, isHiddenControl } from "./captureScan";
 import { FILLABLE, querySelectorAllDeep, querySelectorDeep } from "./deepDom";
 import { primeFacesSelectMenu } from "./primeFaces";
 
@@ -52,7 +52,19 @@ function safeNativeDate(value: string): string | null {
     : null;
 }
 
-export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLElement;
+
+export function isCustomCheckboxElement(el: Element): boolean {
+  if (el instanceof HTMLInputElement) {
+    return el.type === "checkbox";
+  }
+  const role = el.getAttribute("role");
+  if (role === "checkbox") return true;
+  const tag = el.tagName.toLowerCase();
+  if (tag.endsWith("-checkbox") || tag.includes("checkbox")) return true;
+  if (el.shadowRoot?.querySelector('[role="checkbox"], input[type="checkbox"]')) return true;
+  return false;
+}
 
 interface ProbedTarget {
   mapId: string;
@@ -159,13 +171,19 @@ function pruneProbedTargets(): void {
 }
 
 function asFillable(el: Element | null): Fillable | null {
-  const direct = el instanceof HTMLInputElement ||
-    el instanceof HTMLSelectElement ||
-    el instanceof HTMLTextAreaElement
-    ? el
-    : null;
-  if (!direct) return null;
-  return primeFacesSelectMenu(direct)?.select ?? direct;
+  if (!el) return null;
+  const canonical = canonicalControl(el);
+  if (
+    canonical instanceof HTMLInputElement ||
+    canonical instanceof HTMLSelectElement ||
+    canonical instanceof HTMLTextAreaElement
+  ) {
+    return primeFacesSelectMenu(canonical)?.select ?? canonical;
+  }
+  if (isCustomCheckboxElement(canonical) && canonical instanceof HTMLElement) {
+    return canonical;
+  }
+  return null;
 }
 
 function isHiddenTarget(el: Fillable): boolean {
@@ -221,6 +239,16 @@ function byLabelAll(text: string): Fillable[] {
     for (const node of querySelectorAllDeep(FILLABLE, root)) {
       const control = asFillable(node);
       if (control) controls.add(control);
+    }
+  }
+  // Slotted / text-content custom hosts (e.g. <cf-checkbox>).
+  for (const el of querySelectorAllDeep(FILLABLE)) {
+    const canonical = asFillable(el);
+    if (canonical && canonical.tagName.includes("-")) {
+      const hl = hostLabel(canonical);
+      if (normalize(hl) === want) {
+        controls.add(canonical);
+      }
     }
   }
   return [...controls];
@@ -315,6 +343,43 @@ function fireChanged(el: HTMLElement): void {
   el.dispatchEvent(new Event("focusout", { bubbles: true, composed: true, cancelable: false }));
 }
 
+export function isCheckboxChecked(el: HTMLElement): boolean {
+  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    return el.checked;
+  }
+  if ("checked" in el && typeof (el as any).checked === "boolean") {
+    return (el as any).checked;
+  }
+  const ariaChecked = el.getAttribute("aria-checked");
+  if (ariaChecked != null) return ariaChecked === "true";
+  if (el.shadowRoot) {
+    const shadowBox = el.shadowRoot.querySelector<HTMLElement>('[role="checkbox"], input[type="checkbox"]');
+    if (shadowBox instanceof HTMLInputElement) return shadowBox.checked;
+    if (shadowBox?.getAttribute("aria-checked") != null) {
+      return shadowBox.getAttribute("aria-checked") === "true";
+    }
+  }
+  return false;
+}
+
+export function toggleCheckbox(el: HTMLElement, wantChecked?: boolean): void {
+  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    el.click();
+    return;
+  }
+  const clickable = el.shadowRoot?.querySelector<HTMLElement>(
+    '[role="checkbox"], input[type="checkbox"], .wrapper, .icon, label',
+  ) ?? el;
+  clickable.click();
+
+  if (wantChecked !== undefined && isCheckboxChecked(el) !== wantChecked) {
+    if (clickable !== el) {
+      el.click();
+    }
+  }
+  fireChanged(el);
+}
+
 /**
  * US-5.3 — reset the form so the next sandbox fill starts clean.
  *
@@ -343,6 +408,9 @@ export function clearPortalForm(): number {
         if (!el.checked) continue;
         el.checked = false;
         fireChanged(el);
+      } else if (isCustomCheckboxElement(el)) {
+        if (!isCheckboxChecked(el)) continue;
+        toggleCheckbox(el, false);
       } else if (el instanceof HTMLSelectElement) {
         if (el.selectedIndex <= 0 && el.value === "") continue;
         // Index 0 is the placeholder on a portal select; -1 (nothing chosen)
@@ -374,6 +442,10 @@ function associatedLabelText(target: Fillable): string {
   const label = target.labels?.[0] ?? target.closest("label") ??
     (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
   if (label?.textContent) return normalize(label.textContent);
+  if (target.tagName.includes("-")) {
+    const hostText = hostLabel(target);
+    if (hostText) return normalize(hostText);
+  }
   const menu = target instanceof HTMLSelectElement ? primeFacesSelectMenu(target) : null;
   if (menu) {
     const menuLabel = menu.wrapper.closest("label") ??
@@ -468,14 +540,26 @@ function applyRadio(el: HTMLInputElement, value: string, markAttempted: () => vo
   return { ok: true, attempted: changed, changed, target: match, expectedValue: true };
 }
 
-function applyCheckbox(el: HTMLInputElement, value: string, markAttempted: () => void): ApplyOutcome {
-  const wantChecked = TRUTHY.has(normalize(value));
-  const changed = el.checked !== wantChecked;
+function applyCheckbox(el: Fillable, value: string, markAttempted: () => void): ApplyOutcome {
+  const norm = normalize(value);
+  const optionValue = el.getAttribute("value");
+  const optionLabel = associatedLabelText(el);
+  const isOptionMatch =
+    !BOOLEAN_SENTINELS.has(norm) &&
+    ((optionValue != null &&
+      !BOOLEAN_SENTINELS.has(normalize(optionValue)) &&
+      normalize(optionValue) === norm) ||
+      (optionLabel !== "" && normalize(optionLabel) === norm));
+
+  const wantChecked = TRUTHY.has(norm) || isOptionMatch;
+  const currentChecked = isCheckboxChecked(el);
+  const changed = currentChecked !== wantChecked;
   if (changed) {
     markAttempted();
-    el.click();
+    toggleCheckbox(el, wantChecked);
   }
-  if (el.checked !== wantChecked) {
+  const finalChecked = isCheckboxChecked(el);
+  if (finalChecked !== wantChecked) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
   return { ok: true, attempted: changed, changed, target: el, expectedValue: wantChecked };
@@ -538,7 +622,11 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   if (isRadio) {
     return applyRadio(el as HTMLInputElement, instruction.value, markAttempted);
   }
-  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+  if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el) ||
+    instruction.fieldType === "checkbox"
+  ) {
     return applyCheckbox(el, instruction.value, markAttempted);
   }
   if (el instanceof HTMLInputElement && el.type === "file") {
@@ -629,22 +717,27 @@ export function applyAiValue(
           .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
       : [el];
     if (group.some((radio) => radio.checked)) return { ok: false, reason: "field already has a value" };
-  } else if (el instanceof HTMLInputElement && el.type === "checkbox") {
-    if (el.checked) return { ok: false, reason: "field already has a value" };
+  } else if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    if (isCheckboxChecked(el)) return { ok: false, reason: "field already has a value" };
     if (!TRUTHY.has(normalize(value))) return { ok: false, reason: "suggestion does not require a write" };
-  } else if (el.value !== "") {
-    return { ok: false, reason: "field already has a value" };
+  } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    if (el.value !== "") return { ok: false, reason: "field already has a value" };
   }
   const previousValue: string | boolean =
     el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")
       ? el.checked
-      : el.value;
+      : isCustomCheckboxElement(el)
+        ? isCheckboxChecked(el)
+        : (el as any).value ?? "";
 
   const fieldType = el instanceof HTMLSelectElement
     ? "select"
     : el instanceof HTMLInputElement && el.type === "radio"
       ? "radio"
-      : el instanceof HTMLInputElement && el.type === "checkbox"
+      : (el instanceof HTMLInputElement && el.type === "checkbox") || isCustomCheckboxElement(el)
         ? "checkbox"
         : "text";
   const outcome = applyValue(el, {
@@ -663,7 +756,9 @@ export function applyAiValue(
         outcome.target instanceof HTMLInputElement &&
         (outcome.target.type === "radio" || outcome.target.type === "checkbox")
           ? outcome.target.checked
-          : outcome.target.value;
+          : isCustomCheckboxElement(outcome.target)
+            ? isCheckboxChecked(outcome.target)
+            : (outcome.target as any).value ?? "";
       // Restore only while the rejected value remains the immediate result of
       // this write; later user edits are never overwritten by the caller.
       if (currentValue !== previousValue) restoreAiValueWithoutEvents(outcome.target, previousValue);
@@ -676,20 +771,34 @@ export function applyAiValue(
 }
 
 function restoreAiValueWithoutEvents(el: Fillable, value: string | boolean): void {
-  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+  if (el instanceof HTMLInputElement && el.type === "radio") {
     el.checked = value === true;
+    return;
+  }
+  if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    toggleCheckbox(el, value === true);
     return;
   }
   const next = typeof value === "string" ? value : "";
   const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
   if (descriptor?.set) descriptor.set.call(el, next);
-  else el.value = next;
+  else (el as any).value = next;
 }
 
 export function restoreAiValue(el: Fillable, previous: string | boolean): void {
-  if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) {
+  if (el instanceof HTMLInputElement && el.type === "radio") {
     el.checked = previous === true;
     fireChanged(el);
+    return;
+  }
+  if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    toggleCheckbox(el, previous === true);
     return;
   }
   setNativeValue(el, typeof previous === "string" ? previous : "");
