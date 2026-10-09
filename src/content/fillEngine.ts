@@ -612,23 +612,30 @@ function applySelect(el: HTMLSelectElement, instruction: FillInstruction, markAt
 
 function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
   const isRadio = el instanceof HTMLInputElement && el.type === "radio";
+  const isCheckboxControl =
+    !(el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) &&
+    isCustomCheckboxElement(el);
   // DYN-PAGE-02 — never mutate a control the coordinator cannot see. A wizard
   // that keeps every step in the DOM and hides the inactive ones would
   // otherwise take a silent write into a panel nobody reviews before
   // submitting. Radio defers its own check to applyRadio, which knows which
   // group member is actually about to be clicked.
   if (!isRadio && isHiddenTarget(el)) return HIDDEN_OUTCOME;
+  if (instruction.fieldType === "checkbox" && !isCheckboxControl) {
+    return {
+      ok: false,
+      reason: "mapping does not resolve to a checkbox control",
+      outcome: "unsupported",
+      reasonCode: "unsupported_control",
+    };
+  }
+  if (isCheckboxControl) {
+    return applyCheckbox(el, instruction.value, markAttempted);
+  }
   if (el instanceof HTMLSelectElement)
     return applySelect(el, instruction, markAttempted);
   if (isRadio) {
     return applyRadio(el as HTMLInputElement, instruction.value, markAttempted);
-  }
-  if (
-    (el instanceof HTMLInputElement && el.type === "checkbox") ||
-    isCustomCheckboxElement(el) ||
-    instruction.fieldType === "checkbox"
-  ) {
-    return applyCheckbox(el, instruction.value, markAttempted);
   }
   if (el instanceof HTMLInputElement && el.type === "file") {
     // Belt and braces: the background never plans file fields.
