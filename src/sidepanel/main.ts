@@ -6388,7 +6388,24 @@ function renderTrainDryRun(): void {
  * fill report uses. The engine already returns each failure with its reason;
  * rendering only the counts made the trainer re-derive them on the page. */
 function renderMockDryRunDetail(summary: MockDryRunSummary): void {
-  fieldList(mockDryRunSkipped, "Not filled on the page:", summary.skipped);
+  const notFilled = [
+    ...(summary.skipped ?? []),
+    ...(summary.notChecked ?? []),
+  ].map((field) => {
+    let reason = field.reason;
+    if (field.kind === "page_unknown" && !reason.includes("page_unknown")) {
+      reason = `${reason} (page_unknown)`;
+    } else if (
+      (field.kind === "unverified" && /form changed|context/i.test(reason)) ||
+      summary.fieldOutcomes?.some((o) => o.mapId === field.mapId && o.reasonCode === "context_changed")
+    ) {
+      if (!reason.includes("context_changed")) {
+        reason = `${reason} (context_changed)`;
+      }
+    }
+    return { ...field, reason };
+  });
+  fieldList(mockDryRunSkipped, "Not filled on the page:", notFilled);
   fieldList(mockDryRunGaps, "Mapping gaps:", summary.gaps);
 }
 

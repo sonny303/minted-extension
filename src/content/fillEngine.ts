@@ -25,7 +25,7 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // rather than copied so the two surfaces can never disagree about what an
 // inactive wizard panel looks like. The scanner's extra zero-box filter is
 // deliberately NOT applied here; see isHiddenControl's own comment.
-import { isHiddenControl } from "./captureScan";
+import { BOOLEAN_SENTINELS, canonicalControl, hostLabel, isHiddenControl } from "./captureScan";
 import { FILLABLE, querySelectorAllDeep, querySelectorDeep } from "./deepDom";
 import { primeFacesSelectMenu } from "./primeFaces";
 
@@ -52,7 +52,19 @@ function safeNativeDate(value: string): string | null {
     : null;
 }
 
-export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+export type Fillable = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLElement;
+
+export function isCustomCheckboxElement(el: Element): boolean {
+  if (el instanceof HTMLInputElement) {
+    return el.type === "checkbox";
+  }
+  const role = el.getAttribute("role");
+  if (role === "checkbox") return true;
+  const tag = el.tagName.toLowerCase();
+  if (tag.endsWith("-checkbox") || tag.includes("checkbox")) return true;
+  if (el.shadowRoot?.querySelector('[role="checkbox"], input[type="checkbox"]')) return true;
+  return false;
+}
 
 interface ProbedTarget {
   mapId: string;
@@ -62,6 +74,9 @@ interface ProbedTarget {
   radioNodes: HTMLInputElement[] | null;
   mutationVersion: number;
   expiresAt: number;
+  resolvedPage?: string | null;
+  probedLabel?: string;
+  probedOptionsSignature?: string | null;
 }
 
 // DOM references stay only in this content-script frame's short-lived memory.
@@ -69,15 +84,64 @@ interface ProbedTarget {
 const probedTargets = new Map<string, ProbedTarget>();
 let probeMutationObserver: MutationObserver | null = null;
 let probeMutationVersion = 0;
+let activePrimeFacesMenu: NonNullable<ReturnType<typeof primeFacesSelectMenu>> | null = null;
+
+function isDecorationMutation(record: MutationRecord, decorated: Fillable, title: string | undefined): boolean {
+  if (record.type === "childList") {
+    const isStyle = (n: Node) => {
+      const el = n as unknown as { id?: string; tagName?: string };
+      return (
+        typeof el.tagName === "string" && el.tagName.toLowerCase() === "style" && el.id === "__minted-panel-fill-style"
+      );
+    };
+    const addedOnlyStyle = Array.from(record.addedNodes).every(isStyle);
+    const removedOnlyStyle = Array.from(record.removedNodes).every(isStyle);
+    if ((record.addedNodes.length > 0 || record.removedNodes.length > 0) && addedOnlyStyle && removedOnlyStyle) {
+      return true;
+    }
+  }
+  if (record.type === "attributes" && record.target === decorated) {
+    if (record.attributeName === "class") {
+      const portalClasses = (value: string) => value.split(/\s+/)
+        .filter((name) => name && name !== "mp-fill-static" && name !== "mp-fill-ai").sort().join(" ");
+      return portalClasses(record.oldValue ?? "") === portalClasses(decorated.className);
+    }
+    return record.attributeName === "title" && title !== undefined && decorated.getAttribute("title") === title;
+  }
+  return false;
+}
+
+function isPrimeFacesInteractionMutation(record: MutationRecord): boolean {
+  const menu = activePrimeFacesMenu;
+  if (!menu) return false;
+  const panel = primeFacesPanel(menu);
+  if (panel?.contains(record.target)) return true;
+  if (panel && record.type === "childList") {
+    const changed = [...record.addedNodes, ...record.removedNodes];
+    if (changed.length > 0 && changed.every((node) => node === panel)) return true;
+  }
+  const label = menu.wrapper.querySelector(".ui-selectonemenu-label");
+  if (label?.contains(record.target) && (record.type === "childList" || record.type === "characterData")) return true;
+  // Only presentation changes on this menu are expected during a selection.
+  // Labels/options and all mutations elsewhere must invalidate pending probes.
+  return record.type === "attributes" &&
+    [menu.wrapper, menu.focusInput, label, menu.wrapper.querySelector(".ui-selectonemenu-trigger")].includes(record.target as Element) &&
+    ["class", "style", "aria-expanded", "aria-activedescendant", "tabindex"].includes(record.attributeName ?? "");
+}
+
+function hasMeaningfulMutations(records: MutationRecord[]): boolean {
+  return records.some((r) => !isPrimeFacesInteractionMutation(r));
+}
 
 function ensureProbeMutationObserver(): boolean {
   if (probeMutationObserver) return true;
   if (typeof MutationObserver === "undefined" || !document.documentElement) return false;
   probeMutationObserver = new MutationObserver((records) => {
-    if (records.length > 0) probeMutationVersion += 1;
+    if (hasMeaningfulMutations(records)) probeMutationVersion += 1;
   });
   probeMutationObserver.observe(document.documentElement, {
     attributes: true,
+    attributeOldValue: true,
     childList: true,
     characterData: true,
     subtree: true,
@@ -87,7 +151,7 @@ function ensureProbeMutationObserver(): boolean {
 
 function currentProbeMutationVersion(): number {
   const records = probeMutationObserver?.takeRecords() ?? [];
-  if (records.length > 0) probeMutationVersion += 1;
+  if (hasMeaningfulMutations(records)) probeMutationVersion += 1;
   return probeMutationVersion;
 }
 
@@ -107,13 +171,19 @@ function pruneProbedTargets(): void {
 }
 
 function asFillable(el: Element | null): Fillable | null {
-  const direct = el instanceof HTMLInputElement ||
-    el instanceof HTMLSelectElement ||
-    el instanceof HTMLTextAreaElement
-    ? el
-    : null;
-  if (!direct) return null;
-  return primeFacesSelectMenu(direct)?.select ?? direct;
+  if (!el) return null;
+  const canonical = canonicalControl(el);
+  if (
+    canonical instanceof HTMLInputElement ||
+    canonical instanceof HTMLSelectElement ||
+    canonical instanceof HTMLTextAreaElement
+  ) {
+    return primeFacesSelectMenu(canonical)?.select ?? canonical;
+  }
+  if (isCustomCheckboxElement(canonical) && canonical instanceof HTMLElement) {
+    return canonical;
+  }
+  return null;
 }
 
 function isHiddenTarget(el: Fillable): boolean {
@@ -169,6 +239,16 @@ function byLabelAll(text: string): Fillable[] {
     for (const node of querySelectorAllDeep(FILLABLE, root)) {
       const control = asFillable(node);
       if (control) controls.add(control);
+    }
+  }
+  // Slotted / text-content custom hosts (e.g. <cf-checkbox>).
+  for (const el of querySelectorAllDeep(FILLABLE)) {
+    const canonical = asFillable(el);
+    if (canonical && canonical.tagName.includes("-")) {
+      const hl = hostLabel(canonical);
+      if (normalize(hl) === want) {
+        controls.add(canonical);
+      }
     }
   }
   return [...controls];
@@ -249,8 +329,8 @@ function setNativeValue(el: Fillable, value: string): void {
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
   if (descriptor?.set) {
     descriptor.set.call(el, value);
-  } else {
-    el.value = value;
+  } else if ("value" in el) {
+    (el as HTMLElement & { value: string }).value = value;
   }
   fireChanged(el);
 }
@@ -261,6 +341,43 @@ function fireChanged(el: HTMLElement): void {
   el.dispatchEvent(new Event("change", init));
   el.dispatchEvent(new Event("blur", { composed: true, cancelable: false }));
   el.dispatchEvent(new Event("focusout", { bubbles: true, composed: true, cancelable: false }));
+}
+
+export function isCheckboxChecked(el: HTMLElement): boolean {
+  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    return el.checked;
+  }
+  if ("checked" in el && typeof (el as HTMLElement & { checked?: unknown }).checked === "boolean") {
+    return (el as HTMLElement & { checked: boolean }).checked;
+  }
+  const ariaChecked = el.getAttribute("aria-checked");
+  if (ariaChecked != null) return ariaChecked === "true";
+  if (el.shadowRoot) {
+    const shadowBox = el.shadowRoot.querySelector<HTMLElement>('[role="checkbox"], input[type="checkbox"]');
+    if (shadowBox instanceof HTMLInputElement) return shadowBox.checked;
+    if (shadowBox?.getAttribute("aria-checked") != null) {
+      return shadowBox.getAttribute("aria-checked") === "true";
+    }
+  }
+  return false;
+}
+
+export function toggleCheckbox(el: HTMLElement, wantChecked?: boolean): void {
+  if (el instanceof HTMLInputElement && el.type === "checkbox") {
+    el.click();
+    return;
+  }
+  const clickable = el.shadowRoot?.querySelector<HTMLElement>(
+    '[role="checkbox"], input[type="checkbox"], .wrapper, .icon, label',
+  ) ?? el;
+  clickable.click();
+
+  if (wantChecked !== undefined && isCheckboxChecked(el) !== wantChecked) {
+    if (clickable !== el) {
+      el.click();
+    }
+  }
+  fireChanged(el);
 }
 
 /**
@@ -291,13 +408,16 @@ export function clearPortalForm(): number {
         if (!el.checked) continue;
         el.checked = false;
         fireChanged(el);
+      } else if (isCustomCheckboxElement(el)) {
+        if (!isCheckboxChecked(el)) continue;
+        toggleCheckbox(el, false);
       } else if (el instanceof HTMLSelectElement) {
         if (el.selectedIndex <= 0 && el.value === "") continue;
         // Index 0 is the placeholder on a portal select; -1 (nothing chosen)
         // is the honest reset when there is no placeholder to fall back to.
         el.selectedIndex = el.options.length > 0 ? 0 : -1;
         fireChanged(el);
-      } else {
+      } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
         if (el.value === "") continue;
         setNativeValue(el, "");
       }
@@ -312,6 +432,42 @@ export function clearPortalForm(): number {
 function labelTextOf(input: HTMLInputElement): string {
   const label = input.labels?.[0] ?? input.closest("label");
   return label?.textContent ?? "";
+}
+
+function associatedLabelText(target: Fillable): string {
+  if (target instanceof HTMLInputElement) {
+    const text = labelTextOf(target);
+    if (text) return normalize(text);
+  }
+  const labels = "labels" in target ? (target as HTMLInputElement).labels : undefined;
+  const label = labels?.[0] ?? target.closest("label") ??
+    (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
+  if (label?.textContent) return normalize(label.textContent);
+  if (target.tagName.includes("-")) {
+    const hostText = hostLabel(target);
+    if (hostText) return normalize(hostText);
+  }
+  const menu = target instanceof HTMLSelectElement ? primeFacesSelectMenu(target) : null;
+  if (menu) {
+    const menuLabel = menu.wrapper.closest("label") ??
+      (menu.wrapper.id ? document.querySelector(`label[for="${CSS.escape(menu.wrapper.id)}"]`) : null) ??
+      (target.id ? document.querySelector(`label[for="${CSS.escape(target.id)}"]`) : null);
+    if (menuLabel?.textContent) return normalize(menuLabel.textContent);
+  }
+  const ariaLabel = target.getAttribute("aria-label");
+  if (ariaLabel) return normalize(ariaLabel);
+  const ariaLabelledBy = target.getAttribute("aria-labelledby");
+  if (ariaLabelledBy) {
+    const el = document.getElementById(ariaLabelledBy);
+    if (el?.textContent) return normalize(el.textContent);
+  }
+  return "";
+}
+
+function getOptionsSignature(select: HTMLSelectElement): string {
+  return Array.from(select.options)
+    .map((o) => `${o.value}:${normalize(o.text)}`)
+    .join("|");
 }
 
 type ApplyOutcome =
@@ -385,14 +541,26 @@ function applyRadio(el: HTMLInputElement, value: string, markAttempted: () => vo
   return { ok: true, attempted: changed, changed, target: match, expectedValue: true };
 }
 
-function applyCheckbox(el: HTMLInputElement, value: string, markAttempted: () => void): ApplyOutcome {
-  const wantChecked = TRUTHY.has(normalize(value));
-  const changed = el.checked !== wantChecked;
+function applyCheckbox(el: Fillable, value: string, markAttempted: () => void): ApplyOutcome {
+  const norm = normalize(value);
+  const optionValue = el.getAttribute("value");
+  const optionLabel = associatedLabelText(el);
+  const isOptionMatch =
+    !BOOLEAN_SENTINELS.has(norm) &&
+    ((optionValue != null &&
+      !BOOLEAN_SENTINELS.has(normalize(optionValue)) &&
+      normalize(optionValue) === norm) ||
+      (optionLabel !== "" && normalize(optionLabel) === norm));
+
+  const wantChecked = TRUTHY.has(norm) || isOptionMatch;
+  const currentChecked = isCheckboxChecked(el);
+  const changed = currentChecked !== wantChecked;
   if (changed) {
     markAttempted();
-    el.click();
+    toggleCheckbox(el, wantChecked);
   }
-  if (el.checked !== wantChecked) {
+  const finalChecked = isCheckboxChecked(el);
+  if (finalChecked !== wantChecked) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
   return { ok: true, attempted: changed, changed, target: el, expectedValue: wantChecked };
@@ -444,23 +612,37 @@ function applySelect(el: HTMLSelectElement, instruction: FillInstruction, markAt
 
 function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
   const isRadio = el instanceof HTMLInputElement && el.type === "radio";
+  const isCheckboxControl =
+    !(el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) &&
+    isCustomCheckboxElement(el);
   // DYN-PAGE-02 — never mutate a control the coordinator cannot see. A wizard
   // that keeps every step in the DOM and hides the inactive ones would
   // otherwise take a silent write into a panel nobody reviews before
   // submitting. Radio defers its own check to applyRadio, which knows which
   // group member is actually about to be clicked.
   if (!isRadio && isHiddenTarget(el)) return HIDDEN_OUTCOME;
+  if (instruction.fieldType === "checkbox" && !isCheckboxControl) {
+    return {
+      ok: false,
+      reason: "mapping does not resolve to a checkbox control",
+      outcome: "unsupported",
+      reasonCode: "unsupported_control",
+    };
+  }
+  if (isCheckboxControl) {
+    return applyCheckbox(el, instruction.value, markAttempted);
+  }
   if (el instanceof HTMLSelectElement)
     return applySelect(el, instruction, markAttempted);
   if (isRadio) {
     return applyRadio(el as HTMLInputElement, instruction.value, markAttempted);
   }
-  if (el instanceof HTMLInputElement && el.type === "checkbox") {
-    return applyCheckbox(el, instruction.value, markAttempted);
-  }
   if (el instanceof HTMLInputElement && el.type === "file") {
     // Belt and braces: the background never plans file fields.
     return { ok: false, reason: "file inputs cannot be filled" };
+  }
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+    return { ok: false, reason: "unsupported control type", outcome: "unsupported", reasonCode: "unsupported_control" };
   }
   if (el instanceof HTMLInputElement && (el.disabled || el.readOnly)) {
     return { ok: false, reason: "field is disabled or read-only", outcome: "unsupported", reasonCode: "unsupported_control" };
@@ -483,7 +665,7 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   if (el.value !== nextValue) {
     return { ok: false, reason: "field did not retain the requested value", target: el };
   }
-  if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.willValidate && !el.validity.valid) {
+  if (el.willValidate && !el.validity.valid) {
     return {
       ok: false,
       reason: "form rejected the field format; review it on the portal",
@@ -513,9 +695,16 @@ function installFillStyle(el: Element): void {
 }
 
 export function decorateFill(el: Fillable, kind: "static" | "ai", token?: string): void {
+  // Account for portal event-handler changes before exempting our own writes.
+  currentProbeMutationVersion();
+  const title = kind === "ai" && token ? `AI Suggested: ${token}` : undefined;
   installFillStyle(el);
   el.classList.add(kind === "ai" ? "mp-fill-ai" : "mp-fill-static");
-  if (kind === "ai" && token) el.setAttribute("title", `AI Suggested: ${token}`);
+  if (title !== undefined) el.setAttribute("title", title);
+  const records = probeMutationObserver?.takeRecords() ?? [];
+  if (hasMeaningfulMutations(records.filter((record) => !isDecorationMutation(record, el, title)))) {
+    probeMutationVersion += 1;
+  }
 }
 
 /** Write once a content-local scan has verified the exact empty target. */
@@ -539,22 +728,27 @@ export function applyAiValue(
           .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
       : [el];
     if (group.some((radio) => radio.checked)) return { ok: false, reason: "field already has a value" };
-  } else if (el instanceof HTMLInputElement && el.type === "checkbox") {
-    if (el.checked) return { ok: false, reason: "field already has a value" };
+  } else if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    if (isCheckboxChecked(el)) return { ok: false, reason: "field already has a value" };
     if (!TRUTHY.has(normalize(value))) return { ok: false, reason: "suggestion does not require a write" };
-  } else if (el.value !== "") {
-    return { ok: false, reason: "field already has a value" };
+  } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+    if (el.value !== "") return { ok: false, reason: "field already has a value" };
   }
   const previousValue: string | boolean =
     el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")
       ? el.checked
-      : el.value;
+      : isCustomCheckboxElement(el)
+        ? isCheckboxChecked(el)
+        : (el as HTMLElement & { value?: string }).value ?? "";
 
   const fieldType = el instanceof HTMLSelectElement
     ? "select"
     : el instanceof HTMLInputElement && el.type === "radio"
       ? "radio"
-      : el instanceof HTMLInputElement && el.type === "checkbox"
+      : (el instanceof HTMLInputElement && el.type === "checkbox") || isCustomCheckboxElement(el)
         ? "checkbox"
         : "text";
   const outcome = applyValue(el, {
@@ -573,7 +767,9 @@ export function applyAiValue(
         outcome.target instanceof HTMLInputElement &&
         (outcome.target.type === "radio" || outcome.target.type === "checkbox")
           ? outcome.target.checked
-          : outcome.target.value;
+          : isCustomCheckboxElement(outcome.target)
+            ? isCheckboxChecked(outcome.target)
+            : (outcome.target as HTMLElement & { value?: string }).value ?? "";
       // Restore only while the rejected value remains the immediate result of
       // this write; later user edits are never overwritten by the caller.
       if (currentValue !== previousValue) restoreAiValueWithoutEvents(outcome.target, previousValue);
@@ -586,20 +782,34 @@ export function applyAiValue(
 }
 
 function restoreAiValueWithoutEvents(el: Fillable, value: string | boolean): void {
-  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+  if (el instanceof HTMLInputElement && el.type === "radio") {
     el.checked = value === true;
+    return;
+  }
+  if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    toggleCheckbox(el, value === true);
     return;
   }
   const next = typeof value === "string" ? value : "";
   const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value");
   if (descriptor?.set) descriptor.set.call(el, next);
-  else el.value = next;
+  else (el as HTMLElement & { value?: string }).value = next;
 }
 
 export function restoreAiValue(el: Fillable, previous: string | boolean): void {
-  if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) {
+  if (el instanceof HTMLInputElement && el.type === "radio") {
     el.checked = previous === true;
     fireChanged(el);
+    return;
+  }
+  if (
+    (el instanceof HTMLInputElement && el.type === "checkbox") ||
+    isCustomCheckboxElement(el)
+  ) {
+    toggleCheckbox(el, previous === true);
     return;
   }
   setNativeValue(el, typeof previous === "string" ? previous : "");
@@ -674,11 +884,14 @@ async function waitForPageSettled(quietMs = 120, maxWaitMs = 700): Promise<boole
 }
 
 /** Shape-only probe used to route each map to at most one accessible frame. */
-export async function probeFillOnPage(instructions: FillProbeInstruction[]): Promise<FillProbeResult[]> {
+export async function probeFillOnPage(
+  instructions: FillProbeInstruction[],
+  explicitPageUrl: string | null = null,
+): Promise<FillProbeResult[]> {
   const pageSettled = await waitForPageSettled();
   pruneProbedTargets();
   const mutationWatchAvailable = ensureProbeMutationObserver();
-  const pageUrl = typeof location !== "undefined" ? location.href : null;
+  const pageUrl = explicitPageUrl ?? (typeof location !== "undefined" ? location.href : null);
   const currentPage = resolveFillPage(
     pageUrl,
     instructions.map((instruction) => instruction.pageStep),
@@ -687,10 +900,10 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
   const results: FillProbeResult[] = instructions.map((instruction) => {
     probedTargets.delete(instruction.probeKey);
     if (isOtherPageInstruction(instruction, currentPage)) {
-      return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
     if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
-      return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
 
     let invalid = false;
@@ -708,7 +921,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
       }
       const fillable = matches.map(asFillable).filter((item): item is Fillable => item !== null);
       if (fillable.length === 0) {
-        if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields };
+        if (matches.length > 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "unsupported", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
         continue;
       }
       let visible = [...new Set(fillable)].filter((control) => !isHiddenTarget(control));
@@ -727,7 +940,7 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
           }
         }
       }
-      if (visible.length === 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "hidden", pageSettled, radioGroup: false, pageFields };
+      if (visible.length === 0) return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: "hidden", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
       const targetStatus = visible.length === 1 || radioGroup ? "unique" : "ambiguous";
       if (targetStatus === "unique" && visible[0] && mutationWatchAvailable) {
         probedTargets.set(instruction.probeKey, {
@@ -738,11 +951,14 @@ export async function probeFillOnPage(instructions: FillProbeInstruction[]): Pro
           radioNodes: radioGroup ? radioGroupNodes(visible[0]) : null,
           mutationVersion: currentProbeMutationVersion(),
           expiresAt: Date.now() + 30_000,
+          resolvedPage: currentPage,
+          probedLabel: associatedLabelText(visible[0]),
+          probedOptionsSignature: visible[0] instanceof HTMLSelectElement ? getOptionsSignature(visible[0]) : null,
         });
       }
-      return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus, pageSettled, radioGroup, pageFields };
+      return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus, pageSettled, radioGroup, pageFields, resolvedPage: currentPage };
     }
-    return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields };
+    return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
   });
   stopProbeMutationObserverIfUnused();
   return results;
@@ -790,7 +1006,8 @@ export function applyFillOnPage(
   };
   // Exact URL-tail identity only. Ambiguous / missing → null; all nonempty
   // step-bound instructions are withheld as page_unknown below.
-  const currentPage = resolveFillPage(
+  const resolvedInstructionPage = instructions.find((i) => i.resolvedPage)?.resolvedPage ?? null;
+  const currentPage = resolvedInstructionPage ?? resolveFillPage(
     pageUrl,
     instructions.map((i) => i.pageStep),
   );
@@ -800,8 +1017,9 @@ export function applyFillOnPage(
     const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
     if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
     stopProbeMutationObserverIfUnused();
+    const effectivePage = instruction.resolvedPage ?? probedTarget?.resolvedPage ?? currentPage;
     try {
-      if (isOtherPageInstruction(instruction, currentPage)) {
+      if (isOtherPageInstruction(instruction, effectivePage)) {
         skipped.push(otherPageReport(instruction));
         recordOutcome(instruction, false, "other_page", "other_page");
         continue;
@@ -816,7 +1034,7 @@ export function applyFillOnPage(
         recordOutcome(instruction, false, "other_page", "other_page");
         continue;
       }
-      if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+      if (effectivePage == null && Boolean(instruction.pageStep?.trim()) && !probedTarget) {
         skipped.push(pageUnknownReport(instruction));
         recordOutcome(instruction, false, "page_unknown", "page_unknown");
         continue;
@@ -853,14 +1071,23 @@ export function applyFillOnPage(
         recordOutcome(instruction, false, "unsupported", "unsupported_control");
         continue;
       }
+      const labelMatches = !probedTarget?.probedLabel ||
+        associatedLabelText(resolution.target) === probedTarget.probedLabel;
+      const optionsMatch = !probedTarget?.probedOptionsSignature ||
+        !(resolution.target instanceof HTMLSelectElement) ||
+        getOptionsSignature(resolution.target) === probedTarget.probedOptionsSignature;
+
       if (strictRevalidation && (
         !probedTarget ||
         probedTarget.mapId !== instruction.mapId ||
         probedTarget.pageStep !== instruction.pageStep ||
         probedTarget.pageUrl !== pageUrl ||
         probedTarget.target !== resolution.target ||
+        !resolution.target.isConnected ||
+        !sameNodeList(probedTarget.radioNodes, radioGroupNodes(resolution.target)) ||
         probedTarget.mutationVersion !== mutationVersion ||
-        !sameNodeList(probedTarget.radioNodes, radioGroupNodes(resolution.target))
+        !labelMatches ||
+        !optionsMatch
       )) {
         skipped.push({
           label: instruction.label,
@@ -956,11 +1183,15 @@ function waitForValue<T>(read: () => T | null, timeoutMs: number): Promise<T | n
   });
 }
 
-function primeFacesItems(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>, option: HTMLOptionElement): HTMLElement[] {
+function primeFacesPanel(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>): Element | null {
   const panelId = menu.select.id.endsWith("_input")
     ? `${menu.select.id.slice(0, -"_input".length)}_panel`
     : `${menu.wrapper.id}_panel`;
-  const panel = document.getElementById(panelId) ?? querySelectorDeep(`#${CSS.escape(panelId)}`);
+  return document.getElementById(panelId) ?? querySelectorDeep(`#${CSS.escape(panelId)}`);
+}
+
+function primeFacesItems(menu: NonNullable<ReturnType<typeof primeFacesSelectMenu>>, option: HTMLOptionElement): HTMLElement[] {
+  const panel = primeFacesPanel(menu);
   if (!panel) return [];
   return querySelectorAllDeep(".ui-selectonemenu-item", panel)
     .filter((item): item is HTMLElement => item instanceof HTMLElement)
@@ -1103,14 +1334,15 @@ async function applyPrimeFacesSelect(
   strictRevalidation: boolean,
 ): Promise<FillPageResult> {
   const pageUrl = typeof location !== "undefined" ? location.href : null;
-  const currentPage = resolveFillPage(pageUrl, [instruction.pageStep]);
+  const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
+  const currentPage = instruction.resolvedPage ?? probedTarget?.resolvedPage ?? resolveFillPage(pageUrl, [instruction.pageStep]);
   if (isOtherPageInstruction(instruction, currentPage)) {
     return skippedResult(instruction, "field belongs to another page", "other_page", "other_page", "other_page");
   }
   if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
     return skippedResult(instruction, "mapping is scoped to a different page", "other_page", "other_page", "other_page");
   }
-  if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+  if (currentPage == null && Boolean(instruction.pageStep?.trim()) && !probedTarget) {
     return skippedResult(instruction, "current wizard page could not be confirmed", "page_unknown", "page_unknown", "page_unknown");
   }
   const resolution = resolveTarget(instruction);
@@ -1137,9 +1369,15 @@ async function applyPrimeFacesSelect(
   const mutationVersion = currentProbeMutationVersion();
   if (instruction.probeKey) probedTargets.delete(instruction.probeKey);
   stopProbeMutationObserverIfUnused();
+  const labelMatches = !probe?.probedLabel ||
+    associatedLabelText(select) === probe.probedLabel;
+  const optionsMatch = !probe?.probedOptionsSignature ||
+    getOptionsSignature(select) === probe.probedOptionsSignature;
+
   if (strictRevalidation && (
     !probe || probe.mapId !== instruction.mapId || probe.pageStep !== instruction.pageStep ||
-    probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion
+    probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion ||
+    !labelMatches || !optionsMatch
   )) {
     return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed");
   }
@@ -1151,10 +1389,15 @@ async function applyPrimeFacesSelect(
       : skippedResult(instruction, vocabularyMismatchReason("dropdown"), "skipped", "option_mismatch", "option_missing");
   }
   const option = selection.option;
+  const optionValue = option.value;
+  const optionText = option.text;
+  const optionSetSignature = probe?.probedOptionsSignature ?? getOptionsSignature(select);
   const isCurrent = (): boolean => {
     if (typeof location !== "undefined" && location.href !== pageUrl) return false;
     const current = resolveTarget(instruction);
     return current.status === "unique" && current.target === select && select.isConnected &&
+      Array.from(select.options).includes(option) && option.value === optionValue && option.text === optionText &&
+      getOptionsSignature(select) === optionSetSignature &&
       menu.wrapper.isConnected && !isHiddenTarget(select) && !select.disabled &&
       !menu.wrapper.matches(":disabled, .ui-state-disabled") &&
       menu.wrapper.getAttribute("aria-disabled") !== "true";
@@ -1162,10 +1405,15 @@ async function applyPrimeFacesSelect(
   const unchanged = select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text);
   if (!unchanged) {
     let selected: boolean;
+    activePrimeFacesMenu = menu;
     try {
       selected = await selectPrimeFacesItem(menu, option, isCurrent);
     } catch {
       return skippedResult(instruction, "field could not be applied; review it on the portal", "unverified", "unverified", "context_changed", true);
+    } finally {
+      // Drain this interaction's records while its narrow widget scope is active.
+      currentProbeMutationVersion();
+      activePrimeFacesMenu = null;
     }
     if (!isCurrent()) {
       return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed", true);
@@ -1187,7 +1435,9 @@ async function applyPrimeFacesSelect(
     ...(instruction.token ? { token: instruction.token } : {}),
     ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
   }];
-  if (!unchanged) decorateFill(select, instruction.kind ?? "static", instruction.token);
+  if (!unchanged) {
+    decorateFill(select, instruction.kind ?? "static", instruction.token);
+  }
   return {
     filled: [instruction.label],
     attemptedLabels: unchanged ? [] : [instruction.label],
@@ -1250,14 +1500,15 @@ export async function applyFillSettled(
       rejectPostFill(result, instruction, target, "form changed after fill; review this field before submitting", "unverified", "context_changed");
       continue;
     }
+    const isInputOrTextarea = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
     const expected = target instanceof HTMLInputElement && target.type === "date"
       ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
       : instruction.value;
-    if (target.value !== expected) {
+    if (isInputOrTextarea && target.value !== expected) {
       rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
       continue;
     }
-    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.willValidate && !target.validity.valid) {
+    if (isInputOrTextarea && target.willValidate && !target.validity.valid) {
       rejectPostFill(result, instruction, target, "form rejected the field format; review this field on the portal", "write_rejected", "invalid_format");
     }
   }

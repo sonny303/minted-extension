@@ -35,6 +35,8 @@ export interface FillInstruction {
   /** Catalog identifier only; never a value. Present on AI suggestions. */
   token?: string;
   confidence?: number;
+  /** Resolved canonical wizard-page identity from probe, preserved for singleton apply. */
+  resolvedPage?: string | null;
 }
 
 export interface AiFillCandidate {
@@ -157,6 +159,7 @@ export interface FillProbeResult {
   pageSettled: boolean;
   radioGroup: boolean;
   pageFields: number;
+  resolvedPage?: string | null;
 }
 
 export interface SandboxFillSummary {

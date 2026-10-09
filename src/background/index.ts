@@ -609,28 +609,56 @@ async function createAiFillGuard(request: {
     }
     await assertFillMatchesActiveCase(request);
   };
+  let cachedMetadata: PortalMappingMetadata[] | null = null;
+  let cachedMetadataTime = 0;
+  const METADATA_CACHE_TTL_MS = 5000;
+
   const validateConfiguration = async (
     expectedFingerprint?: string,
     knownMetadata?: PortalMappingMetadata[] | null,
   ): Promise<string> => {
     let metadata = knownMetadata;
     if (metadata == null) {
-      try {
-        metadata = (await getPortalFieldMapsWithMeta(target.portalKey)).portalMappings;
-      } catch {
-        // A failed online read is not evidence of a reset. Preserve the
-        // draft, but never let it authorize a fill while the registry is
-        // unreachable.
-        throw new PortalConfigurationValidationError(
-          "Reconnect to Minted Panel to verify this form configuration before filling.",
-        );
+      if (cachedMetadata && Date.now() - cachedMetadataTime < METADATA_CACHE_TTL_MS) {
+        metadata = cachedMetadata;
+      } else {
+        try {
+          metadata = (await getPortalFieldMapsWithMeta(target.portalKey)).portalMappings;
+          cachedMetadata = metadata;
+          cachedMetadataTime = Date.now();
+        } catch {
+          // A failed online read is not evidence of a reset. Preserve the
+          // draft, but never let it authorize a fill while the registry is
+          // unreachable.
+          throw new PortalConfigurationValidationError(
+            "Reconnect to Minted Panel to verify this form configuration before filling.",
+          );
+        }
       }
+    } else {
+      cachedMetadata = metadata;
+      cachedMetadataTime = Date.now();
     }
-    const state = portalMappingState(
+    let state = portalMappingState(
       metadata,
       target,
       expectedFingerprint ?? pinnedMappingFingerprint,
     );
+    if (state !== "ready" && metadata === cachedMetadata && Date.now() - cachedMetadataTime > 0) {
+      // Re-fetch once online if cached metadata is no longer ready
+      try {
+        metadata = (await getPortalFieldMapsWithMeta(target.portalKey)).portalMappings;
+        cachedMetadata = metadata;
+        cachedMetadataTime = Date.now();
+        state = portalMappingState(
+          metadata,
+          target,
+          expectedFingerprint ?? pinnedMappingFingerprint,
+        );
+      } catch {
+        // preserve original error flow
+      }
+    }
     if (state !== "ready") {
       if (state === "changed" || state === "unready") {
         await invalidateAiFillStateForConfiguration(target);

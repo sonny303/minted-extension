@@ -14,6 +14,7 @@ import type { CapturedField } from "../content/captureScan";
 import type { ContentRequest, FillInstruction } from "../shared/fill";
 import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
 import type { ControlSummary } from "../shared/nanoAi";
+import { JSDOM } from "jsdom";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -148,6 +149,109 @@ describe("applyFillAcrossFrames public probe/apply boundary", () => {
         sendMessage: vi.fn((_: number, message: ContentRequest, options: { frameId: number }) => sendMessage(message, options.frameId)),
       },
     });
+  }
+
+  function installHiddenSurveyFrames(options: {
+    frameDetails?: Array<{ frameId: number; url: string; parentFrameId?: number }>;
+    iframeMarkup?: string;
+    iframeSrc?: string;
+    targetStatuses?: Record<number, string>;
+    initialFrameRect?: { width: number; height: number };
+    inaccessibleParent?: boolean;
+    executeMode?: "normal" | "throw" | "missing_frame_id" | "wrong_frame_id" | "false";
+    mutateOnSecondInspection?: "visible" | "navigate" | "sibling";
+    frameUrlOnSecondInventory?: string;
+    onInspection?: (count: number) => void;
+    inspectionDelayMs?: number;
+  } = {}) {
+    const frameUrl = "https://survey.example/feedback";
+    const frames = options.frameDetails ?? [
+      { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+      { frameId: 1, url: frameUrl, parentFrameId: 0 },
+    ];
+    const iframeMarkup = options.iframeMarkup ?? `<iframe id="survey-frame" src="${options.iframeSrc ?? frameUrl}"></iframe>`;
+    const dom = new JSDOM(`<main>${iframeMarkup}</main>`, {
+      url: "https://payer.example/enroll/enrollment/credentials",
+      runScripts: "outside-only",
+    });
+    const iframe = dom.window.document.querySelector("iframe, frame") as HTMLIFrameElement | HTMLFrameElement | null;
+    const setRect = (element: HTMLIFrameElement | HTMLFrameElement, width: number, height: number) => {
+      Object.defineProperty(element, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({ width, height }),
+      });
+    };
+    if (iframe) setRect(iframe, options.initialFrameRect?.width ?? 0, options.initialFrameRect?.height ?? 0);
+    let inspectionCount = 0;
+    let inventoryCount = 0;
+    const executeScript = vi.fn(async (details: { args?: unknown[]; func: (loadedUrl: string) => boolean }) => {
+      inspectionCount += 1;
+      options.onInspection?.(inspectionCount);
+      if (options.inspectionDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.inspectionDelayMs));
+      }
+      if (options.mutateOnSecondInspection && inspectionCount === 2) {
+        const current = dom.window.document.getElementById("survey-frame") as HTMLIFrameElement | null;
+        if (options.mutateOnSecondInspection === "visible" && current) setRect(current, 300, 200);
+        if (options.mutateOnSecondInspection === "navigate" && current) current.src = "https://survey.example/redirected";
+        if (options.mutateOnSecondInspection === "sibling") {
+          dom.window.document.querySelector("main")!.insertAdjacentHTML("beforeend", `<iframe src="${frameUrl}"></iframe>`);
+        }
+      }
+      if (options.executeMode === "throw") throw new Error("parent cannot be inspected");
+      const callback = dom.window.eval(`(${details.func.toString()})`) as (loadedUrl: string) => boolean;
+      const result = options.executeMode === "false" ? false : callback(String(details.args?.[0] ?? ""));
+      if (options.executeMode === "missing_frame_id") return [{ result }];
+      if (options.executeMode === "wrong_frame_id") return [{ frameId: 99, result }];
+      return [{ frameId: 0, result }];
+    });
+    const sendMessage = vi.fn(async (_tabId: number, message: ContentRequest, sendOptions: { frameId: number }) => {
+      const frameId = sendOptions.frameId;
+      if (frameId === 1 || (frameId === 0 && options.inaccessibleParent)) throw new Error("no content script");
+      if (message.type === "PROBE_FILL") {
+        const targetStatus = options.targetStatuses?.[frameId] ?? "unique";
+        return { ok: true, data: [probeRow({ targetStatus, resolvedPage: "credentials" })] };
+      }
+      if (message.type === "APPLY_FILL") {
+        const routed = message.instructions[0]!;
+        const telemetry = routed.telemetry!;
+        return {
+          ok: true,
+          data: {
+            filled: [routed.label],
+            attemptedLabels: [routed.label],
+            skipped: [],
+            pageFields: 1,
+            fieldOutcomes: [{
+              mapId: routed.mapId,
+              targetKey: telemetry.targetKey,
+              frameKey: telemetry.frameKey,
+              stepKey: telemetry.stepKey,
+              attempted: true,
+              outcome: "unverified",
+              reasonCode: "readback_unavailable",
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected message type: ${message.type}`);
+    });
+    vi.stubGlobal("chrome", {
+      webNavigation: {
+        getAllFrames: vi.fn().mockImplementation(async () => {
+          inventoryCount += 1;
+          if (options.frameUrlOnSecondInventory && inventoryCount === 2) {
+            return frames.map((frame) => frame.frameId === 1
+              ? { ...frame, url: options.frameUrlOnSecondInventory }
+              : frame);
+          }
+          return frames;
+        }),
+      },
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+    return { dom, executeScript, sendMessage, frames };
   }
 
   it("treats malformed or incomplete probe rows as uncertainty and never applies", async () => {
@@ -354,6 +458,254 @@ describe("applyFillAcrossFrames public probe/apply boundary", () => {
       expect(result.fieldOutcomes?.[0]?.attempted).toBe(false);
       expect(result.fieldOutcomes?.[0]?.reasonCode).toBe("context_changed");
     }
+  });
+
+  it("does not allow an unrelated blank frame reporting page_unknown to veto a unique candidate", async () => {
+    let appliedFrameId: number | null = null;
+    let appliedInstruction: FillInstruction | undefined;
+    installFrames((message, frameId) => {
+      if (message.type === "PROBE_FILL") {
+        if (frameId === 0) {
+          return { ok: true, data: [probeRow({ targetStatus: "unique", pageStatus: "eligible", resolvedPage: "credentials" })] };
+        }
+        // Frame 1 is e.g. an about:blank iframe that reports page_unknown
+        return { ok: true, data: [probeRow({ targetStatus: "missing", pageStatus: "page_unknown", pageFields: 0 })] };
+      }
+      if (message.type === "APPLY_FILL") {
+        appliedFrameId = frameId;
+        appliedInstruction = message.instructions[0];
+        return {
+          ok: true,
+          data: {
+            filled: [appliedInstruction!.label],
+            attemptedLabels: [appliedInstruction!.label],
+            skipped: [],
+            pageFields: 1,
+            fieldOutcomes: [{
+              mapId,
+              targetKey: appliedInstruction!.telemetry!.targetKey,
+              frameKey: appliedInstruction!.telemetry!.frameKey,
+              stepKey: appliedInstruction!.telemetry!.stepKey,
+              attempted: true,
+              outcome: "unverified",
+              reasonCode: "readback_unavailable",
+            }],
+          },
+        };
+      }
+      throw new Error(`Unexpected message type: ${message.type}`);
+    }, [0, 1]);
+
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(appliedFrameId).toBe(0);
+    expect((appliedInstruction as FillInstruction | undefined)?.resolvedPage).toBe("credentials");
+    expect(result.filled).toEqual([instruction.label]);
+    expect(result.fieldOutcomes?.[0]?.outcome).not.toBe("page_unknown");
+  });
+
+  it("keeps page_unknown when another frame reports fields that could contain the target", async () => {
+    let applied = false;
+    installFrames((message, frameId) => {
+      if (message.type === "PROBE_FILL") {
+        return { ok: true, data: [probeRow(frameId === 0
+          ? { targetStatus: "unique", resolvedPage: "credentials" }
+          : { pageStatus: "page_unknown", targetStatus: "missing", pageFields: 2 })] };
+      }
+      applied = true;
+      throw new Error("apply must not run when a nonempty unknown page remains");
+    }, [0, 1]);
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(applied).toBe(false);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ outcome: "page_unknown", reasonCode: "page_unknown" });
+  });
+
+  it("sanitizes page and context markers without exposing raw portal reasons", async () => {
+    const sentinel = "synthetic-sensitive-marker";
+    installFrames((message) => {
+      if (message.type === "PROBE_FILL") return { ok: true, data: [probeRow()] };
+      return {
+        ok: true,
+        data: {
+          filled: [],
+          skipped: [
+            { label: "Address", reason: `context_changed: ${sentinel}`, kind: "unverified" },
+            { label: "Wizard field", reason: `page_unknown: ${sentinel}`, kind: "page_unknown" },
+          ],
+          pageFields: 1,
+        },
+      };
+    });
+    const result = await applyFillAcrossFrames(1, [instruction]);
+    expect(JSON.stringify(result)).not.toContain(sentinel);
+    expect(result.skipped.map(({ reason }) => reason)).toEqual([
+      "form changed during fill (context_changed)",
+      "current wizard page could not be confirmed (page_unknown)",
+    ]);
+  });
+
+  it.each([
+    ["zero size", `<iframe id="survey-frame" src="https://survey.example/feedback"></iframe>`, { width: 0, height: 0 }],
+    ["display none ancestor", `<div style="display:none"><iframe id="survey-frame" src="https://survey.example/feedback"></iframe></div>`, { width: 300, height: 200 }],
+    ["visibility hidden on iframe", `<iframe id="survey-frame" style="visibility:hidden" src="https://survey.example/feedback"></iframe>`, { width: 300, height: 200 }],
+    ["visibility collapse on iframe", `<iframe id="survey-frame" style="visibility:collapse" src="https://survey.example/feedback"></iframe>`, { width: 300, height: 200 }],
+  ])("ignores one inaccessible leaf only when its parent DOM proves it is hidden (%s)", async (_name, iframeMarkup, initialFrameRect) => {
+    const { executeScript, sendMessage } = installHiddenSurveyFrames({ iframeMarkup, initialFrameRect });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([instruction.label]);
+    expect(executeScript).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(true);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "unverified",
+      reasonCode: "readback_unavailable",
+      attempted: true,
+    });
+  });
+
+  it("does not treat an ancestor visibility value as proof when the iframe overrides it", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({
+      iframeMarkup: `<div style="visibility:hidden"><iframe id="survey-frame" style="visibility:visible" src="https://survey.example/feedback"></iframe></div>`,
+      initialFrameRect: { width: 300, height: 200 },
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it.each([
+    ["visible child", { initialFrameRect: { width: 300, height: 200 } }],
+    ["multiple parent DOM iframes", { iframeMarkup: `<iframe id="survey-frame" src="https://survey.example/feedback"></iframe><iframe src="https://other.example/frame"></iframe>` }],
+    ["multiple direct child frames", {
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/feedback", parentFrameId: 0 },
+        { frameId: 2, url: "https://payer.example/other", parentFrameId: 0 },
+      ],
+      targetStatuses: { 2: "missing" },
+    }],
+    ["redirected loaded URL", {
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/final", parentFrameId: 0 },
+      ],
+    }],
+    ["missing parent metadata", {
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/feedback" },
+      ],
+    }],
+    ["inaccessible parent frame", {
+      inaccessibleParent: true,
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/feedback", parentFrameId: 0 },
+        { frameId: 2, url: "https://payer.example/other", parentFrameId: 0 },
+      ],
+    }],
+    ["nested descendant", {
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/feedback", parentFrameId: 0 },
+        { frameId: 2, url: "https://survey.example/nested", parentFrameId: 1 },
+      ],
+      targetStatuses: { 2: "missing" },
+    }],
+    ["parent cannot be inspected", { executeMode: "throw" as const }],
+    ["script result omits its frame id", { executeMode: "missing_frame_id" as const }],
+    ["script result names a different frame", { executeMode: "wrong_frame_id" as const }],
+  ])("keeps inaccessible frames fail closed when hidden evidence is incomplete (%s)", async (_name, options) => {
+    const { sendMessage } = installHiddenSurveyFrames(options);
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({
+      outcome: "unverified",
+      reasonCode: "frame_inaccessible",
+      attempted: false,
+      frameKey: null,
+    });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it.each(["visible", "navigate", "sibling"] as const)("rechecks hidden state before applying when it changes (%s)", async (mutation) => {
+    const { sendMessage } = installHiddenSurveyFrames({ mutateOnSecondInspection: mutation });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it("rechecks the live frame inventory before applying, including loaded URL changes", async () => {
+    const { dom, sendMessage } = installHiddenSurveyFrames({
+      frameUrlOnSecondInventory: "https://survey.example/redirected",
+    });
+    const iframe = dom.window.document.getElementById("survey-frame")!;
+    expect((iframe as HTMLIFrameElement).src).toBe("https://survey.example/feedback");
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it("revalidates the active case after the asynchronous hidden-frame inspection", async () => {
+    let invalidated = false;
+    const { sendMessage } = installHiddenSurveyFrames({
+      inspectionDelayMs: 10,
+      onInspection: (count) => { if (count === 2) invalidated = true; },
+    });
+    const validate = vi.fn(async () => {
+      if (invalidated) throw new Error("case changed during iframe inspection");
+    });
+    await expect(applyFillAcrossFrames(1, [instruction], { captureV2: true, validate }))
+      .rejects.toThrow("case changed during iframe inspection");
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it("keeps frame_inaccessible when no unique target exists", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({
+      initialFrameRect: { width: 300, height: 200 },
+      targetStatuses: { 0: "missing" },
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(result.fieldOutcomes?.[0]?.reasonCode).not.toBe("target_missing");
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it("keeps ambiguity when another reachable frame also has a unique target", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({
+      frameDetails: [
+        { frameId: 0, url: "https://payer.example/enroll/enrollment/credentials", parentFrameId: -1 },
+        { frameId: 1, url: "https://survey.example/feedback", parentFrameId: 0 },
+        { frameId: 2, url: "https://payer.example/other", parentFrameId: 0 },
+      ],
+    });
+    const result = await applyFillAcrossFrames(1, [instruction], { captureV2: true });
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "ambiguous_target", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
+  });
+
+  it("does not let an inaccessible frame outside a map's explicit URL scope veto its candidate", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({ initialFrameRect: { width: 300, height: 200 } });
+    const scoped = { ...instruction, pageUrlScope: "https://payer.example/enroll/enrollment/credentials" };
+    const result = await applyFillAcrossFrames(1, [scoped], { captureV2: true });
+    expect(result.filled).toEqual([instruction.label]);
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(true);
+  });
+
+  it("blocks a write when an initially out-of-scope inaccessible frame navigates into scope", async () => {
+    const { sendMessage } = installHiddenSurveyFrames({
+      frameUrlOnSecondInventory: "https://payer.example/enroll/enrollment/credentials",
+    });
+    const scoped = { ...instruction, pageUrlScope: "https://payer.example/enroll/enrollment/credentials" };
+
+    const result = await applyFillAcrossFrames(1, [scoped], { captureV2: true });
+
+    expect(result.filled).toEqual([]);
+    expect(result.fieldOutcomes?.[0]).toMatchObject({ reasonCode: "frame_inaccessible", attempted: false });
+    expect(sendMessage.mock.calls.some(([, message]) => message.type === "APPLY_FILL")).toBe(false);
   });
 });
 

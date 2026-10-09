@@ -5,7 +5,7 @@
 //
 // Reads shape only (label, selector, type) — never the control's value.
 import type { SelectorMatchReport } from "../shared/selectorMatch";
-import { byLabel, LABEL_SELECTOR_PREFIX } from "./fillEngine";
+import { byLabel, isCustomCheckboxElement, LABEL_SELECTOR_PREFIX } from "./fillEngine";
 import {
   describeControl,
   nearestCapturableControl,
@@ -177,7 +177,8 @@ function isFillable(el: Element): boolean {
   return (
     el instanceof HTMLInputElement ||
     el instanceof HTMLSelectElement ||
-    el instanceof HTMLTextAreaElement
+    el instanceof HTMLTextAreaElement ||
+    (isCustomCheckboxElement(el) && el instanceof HTMLElement)
   );
 }
 
