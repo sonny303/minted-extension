@@ -710,6 +710,33 @@ export async function applyFillAcrossFrames(
       skip(instruction, "unsupported", "unsupported_control", "mapping does not resolve to a fillable control", "unverified", unsupported.frameId);
       continue;
     }
+    if (candidates.length === 0 && priorApplyMayHaveChangedPage && reachableFrames.length > 0 && knownPage && eligible.length > 0) {
+      for (const response of reachableFrames) {
+        try {
+          const freshProbeRaw = (await sendToFrame(tabId, response.frameId, {
+            type: "PROBE_FILL",
+            instructions: [{
+              mapId: instruction.mapId,
+              probeKey: targetKeys.get(instruction) as string,
+              selector: instruction.selector,
+              selectorFallbacks: instruction.selectorFallbacks,
+              fieldType: instruction.fieldType,
+              pageStep: instruction.pageStep,
+            }],
+          })) as { ok?: boolean; data?: unknown } | undefined;
+          if (freshProbeRaw?.ok && Array.isArray(freshProbeRaw.data)) {
+            const freshProbe = freshProbeRaw.data.find((r): r is FillProbeResult => isFillProbeResult(r) && r.mapId === instruction.mapId);
+            if (freshProbe && freshProbe.targetStatus === "unique" && freshProbe.pageStatus === "eligible") {
+              candidates.push({ frameId: response.frameId, probe: freshProbe });
+              break;
+            }
+          }
+        } catch {
+          // continue
+        }
+      }
+    }
+
     if (candidates.length === 0) {
       if (unknownPage) {
         skip(instruction, "page_unknown", "page_unknown", PAGE_UNKNOWN_REASON, "page_unknown");
@@ -775,6 +802,29 @@ export async function applyFillAcrossFrames(
     // Inspection above may await browser APIs. Revalidate the active case and
     // mapping generation after those awaits, immediately before value dispatch.
     await validate?.();
+    if (priorApplyMayHaveChangedPage) {
+      try {
+        const freshProbeRaw = (await sendToFrame(tabId, targetFrame.frameId, {
+          type: "PROBE_FILL",
+          instructions: [{
+            mapId: instruction.mapId,
+            probeKey: targetKeys.get(instruction) as string,
+            selector: instruction.selector,
+            selectorFallbacks: instruction.selectorFallbacks,
+            fieldType: instruction.fieldType,
+            pageStep: instruction.pageStep,
+          }],
+        })) as { ok?: boolean; data?: unknown } | undefined;
+        if (freshProbeRaw?.ok && Array.isArray(freshProbeRaw.data)) {
+          const freshProbe = freshProbeRaw.data.find((r): r is FillProbeResult => isFillProbeResult(r) && r.mapId === instruction.mapId);
+          if (freshProbe && freshProbe.targetStatus === "unique") {
+            targetFrame.probe = freshProbe;
+          }
+        }
+      } catch {
+        // proceed with original probe
+      }
+    }
     try {
       priorApplyMayHaveChangedPage = true;
       const raw = (await sendToFrame(tabId, targetFrame.frameId, { type: "APPLY_FILL", instructions: [routed], requireUniqueTarget: true })) as

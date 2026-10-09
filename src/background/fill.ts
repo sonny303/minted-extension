@@ -59,6 +59,7 @@ import {
   type WorkContextTuple,
   type WorkContextValidationResponse,
 } from "../shared/workContext";
+import { resolveFillPage } from "../shared/fillPage";
 
 const CONTRACT_CONTACT_TOKENS = new Set([
   "group.contractingContactName",
@@ -1062,7 +1063,20 @@ export async function fillPortal(
       captureV2: true,
       validate: assertPreparedCurrent,
     });
-    pageResultStatic = await applyFillAcrossFrames(request.tabId, staticFills, validateWithV2);
+    const topFrame = frames.find((f) => f.frameId === 0);
+    const activeUrl = topFrame?.url ?? "";
+    const scopedStaticFills = staticFills.map((instruction) => {
+      if (instruction.pageUrlScope) return instruction;
+      if (
+        activeUrl &&
+        instruction.pageStep &&
+        resolveFillPage(activeUrl, [instruction.pageStep]) === instruction.pageStep
+      ) {
+        return { ...instruction, pageUrlScope: activeUrl };
+      }
+      return instruction;
+    });
+    pageResultStatic = await applyFillAcrossFrames(request.tabId, scopedStaticFills, validateWithV2);
     await assertPreparedCurrent();
   } catch (error) {
     if (prepared && operation) {
