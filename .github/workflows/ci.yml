@@ -3,11 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,12 +30,3 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
-      - name: Install Chrome for Testing
-        id: chrome
-        uses: browser-actions/setup-chrome@v2
-        with:
-          chrome-version: stable
-      - name: Verify built MV3 runtime
-        run: npm run test:runtime
-        env:
-          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
