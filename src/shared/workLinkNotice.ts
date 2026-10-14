@@ -6,9 +6,10 @@ import type { ActiveWorkEndReason, ActiveWorkState } from "./workContext";
 
 type BlockedWork = Extract<ActiveWorkState, { status: "blocked" }>;
 
-/** The pre-0.1.8 line, kept for "ended" and for a block with no reason. */
+/** For "ended" (a manual or org change, a failed or replacing launch) and
+ * for a block recorded before reasons existed. */
 export const WORK_LINK_ENDED_LINE =
-  "The link to the case ended (the payer tab closed or left the payer's site). Open the case in Minted Panel and click Work in portal again, or pick a case here.";
+  "The link to the case ended. Open the case in Minted Panel and click Work in portal again, or pick a case here.";
 
 const LAUNCH_SWAP_PREFIX = "You opened another case from Minted Panel.";
 
