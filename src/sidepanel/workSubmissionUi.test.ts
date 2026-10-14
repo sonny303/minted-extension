@@ -238,9 +238,11 @@ describe("0.1.8 close-out controls", () => {
     runInContext('renderLogControls({ kind: "logFailed" })', changed.scope);
     expect(changed.el("submit-details").hidden).toBe(true);
     expect(changed.el("mark-submitted").hidden).toBe(true);
-    // The refusal stays readable, and Log it is a way back once she checked.
+    // The refusal stays readable with its way forward. Log it doesn't sit
+    // above it: Work would repeat the refusal (E10); manual mode gets a
+    // "Log it again" after the result instead.
     expect(changed.el("submit-status").hidden).toBe(false);
-    expect(changed.el("log-link").hidden).toBe(false);
+    expect(changed.el("log-link").hidden).toBe(true);
   });
 
   it("hides the whole log form on another tab, and brings it back with the entries", () => {

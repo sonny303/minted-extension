@@ -1861,10 +1861,10 @@ function renderLogControls(state: TaskCardState): void {
   const payer = payerLabel();
   const canLog = canLogSubmission();
   const retrying = submitPhase === "failed" && lastLogFailure?.retry === true;
-  // A refusal Try again can't fix still leaves a way to log once she checked.
+  // A refusal Try again can't fix: its result stays, with its way forward.
   const refused = submitPhase === "failed" && !retrying;
   logLink.textContent = `Submitted on ${payer}? Log it`;
-  logLink.hidden = !(canLog && (submitPhase === "idle" || refused) && !fillRunning &&
+  logLink.hidden = !(canLog && submitPhase === "idle" && !fillRunning &&
     state.kind !== "access" && state.kind !== "denied");
   const formOpen = (submitPhase === "form" || retrying) && canLog;
   submitDetails.hidden = !formOpen;
@@ -4300,8 +4300,8 @@ function setLiveRole(box: HTMLElement, role: "status" | "alert"): void {
 }
 
 // "Submitted on {payer}? Log it": works with or without a fill (B2). After a
-// refusal it opens the form again with her entries.
-logLink.addEventListener("click", () => {
+// refusal ("Log it again") the form opens with her entries.
+function openLogForm(): void {
   if (!canLogSubmission()) return;
   if (submitPhase !== "failed") resetSubmitInputs();
   dupConfirmPending = false;
@@ -4310,7 +4310,22 @@ logLink.addEventListener("click", () => {
   logScope = logScopeKey();
   renderTaskCard();
   focusFirstShown(payerRefInput, markSubmittedBtn);
-});
+}
+
+logLink.addEventListener("click", openLogForm);
+
+// A manual log picks its task again on every try, so after a refusal she can
+// check the case and log again. Typed Work can't: the same launch sends the
+// same step and gets the same answer (E10). Only a relaunch changes it, and a
+// relaunch starts fresh anyway.
+function relogButton(): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "link";
+  button.textContent = "Log it again";
+  button.addEventListener("click", openLogForm);
+  return button;
+}
 
 // Closing the form puts focus back on Log it, or on the task title.
 function closeLogForm(): void {
@@ -4396,7 +4411,10 @@ markSubmittedBtn.addEventListener("click", () => {
       lastLogFailure = view;
       setLiveRole(submitStatus, "alert");
       fillNotice(submitStatus, view.tone, [view.text], [supportButton(response.code ?? "offline", fill?.fillSessionId ?? null)]);
-      const next = logNextLink(view.link, caseId, linkTaskId);
+      const next = [
+        ...logNextLink(view.link, caseId, linkTaskId),
+        ...(!isWork && !view.retry ? [relogButton()] : []),
+      ];
       submitNext.replaceChildren(...next);
       submitNext.hidden = next.length === 0;
       renderTaskCard();
