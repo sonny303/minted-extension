@@ -738,3 +738,67 @@ One size per job. Every value maps to an existing token, or adds one where none 
 | 13  | G1 to G5 | Sandbox states, using the same result card with a "Test mode" banner. |
 | 14  | B13 | Remove "No case · Ad hoc fill" from the case picker, pending the PM's call. |
 | 15  | All | Apply the 9.4 size spec: 40 / 36 / 36 heights, 16px checkboxes, 20px pills, 36px section headers, 12px card padding with 6px radius, 11px labels in secondary ink. |
+
+---
+
+## 10. PM decisions, final (Oct 14)
+
+These decisions close section 8 and section 9. Where this section and an earlier one disagree, this one wins.
+
+| # | Decision | What it means for 0.1.8 |
+| --- | -------- | ----------------------- |
+| 1a | AI is off in the fill flow. | Add `AI_FILL_ENABLED = false`. When off, skip `canUseNano` and `PREPARE_AI_FILL` (`main.ts:3584`) and never render `#fill-ai-review`. Keep the code for a later, designed return. |
+| 2a | No status checkbox. | The log form says "Logging moves this case to Submitted." when the case is Not Started or In Progress, and says nothing about status otherwise. Send `bump_status: true` on the Work path too, so the panel can confirm the move. Supersedes Q5 answer B. |
+| 3b | Ad hoc fill stays, as a second exception to "pick a case before you fill". | Regular forms only in 0.1.8. On a case-only form (today Aetna, BCBS KC, BCBS NC) the panel says: "This form opens from a case. Use Work in portal." Full ad hoc on case-only forms comes later. Supersedes 9.5 row 14. |
+| 4a | Draft extension PR now. | sonny303/minted-extension#96. |
+| 5a | The task card reopens on its own when it needs the coordinator. | Fill finished, fill failed or page changed, wrong tab, Log it opened, after logging, and every error. |
+| Removals | All five approved as reviewed in 9.2. | Current task only, no step ticking. No Checklist task picker (the plan line replaces it). No AI controls. Engineer detail and the work-context line move to Details, for admins of the current org. |
+| Layout | All three sections collapse: the task card, Provider details, and "Log a call, email, or note". | Provider details keeps the Edit layout gear, the field picker, the saved per-user layout, and every section (facility, group, insurance, and the rest). |
+| Kept | "Auto-fill" label, case details (status, payer reference, last touch, last note), "Open task in Minted Panel ↗". | |
+| Sizes | The 9.4 size spec. | Fix the cause in the generic `input` and `label` rules, not one checkbox at a time. |
+
+### 10.1 Ad hoc fill in 0.1.8
+
+| Question | Answer |
+| -------- | ------ |
+| Where it shows | The case picker, as "No case · Ad hoc fill", in Work cases mode only. Never on a Work launch. |
+| What it needs | A provider, a group, and a location, same as today (`index.ts:596`). |
+| What it writes | One fill record under the provider, with no case and no task. The server already accepts this (`fillSessions.ts:689-696`: a provider is enough, and a task requires a case). No touch, no status change. |
+| After the fill | "This fill is saved under {provider}, not a case. To log a submission, pick the case." No Log it link. |
+| Case-only forms | **Gap found while recording this.** The panel hides these forms from `GET /api/portals` (`filterLegacyPortalRows`, panel `extensionRoutes.ts:549`), so in Work cases mode the extension cannot tell a case-only form from a page that is not a form. It shows "Open a registered payer portal in the current tab to fill it." (`main.ts:1833`). To show the B5 line, the extension needs to know these forms exist. Options are in 10.5. |
+| Must stay true | The worker still refuses an ad hoc fill while a launched or picked case is active (`activeCase.ts:290-294`). |
+| Test before release | Fill a regular form ad hoc with a real provider. Confirm the fill record saves with no case. Confirm a case-only form shows the B5 line. |
+
+### 10.2 Locked rule, new wording (both CLAUDE.md files)
+
+Replace the "case selection is required before fill" rule with:
+
+> Case selection is required before a fill, with two exceptions that attach to no case by construction: the sandbox test profile, and an ad hoc fill ("No case · Ad hoc fill") on a regular form. Neither writes a touch or moves a status. An ad hoc fill saves its fill record under the provider. Case-only (Work-only) forms are never filled ad hoc.
+
+Panel: `CLAUDE.md`, locked decision 7. Extension: `CLAUDE.md`, "Locked product rules". Both change in the 0.1.8 build, in the same session.
+
+### 10.3 Prototype
+
+One artifact, four boards: the clickable flow, plus three "every state" boards that cover all 67 states from 9.3 with their exact copy and buttons (ad hoc fill is B13 and B13b; the manual-mode plan lines are E1-P). Two copy edits made while drawing them: C9 and C11 say "Minted" instead of "we", to match every other line.
+
+### 10.4 0.1.8 build list
+
+1. Size spec at the root CSS (9.4), including `.capture-row-tick` in Train forms.
+2. Removals 1 to 5 (9.2), with the plan line and the after-log messages.
+3. `AI_FILL_ENABLED = false`.
+4. Log it without a fill: show the link whenever a case is linked or picked on a recognized form, and remove the worker's fill-record checks (`index.ts:2244`, `index.ts:2250-2258`).
+5. `bump_status: true` on the Work path, and the plain Submitted line.
+6. Copy support code on every error and on "record not saved".
+7. Details for admins of the current org (not `canTrainForms`).
+8. Ad hoc fill on regular forms, with the B5 line on case-only forms (needs the 10.5 choice).
+9. Task card reopens on its own (5a). `#handoff-banner` moves above `#org-field` (A6).
+10. The no-exit fixes: A6, D3, E2, E10.
+11. The new locked-rule wording in both CLAUDE.md files.
+12. Version 0.1.8, harness and unit tests, then one full loop on C-1090: launch, allow, fill, Continue, fill page 2, submit, log, and check the case moved to Submitted.
+
+### 10.5 Open question: how the panel knows it is on a case-only form
+
+| Option | What changes | Trade-off |
+| ------ | ------------ | --------- |
+| **A. Panel lists case-only forms in a new `meta` key on `GET /api/portals` (recommended)** | Panel: add `meta.case_only_portals` with each hidden form's name and address pattern. No rows change, so older extensions see nothing new. Extension: mirror it in `apiTypes.ts`, match the tab against it, show the B5 line. | Small panel change, ships through Vercel. Additive contract change, coordinated in one session. Exact B5 copy. |
+| B. Extension only: a broader line on every unrecognized tab | "Minted doesn't see a form it can fill on this tab. If this is a payer form, open it from the case in Minted Panel with Work in portal." | No panel change. Less plain: it shows on tabs that are not forms at all. |
