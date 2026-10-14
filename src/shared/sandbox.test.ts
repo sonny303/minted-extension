@@ -193,7 +193,7 @@ describe("sandboxFillView (G4)", () => {
   });
 
   it("says plainly when the test fill record did not save, without the raw error", () => {
-    const view = sandboxFillView(summary({ logError: "Sandbox fill applied, but telemetry could not be recorded." }));
+    const view = sandboxFillView(summary({ logError: "Test fill applied, but Minted Panel didn't save a record of it." }));
     expect(view.tone).toBe("ok");
     expect(view.recordLine).toBe(
       "Minted Panel didn't save a record of this test fill. You can keep testing.",

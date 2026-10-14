@@ -176,7 +176,7 @@ describe("fill selection safety", () => {
       workFormUrlMatchesPage,
       portalRows: [], sharedPortalRows: [],
       portal: null, portalTabId: null,
-      detectedPageUrl: null, detectedPortalIdentity: null, detectedTabId: null,
+      detectedPageUrl: null, detectedPortalIdentity: null, detectedTabId: null, sandboxActive: false,
       invalidateFillSelection: vi.fn(),
       updateFillReady: vi.fn(), renderActiveCases: vi.fn(), renderCapture: vi.fn(),
       renderCaqh: vi.fn(), refreshPortalAccessPrompt: vi.fn(),

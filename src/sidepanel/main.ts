@@ -3277,8 +3277,16 @@ async function detectPortal(): Promise<void> {
   const nextIdentity = nextPortal == null
     ? null
     : `${nextPortal.portalId}:${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
-  if (portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
-      detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
+  const pageChanged = portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
+    detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity;
+  if (pageChanged) {
+    invalidateFillSelection();
+    // A test-mode result belongs to the page it ran on.
+    if (sandboxActive) {
+      resetSandboxResult();
+      renderSandboxBar();
+    }
+  }
   detectedPageUrl = pageUrl;
   detectedPortalIdentity = nextIdentity;
   detectedTabId = tab?.id ?? null;
@@ -4026,7 +4034,7 @@ fillBtn.addEventListener("click", () => {
       return;
     }
     if (!response.ok) {
-      const lostPage = /could not establish connection|receiving end does not exist|no tab with id|cannot access|cannot be scripted/i
+      const lostPage = /could not establish connection|receiving end does not exist|could not reach the enrollment form|no tab with id|cannot access|cannot be scripted/i
         .test(response.error);
       if (lostPage) showFillProblem(fillLostPageText(), response.code ?? "no-page", tab.id);
       else showFillProblem(response.error, response.code ?? "fill");

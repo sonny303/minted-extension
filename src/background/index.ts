@@ -1631,7 +1631,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Case work only. Train forms has no org, so it cannot read a provider
       // at all — its equivalent is the synthetic mock dry run.
       if ((await readPanelMode()) === "train") {
-        throw new Error("Switch to Work cases to run a sandbox fill.");
+        throw new Error("Switch to Work cases to run a test fill.");
       }
       // Defense in depth against a panel-side state bug (leftover sandbox
       // chrome pointed at a real, non-designated provider): the worker is the
@@ -1641,7 +1641,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // live portal through the no-case, no-attribution sandbox path.
       await assertSandboxProvider(
         request.providerId,
-        "This provider isn't the organization's designated sandbox test profile — refusing to run a no-attribution fill against real provider data.",
+        "This provider isn't the organization's designated test profile. Minted won't run a test fill with real provider data.",
       );
       await ensureContentScript(request.tabId);
       return sandboxFillPortal({
@@ -1660,7 +1660,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // coordinator's live typing.
       await assertSandboxProvider(
         request.providerId,
-        "This provider isn't the organization's designated sandbox test profile — refusing to clear a form that may carry real, in-progress work.",
+        "This provider isn't the organization's designated test profile. Minted won't clear a form that may hold real work.",
       );
       await ensureContentScript(request.tabId);
       const cleared = await clearFormAcrossFrames(request.tabId);

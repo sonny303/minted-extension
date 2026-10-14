@@ -2552,7 +2552,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
         state: null,
         facilityId: null,
       }),
-    ).rejects.toThrow(/designated sandbox test profile/);
+    ).rejects.toThrow(/designated test profile/);
   });
 
   it("allows the fill once the request really names the designated sandbox provider", async () => {
@@ -2675,7 +2675,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
         tabId: 1,
         providerId: FIXTURES.PROVIDER_ID, // a real roster provider, not the sandbox one
       }),
-    ).rejects.toThrow(/designated sandbox test profile/);
+    ).rejects.toThrow(/designated test profile/);
   });
 
   it("clears the form once the request really names the designated sandbox provider", async () => {
