@@ -1,4 +1,10 @@
 import { AD_HOC_CASE_SELECTION } from "../shared/messages";
+import {
+  sendToBackground as sendToWorker,
+  type BgRequest,
+  type BgResponse,
+  type BgResponseMap,
+} from "../shared/messages";
 // Side panel UI: sign-in, org/provider/case selection, and fill controls.
 // All API calls run in the background worker; this file renders state and
 // sends typed messages. Portal detection follows the active tab.
@@ -25,7 +31,6 @@ import type {
 import { canUseNano, matchUnmappedFields, NANO_LIMITS } from "../shared/nanoAi";
 import { aiReviewStatusText, bindAiReviewActions } from "./aiReviewController";
 import {
-  sendToBackground,
   type AuthState,
   type SearchResults,
   type SelectorTestResult,
@@ -102,7 +107,7 @@ import {
   trainFlowPath,
 } from "../shared/fixit";
 import {
-  attestationLine,
+  attestationFailureText,
   attestedOnFor,
   buildCaqhPushOffer,
 } from "../shared/caqh";
@@ -174,6 +179,15 @@ const UUID_RE =
 // The human can still log anyway (one click).
 const DUPLICATE_WINDOW_DAYS = 14;
 
+// The registry-level site access ask (#portal-access). Case work fills these
+// sites; training captures them, and keeps its own wording.
+const CASE_ACCESS_TEXT =
+  "On a payer form? Allow Minted on your organization's payer sites so it can fill them.";
+const CASE_ACCESS_BUTTON = "Allow Minted on payer sites";
+const TRAIN_ACCESS_TEXT =
+  "On a payer portal? Give Minted access to this organization's portal sites so it can capture and fill their forms.";
+const TRAIN_ACCESS_BUTTON = "Enable form capture & fill";
+
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   if (!node) throw new Error(`Missing element #${id}`);
@@ -214,6 +228,7 @@ const passwordInput = el<HTMLInputElement>("password");
 const signinBtn = el<HTMLButtonElement>("signin-btn");
 const signinError = el<HTMLElement>("signin-error");
 const signinHandoffHint = el<HTMLElement>("signin-handoff-hint");
+const signinExpiredHint = el<HTMLElement>("signin-expired-hint");
 const accountEmail = el<HTMLElement>("account-email");
 const accountVersion = el<HTMLElement>("account-version");
 const panelVersion = el<HTMLElement>("panel-version");
@@ -273,6 +288,7 @@ const caqhStatus = el<HTMLElement>("caqh-status");
 const portalRegistryEmpty = el<HTMLElement>("portal-registry-empty");
 const portalAccess = el<HTMLElement>("portal-access");
 const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
+const portalAccessText = el<HTMLElement>("portal-access-text");
 const workPortalAccess = el<HTMLElement>("work-portal-access");
 const workPortalAccessGrant = el<HTMLButtonElement>("work-portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
@@ -420,6 +436,9 @@ let orgs: UserOrgMembership[] = [];
 let activeOrgId: string | null = null;
 let providers: ProviderListItem[] = [];
 let cases: CaseListItem[] = [];
+// The provider whose case list last loaded; null while loading or after a
+// failed read, so an empty list only reads as "no open cases" when it is.
+let casesLoadedFor: string | null = null;
 let facilities: ProviderProfileFacility[] = [];
 let facilitiesLoaded = false;
 // meta.needs_facility from the profile: several locations, server won't
@@ -510,6 +529,9 @@ let applyingHandoffKey: string | null = null;
 // Terminal authenticated failures for one receipt. Cleared only by a newer
 // receipt key so the 30s poll cannot re-hit audited profile/case reads.
 let rejectedHandoffKey: string | null = null;
+// Work launches the panel is still loading (B1). A counter, because a second
+// launch can land while the first load is in flight.
+let workLaunchesOpening = 0;
 // Structured-touch idempotency id — created when a
 // draft first saves, REUSED on every retry (a retry can never double-log),
 // regenerated only after a success.
@@ -967,7 +989,7 @@ function renderQuickCards(cards: QuickCards | null): void {
   }
   providerDob.textContent = cards.dateOfBirth
     ? `DOB ${formatDisplayDate(cards.dateOfBirth)}`
-    : "DOB —";
+    : "DOB not on file";
 
   renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
   // License facts live in the STATE LICENSE detail section from the layout —
@@ -1126,7 +1148,7 @@ function renderPickerRows(query: string): void {
     // No-results state echoes the query back.
     empty.textContent = q
       ? `No fields match "${query.trim()}".`
-      : "The field list couldn't be loaded — close and reopen the panel to retry.";
+      : "The field list couldn't load. Close and reopen the panel to try again.";
     viewSettingsFields.append(empty);
   }
 }
@@ -1235,7 +1257,7 @@ async function copyValue(
       selection?.removeAllRanges();
       selection?.addRange(range);
     }
-    button.textContent = "Copy blocked — press Ctrl+C";
+    button.textContent = "Copy blocked. Press Ctrl+C.";
     window.setTimeout(() => {
       button.textContent = "Copy";
     }, 2500);
@@ -1289,6 +1311,21 @@ function renderDuplicateGuard(): void {
 }
 
 function renderCaseNote(): void {
+  // B11: the list loaded and is empty. The ad hoc option stays in the picker.
+  const providerId = selectedProviderId();
+  const noCases = providerId != null && casesLoadedFor === providerId &&
+    cases.length === 0 && selectedCaseId() == null
+    ? providers.find((p) => p.id === providerId) ?? null
+    : null;
+  if (noCases != null) {
+    const name = [noCases.firstName, noCases.lastName].filter(Boolean).join(" ");
+    const line = document.createElement("span");
+    line.className = "case-note-body";
+    line.textContent = `${name} has no open cases. Search for another, or open Minted Panel.`;
+    caseNote.replaceChildren(line);
+    caseNote.hidden = false;
+    return;
+  }
   const id = selectedCaseId();
   const note = cases.find((c) => c.id === id)?.latestNote ?? null;
   caseNote.hidden = note == null;
@@ -1915,7 +1952,7 @@ function renderGroupSelector(provider: ProviderListItem | null): void {
   }
 
   groupField.hidden = false;
-  const groupPlaceholder = new Option("Select a group…", "");
+  const groupPlaceholder = new Option("Pick the group for this case", "");
   groupPlaceholder.disabled = true;
   groupSelect.add(groupPlaceholder);
 
@@ -2087,6 +2124,43 @@ function isFillReady(): boolean {
   );
 }
 
+// A received launch is still being applied (B1): a handoff under its
+// authenticated reads, or a Work launch the panel is loading.
+function caseOpening(): boolean {
+  return applyingHandoffKey != null || workLaunchesOpening > 0;
+}
+
+// The B1 line. Names come only from what the panel already holds.
+function openingLine(): string {
+  const work = workLaunchesOpening > 0 && activeWorkState.status === "active" &&
+    activeWorkState.record.tuple.ownerKind === "case"
+    ? activeWorkState.record.tuple
+    : null;
+  const handoff = applyingHandoffKey != null ? activeCase : null;
+  const providerId = work?.providerId ?? handoff?.providerId ?? null;
+  const caseId = work?.ownerId ?? handoff?.caseId ?? null;
+  const provider = providers.find((p) => p.id === providerId);
+  const caseItem = cases.find((c) => c.id === caseId);
+  if (provider == null || !caseItem?.payerName || !caseItem.state) {
+    return "Opening the case from Minted Panel…";
+  }
+  const name = [provider.firstName, provider.lastName].filter(Boolean).join(" ");
+  return `Opening ${name}, ${caseItem.payerName} ${caseItem.state}…`;
+}
+
+// Loads a live Work launch with the B1 line up and the queue away.
+async function whileWorkOpens(load: () => Promise<void>): Promise<void> {
+  if (activeWorkState.status !== "active") return load();
+  workLaunchesOpening += 1;
+  updateFillReady();
+  try {
+    await load();
+  } finally {
+    workLaunchesOpening -= 1;
+    updateFillReady();
+  }
+}
+
 function updateFillReady(): void {
   syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
@@ -2105,6 +2179,11 @@ function updateFillReady(): void {
           ? `${formName} form found on this tab.`
           : "Open the payer's form in this tab to fill it.";
   portalStatus.classList.toggle("detected", portalOpen);
+  // B1: a received launch is still loading. Say so, neutrally.
+  if (caseOpening()) {
+    portalStatus.textContent = openingLine();
+    portalStatus.classList.remove("detected");
+  }
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
@@ -2573,10 +2652,12 @@ async function loadCases(
   // Drop the previous provider's rows NOW — the active-cases list must never
   // show provider A's cases under provider B while the fetch is in flight.
   cases = [];
+  casesLoadedFor = null;
   renderActiveCases();
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
   renderCaseStatusPill();
+  renderCaseNote();
   // No valid case is selected during the load — hide any prior case's context.
   refreshCaseContext();
   updateFillReady();
@@ -2594,6 +2675,7 @@ async function loadCases(
   }
 
   cases = response.data;
+  casesLoadedFor = providerId;
   let rememberedId: string | null;
   if (options.preferredCaseId != null) {
     rememberedId = cases.some((c) => c.id === options.preferredCaseId)
@@ -2623,7 +2705,7 @@ async function loadCases(
   if (!isCurrent(generation)) return { status: "stale" };
   selectedGroupId = rememberedGroup.ok ? rememberedGroup.data : null;
   caseSelect.replaceChildren();
-  const placeholder = new Option("Select a case or ad hoc fill…", "", true, rememberedId == null);
+  const placeholder = new Option("Pick a case", "", true, rememberedId == null);
   placeholder.disabled = true;
   caseSelect.add(placeholder);
   caseSelect.add(new Option("No case · Ad hoc fill", AD_HOC_CASE_SELECTION, false, rememberedId === AD_HOC_CASE_SELECTION));
@@ -2796,7 +2878,7 @@ function rescopeFacilitySelectOptions(): void {
   const preselect = currentId != null && scopeIds.has(currentId) ? currentId : null;
   facilitySelect.replaceChildren();
   const placeholder = new Option(
-    "Select a location…",
+    "Pick a location",
     "",
     true,
     preselect == null,
@@ -2970,7 +3052,7 @@ async function loadFacilities(
   }
   facilitySelect.replaceChildren();
   const placeholder = new Option(
-    "Select a location…",
+    "Pick a location",
     "",
     true,
     rememberedId == null,
@@ -3189,7 +3271,7 @@ async function loadOrgs(generation: number): Promise<void> {
   renderOrgContext();
   orgSelect.replaceChildren();
   const placeholder = new Option(
-    "Select an organization…",
+    "Pick the organization you're working in",
     "",
     true,
     storedId == null,
@@ -3354,6 +3436,9 @@ async function updatePortalAccessPrompt(): Promise<number> {
     portalAccess.hidden = true;
     return revision;
   }
+  const training = panelMode === "train";
+  portalAccessText.textContent = training ? TRAIN_ACCESS_TEXT : CASE_ACCESS_TEXT;
+  portalAccessGrant.textContent = training ? TRAIN_ACCESS_BUTTON : CASE_ACCESS_BUTTON;
   portalAccess.hidden = await hasOriginPermissions(patterns);
   return revision;
 }
@@ -3477,7 +3562,8 @@ workPortalAccessGrant.addEventListener("click", () => {
 // releasing shows it again — no confirmation either way.
 function syncQueueVisibility(): void {
   const inHand = selectedProviderId() != null || selectedCaseId() != null;
-  if (inHand) {
+  // B1: no queue under a launch that is still opening.
+  if (inHand || caseOpening()) {
     queueSection.hidden = true;
     return;
   }
@@ -3534,7 +3620,10 @@ function showMain(auth: AuthState): void {
     // Fresh context: this restore load (and every loader it chains into) runs
     // under one generation so it populates uninterrupted. The handoff check
     // runs AFTER orgs load — the org validation needs the membership list.
-    void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
+    void whileWorkOpens(async () => {
+      await loadOrgs(bumpGeneration());
+      await refreshActiveCase();
+    });
     void detectPortal();
     void restoreCapture();
   })();
@@ -3574,7 +3663,9 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeAvatarMenu();
 });
 
-function showSignin(): void {
+// `expired` is true only when a request came back 401 mid-work
+// (handleSessionExpired). The worker keeps the linked case for the same user.
+function showSignin(expired = false): void {
   signinForm.reset();
   setError(signinError, null);
   showView("signin");
@@ -3582,15 +3673,42 @@ function showSignin(): void {
   // Apply pending handoff after sign-in is a first-class path — the
   // sign-in view says a case is waiting instead of silently dropping it.
   signinHandoffHint.hidden = true;
+  signinExpiredHint.hidden = true;
   void (async () => {
-    const response = await sendToBackground({ type: "GET_ACTIVE_CASE" });
-    signinHandoffHint.hidden = !(
-      response.ok &&
-      response.data.status === "active" &&
-      response.data.record.source === "handoff"
-    );
+    const [caseResponse, workResponse] = await Promise.all([
+      sendToBackground({ type: "GET_ACTIVE_CASE" }),
+      expired ? sendToBackground({ type: "GET_ACTIVE_WORK" }) : Promise.resolve(null),
+    ]);
+    const record = caseResponse.ok && caseResponse.data.status === "active"
+      ? caseResponse.data.record
+      : null;
+    const workLinked = workResponse?.ok === true && workResponse.data.status === "active";
+    // A4 when the session ended with a case or launch linked, else A3.
+    const showExpired = expired && (record != null || workLinked);
+    signinExpiredHint.hidden = !showExpired;
+    signinHandoffHint.hidden = showExpired || record?.source !== "handoff";
   })();
   emailInput.focus();
+}
+
+// The worker answers 401 only after its own refresh failed, so the session
+// is gone (A4). Fall back to the sign-in view; worker state is kept.
+function handleSessionExpired(): void {
+  if (views.main.hidden) return;
+  bumpGeneration();
+  resetPanelSession();
+  showSignin(true);
+}
+
+// Every panel request goes through here so a dead session reaches the
+// sign-in view instead of an error box.
+function sendToBackground<T extends BgRequest["type"]>(
+  request: Extract<BgRequest, { type: T }>,
+): Promise<BgResponse<BgResponseMap[T]>> {
+  return sendToWorker<T>(request).then((response) => {
+    if (!response.ok && response.code === 401) handleSessionExpired();
+    return response;
+  });
 }
 
 signinForm.addEventListener("submit", (event) => {
@@ -3620,39 +3738,46 @@ signoutBtn.addEventListener("click", () => {
   bumpGeneration();
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
-    // The sandbox's designated provider is org-specific and the panel is
-    // about to lose all org context — leaving it "active" would carry stale
-    // sandbox chrome into the next sign-in.
-    clearSandboxOnRealSelection();
-    orgs = [];
-    membershipsLoaded = false;
-    orgReady = false;
-    activeOrgId = null;
-    renderOrgContext();
-    providers = [];
-    cases = [];
-    facilities = [];
-    facilitiesLoaded = false;
-    needsFacility = false;
-    caseContextCaseId = null;
-    // Sign-out clears in-memory values the panel holds —
-    // cards, context, search results, banners, the touch draft.
-    activeCase = null;
-    activeCaseStatus = "none";
-    appliedHandoffSelection = null;
-    applyingHandoffKey = null;
-    rejectedHandoffKey = null;
-    handoffNotice = null;
-    renderHandoffBanner();
-    renderQuickCards(null);
-    renderActiveCases();
-    hideSearchResults();
-    searchInput.value = "";
-    resetTouchForm();
-    renderCaseContext(null);
+    resetPanelSession();
     showSignin();
   })();
 });
+
+// The panel's in-memory session. Sign-out and an expired session both clear
+// it; on expiry the worker keeps its own state for the same user.
+function resetPanelSession(): void {
+  // The sandbox's designated provider is org-specific and the panel is
+  // about to lose all org context — leaving it "active" would carry stale
+  // sandbox chrome into the next sign-in.
+  clearSandboxOnRealSelection();
+  orgs = [];
+  membershipsLoaded = false;
+  orgReady = false;
+  activeOrgId = null;
+  renderOrgContext();
+  providers = [];
+  cases = [];
+  casesLoadedFor = null;
+  facilities = [];
+  facilitiesLoaded = false;
+  needsFacility = false;
+  caseContextCaseId = null;
+  // Sign-out clears in-memory values the panel holds —
+  // cards, context, search results, banners, the touch draft.
+  activeCase = null;
+  activeCaseStatus = "none";
+  appliedHandoffSelection = null;
+  applyingHandoffKey = null;
+  rejectedHandoffKey = null;
+  handoffNotice = null;
+  renderHandoffBanner();
+  renderQuickCards(null);
+  renderActiveCases();
+  hideSearchResults();
+  searchInput.value = "";
+  resetTouchForm();
+  renderCaseContext(null);
+}
 
 refreshBtn.addEventListener("click", () => {
   const generation = bumpGeneration();
@@ -4495,7 +4620,7 @@ function renderSearchResults(data: SearchResults): void {
         `${row.payerName ?? "Unknown payer"} · ${row.state}`,
       ]
         .filter(Boolean)
-        .join(" — ");
+        .join(" · ");
       button.append(title);
       const meta = document.createElement("span");
       meta.className = "search-row-meta";
@@ -4790,7 +4915,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
     activeCaseStatus = "none";
     rejectedHandoffKey = key;
     handoffNotice =
-      "A case was handed off for an organization this account isn't a member of, so it was discarded. Sign in with the right account, or use search below.";
+      "This case is in an organization your account isn't part of. Sign in with the right account, or search.";
     renderHandoffBanner();
     updateFillReady();
     return;
@@ -4980,8 +5105,10 @@ async function refreshActiveWork(reloadSelections = true): Promise<void> {
   const changed = activeWorkStateIdentity(activeWorkState) !== previousIdentity;
   if (changed && activeWorkState.status !== "none" && reloadSelections &&
       !views.main.hidden && panelMode !== "train") {
-    await loadOrgs(bumpGeneration());
-    await refreshActiveCase();
+    await whileWorkOpens(async () => {
+      await loadOrgs(bumpGeneration());
+      await refreshActiveCase();
+    });
   }
   await detectPortal();
   renderHandoffBanner();
@@ -5200,12 +5327,12 @@ async function loadQueue(generation: number): Promise<void> {
     return;
   }
   queueSection.hidden = false;
-  queueSection.replaceChildren(searchEmptyLine("Loading your queue…"));
+  queueSection.replaceChildren(searchEmptyLine("Loading your list…"));
   const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
   if (!isCurrent(generation)) return;
   if (!response.ok) {
     queueSection.replaceChildren(
-      searchEmptyLine(`Queue unavailable: ${response.error}`),
+      searchEmptyLine("Can't load your list right now. Use Search."),
     );
     return;
   }
@@ -5295,8 +5422,10 @@ function renderCaqh(): void {
     attestedOnFor(selectedProviderId(), providers),
     localToday(),
   );
+  // B15: one line with the date. The relative age would only repeat it.
   caqhHeadline.textContent = caqhOffer.headline;
-  caqhAttested.textContent = attestationLine(caqhOffer);
+  caqhAttested.textContent = "";
+  caqhAttested.hidden = true;
   // Recently attested profiles use de-emphasized styling rather than nags.
   caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
 }
@@ -5308,6 +5437,7 @@ caqhAttest.addEventListener("click", () => {
   const generation = loadGeneration;
   caqhAttest.disabled = true;
   caqhAttest.textContent = "Recording…";
+  caqhStatus.hidden = true;
   void (async () => {
     const response = await sendToBackground({
       type: "RECORD_CAQH_ATTESTATION",
@@ -5318,7 +5448,9 @@ caqhAttest.addEventListener("click", () => {
     caqhAttest.textContent = "Record attestation";
     if (!isCurrent(generation)) return;
     if (!response.ok) {
-      setError(mainError, response.error);
+      // Said on the card, beside the button that failed.
+      caqhStatus.hidden = false;
+      caqhStatus.textContent = attestationFailureText(response);
       return;
     }
     // Write the server-authoritative date back onto the roster row, which is
