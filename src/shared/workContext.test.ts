@@ -95,6 +95,15 @@ describe("SET_ACTIVE_WORK protocol v2", () => {
     expect(parseSetActiveWork(message).ok).toBe(true);
   });
 
+  it("accepts the Panel's sequential SOP step ids and rejects malformed ones", () => {
+    for (const stepId of ["step-0", "step-12", "step_a", ids.step]) {
+      expect(parseSetActiveWork({ ...caseMessage, stepId }).ok).toBe(true);
+    }
+    for (const stepId of ["", "step 0", "step/0", "s".repeat(65), 0, null]) {
+      expect(parseSetActiveWork({ ...caseMessage, stepId }).ok).toBe(false);
+    }
+  });
+
   it("accepts only the Panel canonical SHA-256 fingerprint format", () => {
     expect(parseSetActiveWork({ ...caseMessage, effectiveMappingFingerprint: `sha256:${"b".repeat(64)}` }).ok).toBe(true);
     for (const effectiveMappingFingerprint of [
