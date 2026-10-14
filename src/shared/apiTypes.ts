@@ -385,6 +385,12 @@ export interface CaseContext {
   payer?: CaseContextParty | null;
   state?: string;
   openTasks?: CaseContextTask[];
+  // MINT-51 — the canonical case status (panel `CaseStatus`, snake_case,
+  // e.g. "not_started") and the monotonic case context version a Work tuple
+  // is stamped with. Optional: an older panel omits both. The worker reads
+  // them only to follow the one version bump a first recorded fill causes.
+  caseStatus?: string | null;
+  contextVersion?: number;
 }
 
 // GET /api/cases?q= — one case-search result row (E4.3 TE-11, the case half of

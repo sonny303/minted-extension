@@ -555,7 +555,37 @@ export async function createMockPanelApi(options = {}) {
     workContexts: new Map(),
     workContextRequests: [],
     beforeWorkContextResponse: null,
+    // Opt-in MINT-51 case context: caseId -> { contextVersion, caseStatus }
+    // (canonical snake_case status). A case listed here gets the panel's
+    // version rules: exact-version validate, the fill guard with its
+    // first-fill auto-start bump (did_auto_start_case), and the typed touch
+    // check with its one +1 excuse. Unlisted cases keep the older behavior.
+    caseWork: new Map(),
+    // Failure injection: each entry fails the next NEW touch POST (after the
+    // idempotent replay check) with { status, error }.
+    touchFailures: [],
+    // idempotency_id -> canonical typed body, so a reused id with a different
+    // body is refused the way the panel refuses it.
+    touchFingerprints: new Map(),
   };
+
+  // Mirrors the panel's typed-submission fingerprint closely enough for the
+  // harness: same id + same body replays; same id + different body is a 409.
+  function canonicalJson(value) {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value != null && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  // The context_version trigger: any status change moves the version by one.
+  function moveCaseStatus(caseId, toStatus) {
+    const work = state.caseWork.get(caseId);
+    if (!work || work.caseStatus === toStatus) return;
+    work.caseStatus = toStatus;
+    work.contextVersion += 1;
+  }
 
   const server = createServer((req, res) => {
     void handle(req, res);
@@ -613,11 +643,20 @@ export async function createMockPanelApi(options = {}) {
       const canonicalTuple = Object.fromEntries(
         Object.entries(tuple ?? {}).filter(([key]) => key !== "protocolVersion"),
       );
+      // A case with modeled context checks the version against the case
+      // itself (strict: launch and fill validation allow no bump).
+      const caseWork = tuple?.ownerKind === "case" ? state.caseWork.get(tuple.ownerId) : null;
+      const comparable = (value) => Object.entries(value ?? {})
+        .filter(([key]) => !caseWork || key !== "contextVersion")
+        .sort();
       if (
         !configured ||
-        JSON.stringify(Object.entries(configured.tuple ?? {}).sort()) !== JSON.stringify(Object.entries(canonicalTuple).sort())
+        JSON.stringify(comparable(configured.tuple)) !== JSON.stringify(comparable(canonicalTuple))
       ) {
         return envelope(res, 409, null, "The Work context or portal mapping changed.");
+      }
+      if (caseWork && caseWork.contextVersion !== tuple.contextVersion) {
+        return envelope(res, 409, null, "Case context changed; refresh the work step.");
       }
       return envelope(res, 200, {
         tuple: canonicalTuple,
@@ -857,8 +896,11 @@ export async function createMockPanelApi(options = {}) {
       const c = CASES.find((row) => row.id === contextMatch[1]);
       if (!c) return envelope(res, 404, null, "Case not found");
       const p = PROVIDERS.find((row) => row.id === c.providerId);
+      const caseWork = state.caseWork.get(c.id);
       res.setHeader("cache-control", "no-store");
       return envelope(res, 200, {
+        // MINT-51 fields, served only for a case with modeled context.
+        ...(caseWork ? { caseStatus: caseWork.caseStatus, contextVersion: caseWork.contextVersion } : {}),
         referenceNumbers: c.payerReferenceId ? [c.payerReferenceId] : [],
         payerPipelineState: c.payerPipelineState ?? "not_started",
         provider: p ? { id: p.id, name: `${p.firstName} ${p.lastName}` } : null,
@@ -915,14 +957,50 @@ export async function createMockPanelApi(options = {}) {
       } else if (typeof body.portal_key !== "string" || body.portal_key.trim() === "") {
         return envelope(res, 422, null, "portal_key is required");
       }
+      const workContext = body.kind === "portal_submission" && body.work_context != null &&
+        typeof body.work_context === "object"
+        ? body.work_context
+        : null;
+      const fingerprint = workContext ? canonicalJson(body) : null;
       // Idempotent replay BEFORE failure injection: a stored touch replays
       // even when the "network" is flaky, mirroring the server-side anchor.
+      // A typed body must match the one the id was first recorded with.
       if (state.touches.has(body.idempotency_id)) {
+        const recorded = state.touchFingerprints.get(body.idempotency_id);
+        if (fingerprint != null && recorded != null && recorded !== fingerprint) {
+          return envelope(res, 409, null, "Idempotency id already used");
+        }
         return envelope(res, 200, state.touches.get(body.idempotency_id));
       }
       if (state.failTouches > 0) {
         state.failTouches -= 1;
         return envelope(res, 500, null, "Internal error");
+      }
+      if (state.touchFailures.length > 0) {
+        const failure = state.touchFailures.shift();
+        return envelope(res, failure.status, null, failure.error ?? `HTTP ${failure.status}`);
+      }
+      // MINT-51 typed submission rules for a case with modeled context: a
+      // named fill must be this exact step's receipt at the tuple's version,
+      // and the case must be at that version, or exactly one past it when
+      // the named fill itself auto-started the case.
+      const caseWork = workContext ? state.caseWork.get(touchesMatch[1]) : null;
+      if (caseWork) {
+        const version = workContext.contextVersion;
+        const named = body.fill_session_id != null ? state.fillSessions.get(body.fill_session_id) : null;
+        if (body.fill_session_id != null && (
+          !named || named.caseId !== touchesMatch[1] || named.launchReceiptId !== workContext.launchReceiptId ||
+          named.contextVersion !== version || named.caseTaskId !== workContext.taskId ||
+          named.caseStepId !== workContext.stepId
+        )) {
+          return envelope(res, 409, null, "The fill receipt does not match this Enrollment Work step");
+        }
+        const exact = caseWork.contextVersion === version;
+        const startedByThisFill = caseWork.contextVersion === version + 1 &&
+          caseWork.caseStatus === "in_progress" && named?.didAutoStartCase === true;
+        if (!exact && !startedByThisFill) {
+          return envelope(res, 409, null, "Case context changed; refresh the work step.");
+        }
       }
       const touch = {
         id: body.idempotency_id,
@@ -937,6 +1015,13 @@ export async function createMockPanelApi(options = {}) {
           : {}),
       };
       state.touches.set(body.idempotency_id, touch);
+      if (fingerprint != null) state.touchFingerprints.set(body.idempotency_id, fingerprint);
+      // The touch trigger moves a Not Started or In Progress case to
+      // Submitted on every extension submission (one more version bump).
+      const submittedCase = body.kind === "portal_submission" ? state.caseWork.get(touchesMatch[1]) : null;
+      if (submittedCase && (submittedCase.caseStatus === "not_started" || submittedCase.caseStatus === "in_progress")) {
+        moveCaseStatus(touchesMatch[1], "submitted");
+      }
       // S4.4: the opt-in bump's outcome rides META, never the touch. The mock
       // mirrors both outcomes so the panel's honest-reporting path is
       // exercised: a case already past In Progress reports skipped.
@@ -1214,13 +1299,33 @@ export async function createMockPanelApi(options = {}) {
       if (!body || typeof body !== "object") {
         return envelope(res, 422, null, "Request body must be a JSON object");
       }
+      // The panel's fill receipt does not select did_auto_start_case; the mock
+      // keeps it on the stored row only (the touch check reads it there).
+      const receiptView = (row) => {
+        const view = { ...row };
+        delete view.didAutoStartCase;
+        return view;
+      };
       if (state.fillSessions.has(body.id)) {
-        return envelope(res, 200, state.fillSessions.get(body.id));
+        return envelope(res, 200, receiptView(state.fillSessions.get(body.id)));
       }
       const tuple = body.workContext;
+      // MINT-51 fill guard for a case with modeled context: the receipt must
+      // carry the case's current version. The FIRST recorded typed fill on a
+      // Not Started case auto-starts it (did_auto_start_case), and that
+      // status move bumps the version by one.
+      const caseWork = tuple?.ownerKind === "case" ? state.caseWork.get(tuple.ownerId) : null;
+      let didAutoStartCase = false;
+      if (caseWork) {
+        if (caseWork.contextVersion !== tuple.contextVersion) {
+          return envelope(res, 409, null, "Case context changed; refresh the work step.");
+        }
+        didAutoStartCase = caseWork.caseStatus === "not_started";
+      }
       const session = {
         ...body,
         performedBy: FIXTURES.USER_ID,
+        ...(caseWork ? { didAutoStartCase } : {}),
         ...(tuple ? {
           isTest: false,
           eventSchemaVersion: body.schemaVersion === 2 ? 2 : 1,
@@ -1242,7 +1347,8 @@ export async function createMockPanelApi(options = {}) {
         } : {}),
       };
       state.fillSessions.set(body.id, session);
-      return envelope(res, 201, session);
+      if (didAutoStartCase) moveCaseStatus(tuple.ownerId, "in_progress");
+      return envelope(res, 201, receiptView(session));
     }
 
     return envelope(res, 404, null, "Not found");

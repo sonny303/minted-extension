@@ -227,6 +227,9 @@ export interface FillSummary {
   // event was recorded; null when logging failed — "Mark submitted" must not
   // reference a fill session the server never stored (it 404s unknown ids).
   fillSessionId: string | null;
+  /** The browser-made id of this fill attempt, set even when the record did
+   * not save. Support codes only; never sent as a fill session. */
+  attemptId?: string;
   // Fillable controls on the page (from FillPageResult). Optional so reports
   // persisted before this field restore cleanly.
   pageFields?: number;

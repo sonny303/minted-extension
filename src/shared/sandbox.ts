@@ -14,9 +14,19 @@
 // to point somewhere else.
 
 import type { ProviderListItem } from "./apiTypes";
+import type { ReportedField, ReportedFieldKind, SandboxFillSummary } from "./fill";
 
-/** How the sandbox names itself wherever it is offered. */
-export const SANDBOX_LABEL = "Sandbox test profile";
+export type { SandboxFillSummary };
+
+/** How the sandbox names itself wherever it is offered. Coordinators call it
+ * test mode; "sandbox" stays an engineering word and never shows. */
+export const SANDBOX_LABEL = "Test profile";
+
+/** G1: the meta line on the Search row. */
+export const SANDBOX_ENTRY_META = "No case needed.";
+
+/** Run test fill or Clear form was clicked with no payer form on the tab. */
+export const SANDBOX_NO_FORM_NOTE = "Open the payer's form in this tab, then try again.";
 
 /** Said when the org has designated nobody — actionable, not a dead end. */
 export const SANDBOX_UNAVAILABLE_NOTE =
@@ -54,4 +64,116 @@ export function isSandboxProvider(
 export function sandboxFillState(provider: ProviderListItem | null): string | null {
   const state = (provider?.homeState ?? "").trim();
   return state === "" ? null : state;
+}
+
+/** The test profile's name as people say it: "First Last". */
+export function sandboxProfileName(provider: Pick<ProviderListItem, "firstName" | "lastName">): string {
+  return [provider.firstName, provider.lastName]
+    .map((part) => (part ?? "").trim())
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/** G1: the Search row's title, "Test profile: First Last". */
+export function sandboxEntryTitle(provider: Pick<ProviderListItem, "firstName" | "lastName">): string {
+  const name = sandboxProfileName(provider);
+  return name === "" ? SANDBOX_LABEL : `${SANDBOX_LABEL}: ${name}`;
+}
+
+/**
+ * Fields a test fill wrote on this page.
+ *
+ * Not `summary.filled`: on a v2 run that counts values read back and checked,
+ * and the engine never reads values back, so it is 0 on every run. The write
+ * count is the setter attempts minus the writes the portal rejected (those
+ * lose their green outline and land in the not-checked list). An older
+ * worker that sends no attempt count falls back to `filled`.
+ */
+export function sandboxFilledCount(
+  summary: Pick<SandboxFillSummary, "filled" | "fieldsAttempted" | "fieldsRejected">,
+): number {
+  if (typeof summary.fieldsAttempted !== "number") return summary.filled;
+  return Math.max(0, summary.fieldsAttempted - (summary.fieldsRejected ?? 0));
+}
+
+// The same "needs a person" set a real fill lists (missing data, uploads,
+// fields marked for a human). Drift, other pages and hidden controls are
+// engineering detail and stay out of the result.
+const NEEDS_YOU_KINDS: ReadonlySet<ReportedFieldKind> = new Set<ReportedFieldKind>([
+  "no_value",
+  "file",
+  "manual",
+  "review",
+]);
+
+function needsYouCount(manual: readonly ReportedField[]): number {
+  return manual.filter((field) => field.kind != null && NEEDS_YOU_KINDS.has(field.kind)).length;
+}
+
+/** G4: what a finished test fill says. Counts only: no labels, no
+ * selectors, no values. */
+export interface SandboxFillView {
+  filled: number;
+  /** Green when Minted wrote a field, red when it wrote none. */
+  tone: "ok" | "danger";
+  /** Headline first, then one plain line. */
+  lines: [string, string];
+  /** Neutral lines about fields Minted did not fill. Empty when none. */
+  skipLines: string[];
+  /** Set when Minted Panel did not save a record of the test fill. */
+  recordLine: string | null;
+}
+
+export function sandboxFillView(
+  summary: Pick<
+    SandboxFillSummary,
+    "filled" | "fieldsAttempted" | "fieldsRejected" | "skipped" | "manual" | "logError"
+  >,
+): SandboxFillView {
+  const filled = sandboxFilledCount(summary);
+  const lines: [string, string] = filled > 0
+    ? [
+        `Filled ${filled} ${filled === 1 ? "field" : "fields"} on this page.`,
+        "Green outline on the page = filled by Minted.",
+      ]
+    : [
+        "Nothing was filled on this page.",
+        "Minted couldn't find this page's trained fields. The portal may have changed.",
+      ];
+  const skipLines: string[] = [];
+  const skipped = summary.skipped.length;
+  if (skipped > 0) {
+    skipLines.push(
+      skipped === 1
+        ? "1 field on this page was skipped."
+        : `${skipped} fields on this page were skipped.`,
+    );
+  }
+  const needs = needsYouCount(summary.manual);
+  if (needs > 0) {
+    skipLines.push(
+      needs === 1
+        ? "1 field on this form needs you: not on file, or filled by hand."
+        : `${needs} fields on this form need you: not on file, or filled by hand.`,
+    );
+  }
+  return {
+    filled,
+    tone: filled > 0 ? "ok" : "danger",
+    lines,
+    skipLines,
+    recordLine: summary.logError != null
+      ? "Minted Panel didn't save a record of this test fill. You can keep testing."
+      : null,
+  };
+}
+
+/** G5: what Clear form says. It reports what it actually changed, so an
+ * already-empty form never reads as a fake success. */
+export function sandboxClearView(cleared: number): { tone: "ok" | "neutral"; text: string } {
+  if (cleared <= 0) return { tone: "neutral", text: "Nothing to clear." };
+  return {
+    tone: "ok",
+    text: `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. Ready to test again.`,
+  };
 }

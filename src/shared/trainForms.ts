@@ -243,7 +243,7 @@ export interface TrainRecognitionInput {
 
 /** Honest mismatch line when selection exists but the tab URL does not match. */
 export function trainMismatchRecognitionText(selectedName: string): string {
-  return `This page doesn’t match ${selectedName} — finish login or open the registered form URL.`;
+  return `This page doesn’t match ${selectedName}. Finish login or open the registered form URL.`;
 }
 
 export const TRAIN_MISMATCH_HINT =
@@ -319,7 +319,7 @@ export function resolveTrainRecognition(input: TrainRecognitionInput): TrainReco
     status: "new",
     portal: null,
     candidateName,
-    recognitionText: `New form — nothing matches this page yet. It will be registered as “${candidateName}”.`,
+    recognitionText: `New form: nothing matches this page yet. It will be registered as “${candidateName}”.`,
     hintText: TRAIN_NEW_HINT,
   };
 }

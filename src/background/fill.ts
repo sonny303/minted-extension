@@ -1267,6 +1267,7 @@ export async function fillPortal(
     // Only reference the session when the server actually stored it — the
     // touches route validates fill_session_id and 404s an unknown id.
     fillSessionId: eventRecorded ? fillSessionId : null,
+    attemptId: fillSessionId,
     pageFields: pageResult.pageFields,
     fieldsAttempted: localAttempted,
     fieldsVerified: localVerified,
@@ -1361,8 +1362,8 @@ export async function sandboxFillPortal(
     throw new Error(
       message.includes("Receiving end does not exist") ||
         message.includes("Could not reach the enrollment form")
-        ? "Could not reach the enrollment form - open the portal page in the current tab and reload it."
-        : `Sandbox fill failed on the page: ${message}`,
+        ? "Minted lost touch with the payer page. Reload it, then try again."
+        : `The test fill stopped on the page: ${message}`,
       { cause: error },
     );
   }
@@ -1408,7 +1409,7 @@ export async function sandboxFillPortal(
     // A logging failure must not un-report a fill that really happened.
     logError = error instanceof Error && error.message === FILL_EVENT_V2_LIMIT_ERROR
       ? FILL_EVENT_V2_LIMIT_ERROR
-      : "Sandbox fill applied, but telemetry could not be recorded.";
+      : "Test fill applied, but Minted Panel didn't save a record of it.";
   }
 
   // The selectors we actually wrote — the exact set "Clear portal form"

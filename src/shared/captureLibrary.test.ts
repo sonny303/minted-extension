@@ -157,7 +157,7 @@ describe("captureLibraryCounts / captureLibrarySummary", () => {
 
   it("says so plainly when neither the page nor the library has anything", () => {
     expect(captureLibrarySummary(captureLibraryCounts([]))).toBe(
-      "Nothing in the shared library for this form yet — capture it to propose its fields.",
+      "Nothing in the shared library for this form yet. Capture it to propose its fields.",
     );
   });
 });

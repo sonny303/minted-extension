@@ -15,7 +15,7 @@ provider data in one click, then logs the fill and the human's submission back
 to the case. Credentialing coordinators otherwise retype the same provider
 details into dozens of portals per provider; this removes that.
 
-**Current release: v0.1.3** (September 28, 2026), packaged and published to the Chrome Web Store as an unlisted extension (Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`) and loaded unpacked for local development. Capture and fill reach **any DB-registered portal** — the panel
+**Current release: v0.1.8** (October 14, 2026), built from `74b4d29` and uploaded to the Chrome Web Store as an unlisted extension (Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`; the panel's `vercel.json` pins `VITE_MINTED_EXTENSION_ID` to it, so Work in portal launches only reach the Store install). The previous Store version was v0.1.3. Capture and fill reach **any DB-registered portal** — the panel
 requests the registry's origins on demand and the worker injects `content.js`
 where there's no static match.
 
@@ -97,11 +97,15 @@ close-out loop silently.
   `{ kind: "portal_submission", portal_key, idempotency_id, fill_session_id?,
 note?, payer_reference_id?, wip_note?, task_id?, pdf_filename?,
 bump_status? }`. Server sets org + user from the JWT.
-- **`bump_status: true`** additionally moves In Progress → Submitted, evidenced
-  by that touch. Off by default and omitted unless asked, so "never an
-  _implicit_ status change" still holds. The outcome rides `meta.status_bump`
-  (`applied`|`skipped` + reason), **never the touch** — a rejected transition
-  is not a failed touch.
+- **`bump_status: true`** asks the panel to REPORT the status move; it does
+  not cause it. The panel's DB trigger moves a Not Started or In Progress case
+  to Submitted on every extension submission touch, whether or not the flag
+  is sent. The extension sends it on every submission log (legacy and typed
+  Work paths) and says so before the click: the log form shows "Logging moves
+  this case to Submitted." when the case is Not Started or In Progress
+  (`logMovesToSubmitted`, `src/shared/closeOut.ts`), so the change is never
+  implicit. The outcome rides `meta.status_bump` (`applied`|`skipped` +
+  reason), **never the touch** — a rejected transition is not a failed touch.
 - **Structured touch:** same route, `kind: "structured_touch"` — `touch_type`
   required (one of seven canonical types); the portal_submission-only fields
   are a loud 422 on this kind. Sets mirrored in `src/shared/structuredTouch.ts`.
@@ -166,17 +170,24 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
 - **The extension never submits portal forms. Unchanged, forever.** The human
   submits; the extension logs.
 - **Write boundary** — the only sanctioned writes: the manual touch POST (both
-  kinds, incl. the opt-in `bump_status`), the user-scoped layout PUT, the
+  kinds, incl. `bump_status`), the user-scoped layout PUT, the
   propose-only field-map POST (**never an approval**), the CAQH attestation
-  POST, and the sandbox's `is_test` shared-test-fill log. Still **no**
-  task-state writes beyond `PATCH /api/tasks/:id/steps`, no mapping approvals,
-  no auto-submit, no auto-touch, no implicit status change.
-- **Case selection is required before fill** — via the handoff, unified search,
-  active-cases list, NBA handback, or manual picker; all funnel into one
-  active-case state. **The sandbox is the one exception** and does not weaken
-  the rule: a sandbox fill is attributable to no case _by construction_ — it
-  writes no touch, moves no status, and logs through a route carrying neither
-  case nor provider.
+  POST, and the sandbox's `is_test` shared-test-fill log. The panel ticks no
+  SOP steps (step ticking was removed in 0.1.8; `COMPLETE_TASK_STEP` and
+  `PATCH /api/tasks/:id/steps` remain, uncalled). No mapping approvals, no
+  auto-submit, no auto-touch, no implicit status change.
+- **Case selection is required before a fill, with two exceptions that attach
+  to no case by construction: the sandbox test profile, and an ad hoc fill
+  ("No case · Ad hoc fill") on a regular form.** (PM, Oct 14.) Cases arrive via
+  the handoff, unified search, active-cases list, NBA handback, or manual
+  picker; all funnel into one active-case state. Neither exception writes a
+  touch or moves a status. A sandbox fill logs through a route carrying
+  neither case nor provider; an ad hoc fill saves its fill record under the
+  provider (it needs a group and a location, and the worker refuses it while
+  a launched or picked case is active). Case-only (Work-only) forms are never
+  filled ad hoc: the panel's registry hides them from manual mode, and
+  coordinators launch them from the case (a workflow rule, not a 0.1.8
+  feature).
 - **A case can have several locations; a fill still targets exactly ONE.**
   (E1.5) When `context.facilities` (the case's full location set) has more
   than one entry, the Workbench lists every location beside the picker —
@@ -191,6 +202,30 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
 - **Never fill from expired context.** The active-case record expires on
   bound-tab close or 60 min idle; the panel closes the gate **and** the worker
   refuses the FILL. Expiry/absence/mismatch are explicit UX states, never silent.
+- **A Work launch stays linked through a tab switch and through pages on the
+  payer's own site in the launched tab** (PM, Q3 answer B). Fill runs only on
+  the form's own pages in the launched tab (`requireActiveWorkForTab` refuses
+  elsewhere without ending the link); closing the tab, leaving the payer's
+  origin, or 60 minutes idle end it (`onActiveWorkTabUpdated`,
+  `reconcileActiveWorkTab`). This is what lets the payer's confirmation page
+  log the submission. Reads that write nothing to a page (the profile behind
+  the picker and Provider details, `GET_PROVIDER_FACILITIES`) follow the live
+  record from any tab (`revalidateActiveWork(..., { requireBoundFormPage:
+  false })`).
+- **A launch follows its own auto-start bump, by inference from two panel
+  facts.** The panel's first recorded typed fill on a Not Started case moves
+  it to In Progress, which bumps `context_version` N to N+1, and the panel
+  refuses a later fill or no-fill log still stamped N. The worker records
+  `{ launchReceiptId, contextVersion, caseStatus }` from a case-context read of
+  the launched case at the tuple's own version
+  (`minted.activeWork.v2.caseObservation`; ids and the status word only).
+  Before a Work fill it reads the case once itself if nothing was observed at
+  that version (`ensureLaunchedCaseObserved`), since the panel caches context
+  per case and may never re-read it under a new launch. When a fill is
+  recorded at N and the observation says `not_started` at N, the tuple moves
+  to N+1 by compare-and-set (`advanceActiveWorkContextVersion`); launch
+  identity (receipt, bound tab) is unchanged, so the panel doesn't reload.
+  `CaseContext.caseStatus` / `contextVersion` are optional in `apiTypes.ts`.
 - **Tokens never touch page context.** Field values never persist in
   `chrome.storage` (fill reports store labels/counts/reasons only; the
   active-case record stores identifiers + URL only). Quick-card values (incl.
@@ -225,6 +260,72 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
 - The service-role key must never appear here. The committed
   `SUPABASE_ANON_KEY` / `API_BASE_URL` in `src/shared/config.ts` are public by
   design; optional `VITE_*` overrides retarget a build without editing source.
+
+## Work cases layout (0.1.8)
+
+Three collapsible sections, open state remembered per viewer in localStorage
+(booleans only): the **task card**, **Provider details** (layout gear, served
+picker and saved per-user layout unchanged), and **Log a call, email, or
+note**. `renderTaskCard()` is the one renderer for the task card and runs
+after every state change (`updateFillReady` calls it); it opens the card on
+its own when the coordinator needs to act or read a result
+(`taskCardNeedsAttention`).
+
+- **Current task only.** No other open tasks and no step checkboxes. The
+  card names the launched task (or the one task on the case that uses this
+  form), shows one state pill (`taskCardPill`), the site access ask in Fill's
+  spot, the fill result, Log it, the log form, the after-log card with Up
+  next, and case details (status, payer reference, last touch, last note).
+- **Log it works with or without a fill** (B2). Typed Work takes its exact
+  case, task and step from the saved fill report, or from the live launch
+  record when there was no fill; the worker names a fill only when Minted
+  Panel holds its record (`summary.eventRecorded`), because the panel 404s an
+  unknown fill id. When the panel sends no fill id (it lets go of its fill
+  result on a page change), the worker recovers this launch's recorded,
+  unlogged fill from its own report (`recoverLaunchFillSessionId`) before
+  falling back to the launch record. Idempotency ids are keyed by fill, or by
+  launch (`launch.<receipt>`) for a Work log with no fill, so a relaunch is a
+  fresh attempt. A no-fill log releases its id after success, and any log
+  releases it on a definite 4xx refusal (not 408/429); network errors and 5xx
+  keep it so a retry replays the same id.
+- **The log belongs to the case plus its launch** (`logScopeKey`,
+  `${caseId}|${launchReceiptId ?? "manual"}`). A page change or tab switch
+  inside that scope keeps the open form, its entries, a failed log and the
+  done card; a different case or a new launch starts fresh. On another tab
+  the whole form is held and the notice says to switch tabs to log it.
+- **No Checklist task picker.** The plan line above Log submission states
+  what logging will do (`submissionPlanLine`); a manual log closes a task
+  only when it is the one task on this form and nothing else on it is open
+  (`manualTaskToClose`).
+- **Errors** carry Copy support code (`supportCode`: version, short case and
+  fill ids, time, code; no names, no values). A failed log offers Try again
+  only when the request never landed: a 5xx, or no code with an empty or
+  network-looking message (`logFailureView`). The worker's own 409s ("may
+  already be recorded", "launch ended") show their own text. After any other
+  refusal, Work offers no re-log (the same launch repeats the same answer,
+  PM E10); manual mode offers "Log it again" after the result, with the
+  entries kept, because a manual log picks its task again.
+- **Admin Details** (fields written, fill record, form key and mapping, work
+  context, every skip, Fix mapping) shows for admins of the CURRENT org only
+  (`isCurrentOrgAdmin`), not `canTrainForms` (admin in any org). The
+  Needs-you list (missing data, uploads, by-hand fields) stays for everyone.
+- **AI is off** (`AI_FILL_ENABLED = false`, `src/shared/config.ts`): no model
+  check, no page scan, no review card. The code is kept for a designed return.
+- The A6 org-switch prompt renders into `#org-switch` above the org picker,
+  never inside `#case-work`; so does a launch notice (A7) while no org has
+  resolved.
+- **Why a link ended (D5).** The worker's block record carries a value-free
+  `reason` (`tab_closed` | `left_site` | `expired` | `ended`) plus the ended
+  launch's `ownerKind`/`ownerId`, surfaced on the `blocked` variant of
+  `ActiveWorkState` (worker↔panel only, not an /api contract). Copy and the
+  "Back to case" rule live in `src/shared/workLinkNotice.ts`. A new launch
+  replacing the one on screen shows a one-time notice (D6,
+  `isLaunchReplacement`). Known blip: the 30 s poll can land inside a new
+  launch's validation and show the generic "link ended" line for a moment.
+- **A dead session drops to sign-in (A4).** Every panel request goes through
+  a local `sendToBackground` wrapper; a 401 resets the panel session (worker
+  state is kept) and shows sign-in with "Your sign-in expired. Sign in again.
+  The case stays linked." when a case or launch is linked.
 
 ## Panel modes — three jobs, one panel
 
@@ -377,6 +478,12 @@ already excludes from queue/generation/scorecard) with **no case in play**.
 Not a synthetic identity — filling as a real provider is what exercises the
 true profile pipeline. State comes from the provider's home state; null is a
 legitimate answer.
+
+**Test mode copy (G1 to G5)** lives in `src/shared/sandbox.ts`: the Search
+row reads "Test profile: {name}", results use the real fill's notice look
+(`sandboxFillView`, `sandboxClearView`), and the count is `fieldsAttempted -
+fieldsRejected` (a test fill's `filled` counts read-back values, which v2 runs
+never report). A result is cleared when the page changes.
 
 **Guarded at BOTH layers, deliberately — neither alone is enough:**
 

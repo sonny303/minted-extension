@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
-import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
+import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY, ACTIVE_WORK_KEY, advanceActiveWorkContextVersion, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, noteRecordedWorkFill, onActiveWorkTabActivated, onActiveWorkTabRemoved, onActiveWorkTabUpdated, readActiveWorkCaseObservation, reconcileActiveWorkTab, recordActiveWorkCaseObservation, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
@@ -469,7 +469,7 @@ describe("exact tab lifecycle", () => {
     expect(stub.tabQueries).toHaveLength(0);
   });
 
-  it("switching away from the bound tab revokes the context", async () => {
+  it("keeps the link through a tab switch, but Fill runs only on the launched tab (Q3)", async () => {
     stub.setQueryTabs([
       { id: 53, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab,
       { id: 54, windowId: 1, url: "https://other.example.com", active: false } as chrome.tabs.Tab,
@@ -484,16 +484,17 @@ describe("exact tab lifecycle", () => {
       lastActivityAt: new Date().toISOString(),
     });
     await onActiveWorkTabActivated(54);
-    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
-    expect(stub.sessionStore.get(ACTIVE_WORK_BLOCK_KEY)).toEqual({ orgId: message.orgId });
-    expect((await getActiveWorkState()).status).toBe("blocked");
-    await expect(requireActiveWorkForTab(54)).rejects.toThrow(/exact Work context ended/);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+    expect((await getActiveWorkState()).status).toBe("active");
+    await expect(requireActiveWorkForTab(54)).rejects.toThrow(/Switch to the form's tab/);
+    // Nothing was revoked by the refusal: coming back resumes the same link.
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
     await clearActiveWork({ allowLegacyFallback: true });
     expect((await getActiveWorkState()).status).toBe("none");
     await expect(requireActiveWorkForTab(54)).resolves.toBeNull();
   });
 
-  it("revokes same-origin navigation outside the selected form path", async () => {
+  it("keeps the link on same-site pages outside the form, and revokes on leaving the site", async () => {
     stub.setQueryTabs([
       { id: 53, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab,
     ]);
@@ -506,7 +507,17 @@ describe("exact tab lifecycle", () => {
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
     });
+    // A confirmation page on the payer's own site keeps the link, so the
+    // coordinator can still log the submission from it.
     await onActiveWorkTabUpdated(53, "https://portal.example.com/admin");
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+    expect((await getActiveWorkState()).status).toBe("active");
+    // Fill is still refused off the form's own pages, without ending the link.
+    navigationHarness.frames.set(53, "https://portal.example.com/admin");
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/isn't part of the form/);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+
+    await onActiveWorkTabUpdated(53, "https://elsewhere.example.net/page");
     expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
     expect((await getActiveWorkState()).status).toBe("blocked");
   });
@@ -557,5 +568,238 @@ describe("exact tab lifecycle", () => {
     })).rejects.toThrow(/Could not reach the enrollment form/);
     expect(navigationHarness.getFrame).toHaveBeenCalledWith({ tabId, frameId: 0 });
     expect(navigationHarness.getFrame.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("why a Work link ended (D5)", () => {
+  const ORIGIN = "https://portal.example.com";
+  const ended = (reason: string) => ({
+    status: "blocked",
+    orgId: message.orgId,
+    reason,
+    ownerKind: "case",
+    ownerId: message.ownerId,
+  });
+
+  function seedLink(tabId: number, lastActivityAt = new Date().toISOString()) {
+    stub.setQueryTabs([{ id: tabId, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab]);
+    navigationHarness.frames.set(tabId, message.portalUrl);
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      tuple: tupleFromSetActiveWorkMessage(message),
+      boundTabId: tabId,
+      formOrigin: ORIGIN,
+      formPath: "/enroll",
+      caseType: "enrollment",
+      createdAt: lastActivityAt,
+      lastActivityAt,
+    });
+  }
+
+  it("records tab_closed and the ended launch's owner ids when the bound tab closes", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    expect((await getActiveWorkState()).status).toBe("active");
+
+    await onActiveWorkTabRemoved(700);
+
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+    // Identifiers and a reason only: nothing else reaches storage.
+    expect(stub.sessionStore.get(ACTIVE_WORK_BLOCK_KEY)).toEqual({
+      orgId: message.orgId,
+      reason: "tab_closed",
+      ownerKind: "case",
+      ownerId: message.ownerId,
+    });
+  });
+
+  it("records left_site when the bound tab navigates to another origin", async () => {
+    seedLink(53);
+    await onActiveWorkTabUpdated(53, "https://elsewhere.example.net/page");
+    expect(await getActiveWorkState()).toEqual(ended("left_site"));
+  });
+
+  it("records expired when a fill finds the link idle past 60 minutes", async () => {
+    seedLink(53, new Date(Date.now() - 61 * 60 * 1000).toISOString());
+    expect((await getActiveWorkState()).status).toBe("expired");
+
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/expired/);
+
+    expect(await getActiveWorkState()).toEqual(ended("expired"));
+  });
+
+  it("names the reason when a worker restart finds the link over", async () => {
+    seedLink(53, new Date(Date.now() - 61 * 60 * 1000).toISOString());
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("expired"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(54);
+    stub.setQueryTabs([]);
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(55);
+    navigationHarness.frames.set(55, "https://elsewhere.example.net/page");
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("left_site"));
+  });
+
+  it("calls anything else ended, and a second clear keeps the first reason", async () => {
+    seedLink(53);
+    await clearActiveWork();
+    expect(await getActiveWorkState()).toEqual(ended("ended"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(53);
+    await onActiveWorkTabRemoved(53);
+    await clearActiveWork();
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+  });
+
+  it("a failed replacing launch reads as ended under the new org, with no owner", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    vi.mocked(validateWorkContext).mockRejectedValueOnce(new Error("network down"));
+    const otherOrg = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    const ack = await handleExternalSetActiveWork({
+      ...message,
+      launchReceiptId: "88888888-8888-4888-8888-888888888888",
+      orgId: otherOrg,
+    }, APP_ORIGIN, 1);
+
+    expect(ack).toEqual({ ok: false, code: "VALIDATION_FAILED" });
+    expect(await getActiveWorkState()).toEqual({ status: "blocked", orgId: otherOrg, reason: "ended" });
+  });
+
+  it("an old block record with no reason still parses as blocked", async () => {
+    seedLink(53);
+    stub.sessionStore.delete(ACTIVE_WORK_KEY);
+    stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, { orgId: message.orgId });
+
+    expect(await getActiveWorkState()).toEqual({ status: "blocked", orgId: message.orgId });
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/prior exact Work context ended/);
+  });
+
+  it("refuses a block record carrying anything beyond identifiers and a known reason", async () => {
+    for (const block of [
+      { orgId: message.orgId, reason: "tab_closed", providerName: "Taylor Example" },
+      { orgId: message.orgId, reason: "closed_by_payer" },
+      { orgId: message.orgId, reason: "tab_closed", ownerKind: "case" },
+      { orgId: message.orgId, reason: "tab_closed", ownerKind: "case", ownerId: "not-an-id" },
+    ]) {
+      stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, block);
+      expect((await getActiveWorkState()).status).toBe("none");
+    }
+  });
+});
+
+describe("the one context-version bump a recorded first fill causes", () => {
+  const ORIGIN = "https://portal.example.com";
+  const receipt = message.launchReceiptId;
+  const OTHER_RECEIPT = "99999999-9999-4999-8999-999999999999";
+
+  function seedLaunch(contextVersion = message.contextVersion, lastActivityAt = new Date().toISOString()) {
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      tuple: { ...tupleFromSetActiveWorkMessage(message), contextVersion },
+      boundTabId: 41,
+      formOrigin: ORIGIN,
+      formPath: "/enroll",
+      caseType: "enrollment",
+      createdAt: lastActivityAt,
+      lastActivityAt,
+    });
+  }
+
+  const storedVersion = () =>
+    (stub.sessionStore.get(ACTIVE_WORK_KEY) as { tuple: { contextVersion: number } }).tuple.contextVersion;
+
+  it("advances only the stored launch at the exact receipt and version (compare-and-set)", async () => {
+    seedLaunch(4);
+    const before = stub.sessionStore.get(ACTIVE_WORK_KEY);
+
+    // A stale receipt or a stale version writes nothing.
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: OTHER_RECEIPT, fromVersion: 4 })).toBe(false);
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 3 })).toBe(false);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toEqual(before);
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(false);
+
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(true);
+    expect(storedVersion()).toBe(5);
+    // Identity is untouched, so the panel keeps the same launch on screen.
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({
+      boundTabId: 41,
+      tuple: { launchReceiptId: receipt, ownerId: message.ownerId },
+    });
+    expect((await getActiveWorkState()).status).toBe("active");
+    expect(await readActiveWorkCaseObservation()).toEqual({
+      launchReceiptId: receipt,
+      contextVersion: 5,
+      caseStatus: "in_progress",
+    });
+
+    // A repeat from the old version can never double-bump.
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(5);
+  });
+
+  it("does not advance an expired or ended launch", async () => {
+    seedLaunch(4, new Date(Date.now() - 61 * 60_000).toISOString());
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    seedLaunch(4);
+    stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, { orgId: message.orgId, reason: "ended" });
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+  });
+
+  it("observes only the launched case at the launch's own version", async () => {
+    seedLaunch(4);
+    expect(await recordActiveWorkCaseObservation("22222222-2222-4222-8222-22222222222f", {
+      contextVersion: 4, caseStatus: "not_started",
+    })).toBeNull();
+    expect(await recordActiveWorkCaseObservation(message.ownerId, {
+      contextVersion: 5, caseStatus: "in_progress",
+    })).toBeNull();
+    expect(await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4 })).toBeNull();
+    expect(await readActiveWorkCaseObservation()).toBeNull();
+
+    expect(await recordActiveWorkCaseObservation(message.ownerId, {
+      contextVersion: 4, caseStatus: "not_started",
+    })).toEqual({ launchReceiptId: receipt, contextVersion: 4, caseStatus: "not_started" });
+  });
+
+  it("bumps after a recorded fill only when the case was observed Not Started at that version", async () => {
+    seedLaunch(4);
+    // No observation: nothing is inferred.
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    // Observed In Progress: the fill started nothing.
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "in_progress" });
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "not_started" });
+    // A fill recorded under another launch or version proves nothing here.
+    expect(await noteRecordedWorkFill({ launchReceiptId: OTHER_RECEIPT, contextVersion: 4 })).toBe(false);
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 3 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(true);
+    expect(storedVersion()).toBe(5);
+    // The next page's fill at the new version starts nothing, and the old
+    // fact cannot be applied twice.
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 5 })).toBe(false);
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(5);
+  });
+
+  it("drops the observation when the link ends", async () => {
+    seedLaunch(4);
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "not_started" });
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(true);
+    await clearActiveWork();
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(false);
   });
 });

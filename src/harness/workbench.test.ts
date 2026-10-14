@@ -155,6 +155,12 @@ interface MockApi {
     // assert exactly one /profile request went out, and what its query
     // string carried.
     requests: Array<{ method: string; path: string }>;
+    // MINT-64 exact Work registry, keyed by portal key.
+    workContexts: Map<string, Record<string, unknown>>;
+    // MINT-51 modeled case context (opt-in per case) and touch failures.
+    caseWork: Map<string, { contextVersion: number; caseStatus: string }>;
+    touchFailures: Array<{ status: number; error?: string }>;
+    touchFingerprints: Map<string, string>;
   };
   close(): Promise<void>;
 }
@@ -181,6 +187,10 @@ afterEach(() => {
   mock.state.learningRequests.length = 0;
   mock.state.failTouches = 0;
   mock.state.failLearnings = 0;
+  mock.state.workContexts.clear();
+  mock.state.caseWork.clear();
+  mock.state.touchFailures.length = 0;
+  mock.state.touchFingerprints.clear();
   Object.assign(mock.state.portalMapping, {
     portalId: "portal-1",
     orgId: null,
@@ -277,6 +287,7 @@ async function seedWorkFillReceipt(
   tuple: typeof WORK_CASE_TUPLE | typeof WORK_CONTRACT_TUPLE = WORK_CASE_TUPLE,
   caseType: "enrollment" | "contract" = tuple.ownerKind === "contract" ? "contract" : "enrollment",
   fillSessionId = WORK_FILL_SESSION,
+  eventRecorded = true,
 ) {
   const { canonicalizeWorkContextTuple } = await import("../shared/workContext");
   const canonicalTuple = canonicalizeWorkContextTuple(tuple);
@@ -303,7 +314,7 @@ async function seedWorkFillReceipt(
       filledLabels: ["NPI"],
       skipped: [],
       manual: [],
-      eventRecorded: true,
+      eventRecorded,
       eventError: null,
       fillSessionId,
       pageFields: 1,
@@ -493,6 +504,70 @@ describe("MINT-58 — exact Work fill submission telemetry", () => {
     expect(mock.state.touchBodies).toHaveLength(2);
     expect(mock.state.touchBodies[1]).toEqual(firstBody);
     expect(mock.state.touches.size).toBe(1);
+  });
+
+  // 0.1.8: Log it works without a fill. The exact case, task and step come
+  // from the live launch record, never from the panel's selection.
+  async function seedLaunchOnly(caseType: "enrollment" | "recredentialing" = "enrollment") {
+    await enterActiveCase({ caseId: FIXTURES.CASE_ID, providerId: FIXTURES.PROVIDER_ID, orgId: FIXTURES.PRIMARY_ORG });
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+    await writePanelMode("case");
+    stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+    const now = new Date().toISOString();
+    stub.sessionStore.set("minted.activeWork.v2", {
+      tuple: WORK_CASE_TUPLE,
+      boundTabId: 21,
+      formOrigin: "https://portal.example.com",
+      formPath: "/enroll",
+      caseType,
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    const { canonicalizeWorkContextTuple } = await import("../shared/workContext");
+    return canonicalizeWorkContextTuple(WORK_CASE_TUPLE);
+  }
+
+  it("logs a Work submission with no fill from the live launch, and asks for the status report", async () => {
+    const tuple = await seedLaunchOnly();
+
+    const result = await markWorkSubmitted({ fillSessionId: null, bumpStatus: true, payerReferenceId: "RFP-1" }) as {
+      touch: { fillSessionId: string | null };
+    };
+
+    expect(result.touch.fillSessionId).toBeNull();
+    expect(mock.state.touchBodies[0]).toMatchObject({
+      kind: "portal_submission",
+      portal_key: tuple.portalKey,
+      fill_session_id: null,
+      work_context: tuple,
+      bump_status: true,
+      payer_reference_id: "RFP-1",
+    });
+    expect(mock.state.touchBodies[0]).not.toHaveProperty("task_id");
+
+    // The no-fill id is released after success: a later deliberate log is a
+    // new touch, not a silent replay of the first.
+    await markWorkSubmitted({ fillSessionId: null, bumpStatus: true, payerReferenceId: "RFP-2" });
+    expect(mock.state.touches.size).toBe(2);
+  });
+
+  it("logs a Work fill whose record never saved without naming the unsaved fill", async () => {
+    const { tuple } = await seedWorkFillReceipt(WORK_CASE_TUPLE, "enrollment", WORK_FILL_SESSION, false);
+
+    await markWorkSubmitted({ bumpStatus: true });
+
+    expect(mock.state.touchBodies[0]).toMatchObject({ fill_session_id: null, work_context: tuple, bump_status: true });
+  });
+
+  it("refuses a no-fill Work log once the launch has ended, and sends nothing", async () => {
+    await expect(markWorkSubmitted({ fillSessionId: null })).rejects.toThrow(/Work launch ended/);
+    expect(mock.state.touchBodies).toHaveLength(0);
+  });
+
+  it("sends recredentialing Work back to Minted Panel", async () => {
+    await seedLaunchOnly("recredentialing");
+    await expect(markWorkSubmitted({ fillSessionId: null })).rejects.toThrow(/Log this work in Minted Panel/);
+    expect(mock.state.touchBodies).toHaveLength(0);
   });
 
   it("does not turn a Contract Work fill receipt into a case touch", async () => {
@@ -2487,7 +2562,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
         state: null,
         facilityId: null,
       }),
-    ).rejects.toThrow(/designated sandbox test profile/);
+    ).rejects.toThrow(/designated test profile/);
   });
 
   it("allows the fill once the request really names the designated sandbox provider", async () => {
@@ -2610,7 +2685,7 @@ describe("SANDBOX_FILL / CLEAR_PORTAL_FORM — refuse any provider that isn't th
         tabId: 1,
         providerId: FIXTURES.PROVIDER_ID, // a real roster provider, not the sandbox one
       }),
-    ).rejects.toThrow(/designated sandbox test profile/);
+    ).rejects.toThrow(/designated test profile/);
   });
 
   it("clears the form once the request really names the designated sandbox provider", async () => {
@@ -2942,5 +3017,316 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
     expect(stub.sessionStore.get(AI_ACCEPTED_RECEIPT_KEY)).toBeNull();
     expect((stub.sessionStore.get(reportKey) as import("../shared/fill").FillReportRecord).summary.fillSessionId)
       .toBe(refill.fillSessionId);
+  });
+});
+
+// A multi-page Work form (test case C-1090): page 1 is filled on a Not
+// Started case, the coordinator clicks Continue, page 2 loads, and the
+// submission is logged from a later page. The mock models the panel's case
+// context version rules (scripts/mock-panel-api.mjs, caseWork).
+describe("Work across pages — recovered fill, the auto-start bump, refused logs", () => {
+  const TAB_ID = 61;
+  const OTHER_TAB_ID = 62;
+  const FORM_ORIGIN = "https://portal.example.com";
+  const FORM_PATH = "/enroll/form";
+  const PAGE_1 = `${FORM_ORIGIN}${FORM_PATH}`;
+  const PAGE_2 = `${FORM_ORIGIN}${FORM_PATH}/step-2`;
+  const PAGE_DONE = `${FORM_ORIGIN}/enroll/confirmation`;
+  const RECEIPT_1 = "11111111-1111-4111-8111-111111111111";
+  const RECEIPT_2 = "22222222-2222-4222-8222-222222222222";
+  const MAP_ID = "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+  const ACTIVE_WORK = "minted.activeWork.v2";
+  let pageUrl = PAGE_1;
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let previousGetAllFrames: typeof chrome.webNavigation.getAllFrames;
+  let previousGetFrame: typeof chrome.webNavigation.getFrame | undefined;
+
+  const mapRow = {
+    id: MAP_ID,
+    orgId: null,
+    portalKey: WORK_CASE_TUPLE.portalKey,
+    urlPattern: null,
+    pageStep: null,
+    mapType: "web",
+    selector: "#npi",
+    selectorFallbacks: null,
+    source: "token",
+    token: "provider.npi",
+    hardcodedValue: null,
+    transform: null,
+    fieldType: "text",
+    notes: null,
+    status: "approved",
+    createdAt: "2026-10-01T00:00:00Z",
+    updatedAt: "2026-10-01T00:00:00Z",
+  };
+
+  function tupleAt(launchReceiptId: string, contextVersion: number) {
+    return { ...WORK_CASE_TUPLE, launchReceiptId, contextVersion };
+  }
+
+  function canonical(tuple: typeof WORK_CASE_TUPLE): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(tuple).filter(([key]) => key !== "protocolVersion"));
+  }
+
+  // The worker's launch record, bound to TAB_ID, plus the panel registry
+  // entry that validates it. A relaunch is the same call with a new receipt.
+  function launch(tuple: typeof WORK_CASE_TUPLE): void {
+    const now = new Date().toISOString();
+    stub.sessionStore.delete("minted.activeWork.v2.blocked");
+    stub.sessionStore.set(ACTIVE_WORK, {
+      tuple,
+      boundTabId: TAB_ID,
+      formOrigin: FORM_ORIGIN,
+      formPath: FORM_PATH,
+      caseType: "enrollment",
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    mock.state.workContexts.set(tuple.portalKey, {
+      tuple: canonical(tuple),
+      caseType: "enrollment",
+      formUrl: PAGE_1,
+      requiresExplicitSelection: true,
+      mappingGeneration: tuple.mappingGeneration,
+      effectiveMappingFingerprint: tuple.effectiveMappingFingerprint,
+      effectiveWebMaps: [mapRow],
+    });
+  }
+
+  const storedTupleVersion = () =>
+    (stub.sessionStore.get(ACTIVE_WORK) as { tuple: { contextVersion: number } }).tuple.contextVersion;
+
+  async function fill() {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({
+      type: "FILL",
+      tabId: TAB_ID,
+      providerId: WORK_CASE_TUPLE.providerId,
+      caseId: WORK_CASE_TUPLE.ownerId,
+      portalKey: WORK_CASE_TUPLE.portalKey,
+      portalId: WORK_CASE_TUPLE.portalId,
+      mappingGeneration: WORK_CASE_TUPLE.mappingGeneration,
+      facilityId: WORK_CASE_TUPLE.facilityId,
+      state: "KS",
+    }) as Promise<import("../shared/fill").FillSummary>;
+  }
+
+  async function logSubmission(fillSessionId: string | null, payerReferenceId: string) {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({
+      type: "MARK_SUBMITTED",
+      providerId: WORK_CASE_TUPLE.providerId,
+      caseId: WORK_CASE_TUPLE.ownerId,
+      portalKey: WORK_CASE_TUPLE.portalKey,
+      fillSessionId,
+      isWorkFill: true,
+      payerReferenceId,
+      bumpStatus: true,
+    }) as Promise<{ touch: { id: string; fillSessionId: string | null } }>;
+  }
+
+  async function readContext() {
+    const { handleRequest } = await import("../background/index");
+    return handleRequest({ type: "GET_CASE_CONTEXT", caseId: WORK_CASE_TUPLE.ownerId });
+  }
+
+  beforeEach(async () => {
+    stub.reset();
+    pageUrl = PAGE_1;
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+    await writePanelMode("case");
+    stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+    stub.sessionStore.set("minted.selectedProviderId", WORK_CASE_TUPLE.providerId);
+    stub.sessionStore.set(`minted.selectedCaseId.${WORK_CASE_TUPLE.providerId}`, WORK_CASE_TUPLE.ownerId);
+    stub.setQueryTabs([{ id: TAB_ID, url: PAGE_1, active: true, windowId: 1 } as chrome.tabs.Tab]);
+    previousSendMessage = chrome.tabs.sendMessage;
+    previousGetAllFrames = chrome.webNavigation.getAllFrames;
+    previousGetFrame = chrome.webNavigation.getFrame;
+    chrome.webNavigation.getFrame = (async () => ({ url: pageUrl })) as unknown as typeof chrome.webNavigation.getFrame;
+    chrome.webNavigation.getAllFrames = (async () => [{ frameId: 0, url: pageUrl }]) as unknown as typeof chrome.webNavigation.getAllFrames;
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown) => {
+      const message = rawMessage as { type?: string; instructions?: Array<{ mapId: string; label: string; selector: string; token?: string }> };
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId, pageStatus: "eligible", targetStatus: "unique", pageSettled: true, radioGroup: false, pageFields: 1,
+          })),
+        };
+      }
+      if (message.type === "APPLY_FILL") {
+        const instructions = message.instructions ?? [];
+        return {
+          ok: true,
+          data: {
+            filled: instructions.map((instruction) => instruction.label),
+            writes: instructions.map((instruction) => ({ selector: instruction.selector, kind: "static", token: instruction.token })),
+            skipped: [],
+            pageFields: 1,
+          },
+        };
+      }
+      throw new Error(`unexpected synthetic portal message ${message.type ?? "?"}`);
+    }) as typeof chrome.tabs.sendMessage;
+    // The case is Not Started at version 4; the launch carries 4.
+    mock.state.caseWork.set(WORK_CASE_TUPLE.ownerId, { contextVersion: 4, caseStatus: "not_started" });
+    launch(tupleAt(RECEIPT_1, 4));
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+    chrome.webNavigation.getAllFrames = previousGetAllFrames;
+    (chrome.webNavigation as { getFrame?: unknown }).getFrame = previousGetFrame;
+  });
+
+  it("follows the first fill's auto-start bump, so page 2 fills and the log lands (C-1090)", async () => {
+    // The panel reads the case on launch: Not Started at the launch's version.
+    expect(await readContext()).toMatchObject({ caseStatus: "not_started", contextVersion: 4 });
+
+    const page1 = await fill();
+    expect(page1.eventRecorded).toBe(true);
+    expect(page1.workContext?.contextVersion).toBe(4);
+    // The recorded fill auto-started the case (4 -> 5); the launch followed it.
+    expect(mock.state.caseWork.get(WORK_CASE_TUPLE.ownerId)).toEqual({ contextVersion: 5, caseStatus: "in_progress" });
+    expect(storedTupleVersion()).toBe(5);
+    expect(stub.sessionStore.get(ACTIVE_WORK)).toMatchObject({ boundTabId: TAB_ID, tuple: { launchReceiptId: RECEIPT_1 } });
+
+    // Continue: page 2 of the same form fills under the current version.
+    pageUrl = PAGE_2;
+    const page2 = await fill();
+    expect(page2.eventRecorded).toBe(true);
+    expect(page2.workContext?.contextVersion).toBe(5);
+    expect(mock.state.fillSessions.size).toBe(2);
+    expect(storedTupleVersion()).toBe(5);
+
+    const result = await logSubmission(page2.fillSessionId, "REF-C1090");
+    expect(result.touch.fillSessionId).toBe(page2.fillSessionId);
+    expect(mock.state.touchBodies.at(-1)).toMatchObject({
+      fill_session_id: page2.fillSessionId,
+      work_context: { launchReceiptId: RECEIPT_1, contextVersion: 5 },
+    });
+  });
+
+  it("follows the bump when the panel never read the case under this launch", async () => {
+    // The panel showed this case before the launch and keeps its cached
+    // context, so no GET_CASE_CONTEXT arrives. The fill reads it once itself.
+    const requestsBefore = mock.state.requests.length;
+    const page1 = await fill();
+    expect(page1.eventRecorded).toBe(true);
+    expect(storedTupleVersion()).toBe(5);
+
+    pageUrl = PAGE_2;
+    const page2 = await fill();
+    expect(page2.eventRecorded).toBe(true);
+    expect(page2.workContext?.contextVersion).toBe(5);
+
+    // Page 2 found the observation already at 5: no second case read.
+    const contextReads = mock.state.requests.slice(requestsBefore).filter((r: { method: string; path: string }) =>
+      r.method === "GET" && r.path === `/api/cases/${WORK_CASE_TUPLE.ownerId}/context`);
+    expect(contextReads).toHaveLength(1);
+  });
+
+  it("logs from a later page by recovering the launch's recorded fill (no fill id from the panel)", async () => {
+    const page1 = await fill();
+    expect(page1.eventRecorded).toBe(true);
+    expect(mock.state.caseWork.get(WORK_CASE_TUPLE.ownerId)).toEqual({ contextVersion: 5, caseStatus: "in_progress" });
+    expect(storedTupleVersion()).toBe(5);
+
+    // The portal moved on and the panel let go of its fill result.
+    pageUrl = PAGE_DONE;
+    const result = await logSubmission(null, "REF-LATER-PAGE");
+
+    // The touch names the page-1 fill, whose own auto-start excuses the bump.
+    expect(result.touch.fillSessionId).toBe(page1.fillSessionId);
+    expect(mock.state.touchBodies).toHaveLength(1);
+    expect(mock.state.touchBodies[0]).toMatchObject({
+      fill_session_id: page1.fillSessionId,
+      work_context: { launchReceiptId: RECEIPT_1, contextVersion: 4 },
+      payer_reference_id: "REF-LATER-PAGE",
+    });
+    const reportKey = `minted.fillReport.${WORK_CASE_TUPLE.providerId}.${WORK_CASE_TUPLE.portalKey}`;
+    expect(stub.sessionStore.get(reportKey)).toMatchObject({ submitted: true });
+  });
+
+  it("frees a refused no-fill log's id, so a relaunch with new entries is a new attempt", async () => {
+    // The case moved on after launch: the launch's version is stale.
+    mock.state.caseWork.set(WORK_CASE_TUPLE.ownerId, { contextVersion: 5, caseStatus: "in_progress" });
+
+    await expect(logSubmission(null, "REF-FIRST")).rejects.toMatchObject({ status: 409 });
+    expect(mock.state.touchBodies).toHaveLength(1);
+    expect(stub.sessionStore.has(`minted.submitTouchId.${WORK_CASE_TUPLE.ownerId}.launch.${RECEIPT_1}`)).toBe(false);
+    expect(stub.sessionStore.has(`minted.submitTouchBodyHash.${WORK_CASE_TUPLE.ownerId}.launch.${RECEIPT_1}`)).toBe(false);
+
+    // The coordinator reopens the task: a new receipt at the current version.
+    launch(tupleAt(RECEIPT_2, 5));
+    const result = await logSubmission(null, "REF-SECOND");
+
+    expect(mock.state.touchBodies).toHaveLength(2);
+    expect(mock.state.touchBodies[1]).toMatchObject({
+      payer_reference_id: "REF-SECOND",
+      fill_session_id: null,
+      work_context: { launchReceiptId: RECEIPT_2, contextVersion: 5 },
+    });
+    expect(mock.state.touchBodies[1]?.idempotency_id).not.toBe(mock.state.touchBodies[0]?.idempotency_id);
+    expect(result.touch.id).toBe(mock.state.touchBodies[1]?.idempotency_id);
+  });
+
+  it("lets a corrected log follow a 422 on the same launch, with no local conflict", async () => {
+    mock.state.touchFailures.push({ status: 422, error: "payer_reference_id is too long" });
+    await expect(logSubmission(null, "REF-TOO-LONG")).rejects.toMatchObject({ status: 422 });
+
+    const result = await logSubmission(null, "REF-FIXED");
+    expect(mock.state.touchBodies).toHaveLength(2);
+    expect(mock.state.touchBodies[1]?.idempotency_id).not.toBe(mock.state.touchBodies[0]?.idempotency_id);
+    expect(result.touch.id).toBe(mock.state.touchBodies[1]?.idempotency_id);
+  });
+
+  it("keeps the id through a 503, so the same entries replay it and changed entries are held back", async () => {
+    mock.state.touchFailures.push({ status: 503, error: "Service unavailable" });
+    await expect(logSubmission(null, "REF-SAME")).rejects.toMatchObject({ status: 503 });
+    const firstId = mock.state.touchBodies[0]?.idempotency_id;
+
+    // The first request may have landed: a different payload under that id
+    // is refused locally and never sent.
+    await expect(logSubmission(null, "REF-CHANGED")).rejects.toThrow(/original payer reference and note/);
+    expect(mock.state.touchBodies).toHaveLength(1);
+
+    const result = await logSubmission(null, "REF-SAME");
+    expect(mock.state.touchBodies).toHaveLength(2);
+    expect(mock.state.touchBodies[1]?.idempotency_id).toBe(firstId);
+    expect(mock.state.touchBodies[1]).toEqual(mock.state.touchBodies[0]);
+    expect(result.touch.id).toBe(firstId);
+    expect(mock.state.touches.size).toBe(1);
+  });
+
+  it("reads the Work profile while another tab is in front or the form tab is off the form", async () => {
+    const { handleRequest } = await import("../background/index");
+    const request = {
+      type: "GET_PROVIDER_FACILITIES" as const,
+      providerId: WORK_CASE_TUPLE.providerId,
+      caseId: WORK_CASE_TUPLE.ownerId,
+      facilityId: null,
+      state: "KS",
+    };
+    stub.setQueryTabs([
+      { id: TAB_ID, url: PAGE_1, active: false, windowId: 1 } as chrome.tabs.Tab,
+      { id: OTHER_TAB_ID, url: "https://mintedpanel.vercel.app/cases", active: true, windowId: 1 } as chrome.tabs.Tab,
+    ]);
+    const before = mock.state.requests.length;
+    const info = await handleRequest(request) as import("../shared/messages").ProviderFacilitiesInfo;
+    expect(info.facilities.length).toBeGreaterThan(0);
+    const profileReads = mock.state.requests.slice(before).filter((row) => row.path.includes("/profile"));
+    expect(profileReads).toHaveLength(1);
+    expect(profileReads[0]?.path).toContain(`caseId=${WORK_CASE_TUPLE.ownerId}`);
+
+    // The bound tab on the payer's confirmation page, outside the form.
+    pageUrl = PAGE_DONE;
+    await expect(handleRequest(request)).resolves.toMatchObject({ facilities: expect.any(Array) });
+    // Still the launch's provider only, and the link is untouched.
+    await expect(handleRequest({ ...request, providerId: FIXTURES.PROVIDER2_ID }))
+      .rejects.toThrow(/does not match the exact Work context/);
+    expect(stub.sessionStore.get(ACTIVE_WORK)).toMatchObject({ boundTabId: TAB_ID });
   });
 });

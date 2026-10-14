@@ -83,9 +83,22 @@ export interface WorkPortalPermissionTarget {
   origin: string;
 }
 
+/** Why a Work link ended. Value-free: the bound tab closed, it left the
+ * payer's origin, 60 minutes passed idle, or anything else (a manual or org
+ * change, a failed or replacing launch). */
+export type ActiveWorkEndReason = "tab_closed" | "left_site" | "expired" | "ended";
+
 export type ActiveWorkState =
   | { status: "none" }
-  | { status: "blocked"; orgId: string | null }
+  | {
+      status: "blocked";
+      orgId: string | null;
+      // Optional: a block recorded before these fields existed has none.
+      reason?: ActiveWorkEndReason;
+      // The ended launch's owner, identifiers only, for "Back to case".
+      ownerKind?: WorkContextCommonTuple["ownerKind"];
+      ownerId?: string;
+    }
   | { status: "active"; record: ActiveWorkRecord }
   | { status: "expired"; record: ActiveWorkRecord };
 

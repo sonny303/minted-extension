@@ -78,7 +78,10 @@ describe("ensureContentScript", () => {
     });
 
     const { ensureContentScript } = await import("./inject");
-    await expect(ensureContentScript(1)).rejects.toThrow(/reload the page and retry/i);
+    // The panel recognizes a lost page by this phrase; the copy has no dash.
+    await expect(ensureContentScript(1)).rejects.toThrow(
+      "Could not reach the enrollment form. Reload the page and try again.",
+    );
   });
 
   it("throws grant/reload guidance when no frame can be injected", async () => {

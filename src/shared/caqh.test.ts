@@ -1,6 +1,13 @@
 // S6.2/S6.3 — CAQH push offer and the exception (gap) strip.
 import { describe, expect, it } from "vitest";
-import { attestationLine, attestedOnFor, buildCaqhPushOffer, findCaqhGaps } from "./caqh";
+import {
+  attestationFailureText,
+  attestationHeadline,
+  attestedOnFor,
+  buildCaqhPushOffer,
+  CAQH_FUTURE_DATE_LINE,
+  findCaqhGaps,
+} from "./caqh";
 import type { ProfileToken } from "./apiTypes";
 
 const TODAY = "2026-07-28";
@@ -39,7 +46,7 @@ describe("attestedOnFor (S6.2 wiring)", () => {
   it("feeds a real date through to the offer, so de-emphasis can actually fire", () => {
     const offer = buildCaqhPushOffer(tokens, attestedOnFor("p1", roster), TODAY);
     expect(offer.deEmphasize).toBe(true);
-    expect(attestationLine(offer)).toBe("Last attested 3 days ago");
+    expect(offer.headline).toBe("CAQH last attested 07/25/2026.");
   });
 });
 
@@ -48,12 +55,6 @@ describe("buildCaqhPushOffer (S6.2)", () => {
     // Offering "40 fields" when 26 are blank is a lie discovered mid-fill.
     const offer = buildCaqhPushOffer(tokens, null, TODAY);
     expect(offer.fieldKeys).toEqual(["provider.npi", "provider.caqhId"]);
-    expect(offer.headline).toBe("Update CAQH — 2 fields");
-  });
-
-  it("says 'field' in the singular", () => {
-    const offer = buildCaqhPushOffer([tokens[0]!], null, TODAY);
-    expect(offer.headline).toBe("Update CAQH — 1 field");
   });
 
   it("de-emphasizes when the profile was attested recently", () => {
@@ -68,15 +69,42 @@ describe("buildCaqhPushOffer (S6.2)", () => {
   });
 });
 
-describe("attestationLine", () => {
-  it("reads naturally at each age", () => {
-    expect(attestationLine(buildCaqhPushOffer(tokens, null, TODAY))).toBe("Never attested");
-    expect(attestationLine(buildCaqhPushOffer(tokens, TODAY, TODAY))).toBe("Attested today");
-    expect(attestationLine(buildCaqhPushOffer(tokens, "2026-07-27", TODAY))).toBe(
-      "Last attested 1 day ago",
+describe("attestationHeadline (B15)", () => {
+  it("names the date the way the panel shows dates", () => {
+    expect(attestationHeadline("2026-07-20")).toBe("CAQH last attested 07/20/2026.");
+    expect(attestationHeadline("2026-07-20T15:04:05Z")).toMatch(/^CAQH last attested \d{2}\/\d{2}\/2026\.$/);
+  });
+
+  it("says not attested yet when there is no date, or none it can read", () => {
+    expect(attestationHeadline(null)).toBe("CAQH not attested yet.");
+    expect(attestationHeadline("")).toBe("CAQH not attested yet.");
+    expect(attestationHeadline("not a date")).toBe("CAQH not attested yet.");
+  });
+
+  it("is the offer's headline, with no em dash", () => {
+    const offer = buildCaqhPushOffer(tokens, null, TODAY);
+    expect(offer.headline).toBe("CAQH not attested yet.");
+    expect(offer.headline).not.toContain("\u2014");
+  });
+});
+
+describe("attestationFailureText (B15)", () => {
+  it("says a refused future date plainly", () => {
+    expect(attestationFailureText({ error: "attested_on cannot be in the future", code: 422 })).toBe(
+      CAQH_FUTURE_DATE_LINE,
     );
-    expect(attestationLine(buildCaqhPushOffer(tokens, "2026-07-20", TODAY))).toBe(
-      "Last attested 8 days ago",
+    expect(CAQH_FUTURE_DATE_LINE).toBe("That date is in the future.");
+  });
+
+  it("keeps every other failure's own message", () => {
+    expect(attestationFailureText({ error: "attested_on must be a YYYY-MM-DD date string", code: 422 })).toBe(
+      "attested_on must be a YYYY-MM-DD date string",
+    );
+    expect(attestationFailureText({ error: "Your role cannot record a CAQH attestation", code: 403 })).toBe(
+      "Your role cannot record a CAQH attestation",
+    );
+    expect(attestationFailureText({ error: "Could not reach Minted Panel - check your connection." })).toBe(
+      "Could not reach Minted Panel - check your connection.",
     );
   });
 });

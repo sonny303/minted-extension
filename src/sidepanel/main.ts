@@ -1,4 +1,10 @@
 import { AD_HOC_CASE_SELECTION } from "../shared/messages";
+import {
+  sendToBackground as sendToWorker,
+  type BgRequest,
+  type BgResponse,
+  type BgResponseMap,
+} from "../shared/messages";
 // Side panel UI: sign-in, org/provider/case selection, and fill controls.
 // All API calls run in the background worker; this file renders state and
 // sends typed messages. Portal detection follows the active tab.
@@ -6,8 +12,8 @@ import "./sidepanel.css";
 import { getExtensionVersionInfo } from "../shared/version";
 import type {
   CaseContext,
+  CaseContextTask,
   CaseListItem,
-  CasePortalTask,
   NextBestActionResult,
   ProviderGroupRef,
   ProviderListItem,
@@ -25,7 +31,6 @@ import type {
 import { canUseNano, matchUnmappedFields, NANO_LIMITS } from "../shared/nanoAi";
 import { aiReviewStatusText, bindAiReviewActions } from "./aiReviewController";
 import {
-  sendToBackground,
   type AuthState,
   type SearchResults,
   type SelectorTestResult,
@@ -39,14 +44,29 @@ import {
   type MatchedPortal,
 } from "../shared/portals";
 import type {
-  CaseContextTaskStep,
   NextBestActionItem,
   PortalFieldMap,
   PortalFieldType,
   PortalRegistryRow,
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
-import { API_BASE_URL } from "../shared/config";
+import {
+  afterLogView,
+  logFailureView,
+  logMovesToSubmitted,
+  manualTaskToClose,
+  MOVES_TO_SUBMITTED_LINE,
+  submissionPlanLine,
+  supportCode,
+  taskCardNeedsAttention,
+  taskCardPill,
+  type AfterLogView,
+  type FormTask,
+  type LogFailureView,
+  type SubmissionPlan,
+  type TaskCardState,
+} from "../shared/closeOut";
+import { AI_FILL_ENABLED, API_BASE_URL } from "../shared/config";
 import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
 import {
   isActiveWorkExpired,
@@ -56,6 +76,13 @@ import {
   type CanonicalWorkContextTuple,
   type WorkPortalPermissionTarget,
 } from "../shared/workContext";
+import {
+  carriedLaunchId,
+  isLaunchReplacement,
+  launchSwapLine,
+  workEndedCaseId,
+  workEndedLine,
+} from "../shared/workLinkNotice";
 import {
   caseReturnUrl,
   evaluateHandoffApplication,
@@ -74,7 +101,6 @@ import {
   type QuickCards,
 } from "../shared/quickCards";
 import {
-  caseContextHasContent,
   facilityAddressLines,
   facilityPickerScope,
   resolveCaseFacilitySelection,
@@ -88,7 +114,7 @@ import {
   trainFlowPath,
 } from "../shared/fixit";
 import {
-  attestationLine,
+  attestationFailureText,
   attestedOnFor,
   buildCaqhPushOffer,
 } from "../shared/caqh";
@@ -142,8 +168,15 @@ import {
 } from "../shared/browseProviders";
 import {
   findSandboxProvider,
+  sandboxClearView,
+  sandboxEntryTitle,
   sandboxFillState,
+  sandboxFillView,
+  sandboxProfileName,
+  SANDBOX_ENTRY_META,
+  SANDBOX_NO_FORM_NOTE,
   SANDBOX_UNAVAILABLE_NOTE,
+  type SandboxFillSummary,
 } from "../shared/sandbox";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -159,6 +192,15 @@ const UUID_RE =
 // Warn before logging a second submission on a case recently marked submitted.
 // The human can still log anyway (one click).
 const DUPLICATE_WINDOW_DAYS = 14;
+
+// The registry-level site access ask (#portal-access). Case work fills these
+// sites; training captures them, and keeps its own wording.
+const CASE_ACCESS_TEXT =
+  "On a payer form? Allow Minted on your organization's payer sites so it can fill them.";
+const CASE_ACCESS_BUTTON = "Allow Minted on payer sites";
+const TRAIN_ACCESS_TEXT =
+  "On a payer portal? Give Minted access to this organization's portal sites so it can capture and fill their forms.";
+const TRAIN_ACCESS_BUTTON = "Enable form capture & fill";
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -200,6 +242,7 @@ const passwordInput = el<HTMLInputElement>("password");
 const signinBtn = el<HTMLButtonElement>("signin-btn");
 const signinError = el<HTMLElement>("signin-error");
 const signinHandoffHint = el<HTMLElement>("signin-handoff-hint");
+const signinExpiredHint = el<HTMLElement>("signin-expired-hint");
 const accountEmail = el<HTMLElement>("account-email");
 const accountVersion = el<HTMLElement>("account-version");
 const panelVersion = el<HTMLElement>("panel-version");
@@ -259,6 +302,7 @@ const caqhStatus = el<HTMLElement>("caqh-status");
 const portalRegistryEmpty = el<HTMLElement>("portal-registry-empty");
 const portalAccess = el<HTMLElement>("portal-access");
 const portalAccessGrant = el<HTMLButtonElement>("portal-access-grant");
+const portalAccessText = el<HTMLElement>("portal-access-text");
 const workPortalAccess = el<HTMLElement>("work-portal-access");
 const workPortalAccessGrant = el<HTMLButtonElement>("work-portal-access-grant");
 const captureSection = el<HTMLElement>("capture-section");
@@ -272,6 +316,7 @@ const captureBatchCount = el<HTMLElement>("capture-batch-count");
 const captureBatchDelete = el<HTMLButtonElement>("capture-batch-delete");
 const captureBatchClear = el<HTMLButtonElement>("capture-batch-clear");
 const sandboxEntry = el<HTMLButtonElement>("sandbox-entry");
+const sandboxEntryHeading = el<HTMLElement>("sandbox-entry-title");
 const sandboxEntryMeta = el<HTMLElement>("sandbox-entry-meta");
 const sandboxUnavailable = el<HTMLElement>("sandbox-unavailable");
 const sandboxBar = el<HTMLElement>("sandbox-bar");
@@ -279,7 +324,7 @@ const sandboxBarNote = el<HTMLElement>("sandbox-bar-note");
 const sandboxFillBtn = el<HTMLButtonElement>("sandbox-fill");
 const sandboxClearBtn = el<HTMLButtonElement>("sandbox-clear");
 const sandboxExitBtn = el<HTMLButtonElement>("sandbox-exit");
-const sandboxStatus = el<HTMLElement>("sandbox-status");
+const sandboxResult = el<HTMLElement>("sandbox-result");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -309,11 +354,15 @@ const submitDetails = el<HTMLElement>("submit-details");
 const payerRefInput = el<HTMLInputElement>("payer-ref-input");
 const wipNoteInput = el<HTMLTextAreaElement>("wip-note-input");
 const taskLink = el<HTMLElement>("task-link");
-const taskLinkLabel = el<HTMLLabelElement>("task-link-label");
 const taskLinkSingle = el<HTMLElement>("task-link-single");
-const taskSelect = el<HTMLSelectElement>("task-select");
-const submitHint = el<HTMLElement>("submit-hint");
+const submitMoves = el<HTMLElement>("submit-moves");
+const submitTitle = el<HTMLElement>("submit-title");
+const payerRefLabel = el<HTMLLabelElement>("payer-ref-label");
 const dupWarn = el<HTMLElement>("dup-warn");
+const dupCancelBtn = el<HTMLButtonElement>("dup-cancel");
+const submitBackBtn = el<HTMLButtonElement>("submit-back");
+const submitNext = el<HTMLElement>("submit-next");
+const logLink = el<HTMLButtonElement>("log-link");
 const markSubmittedBtn = el<HTMLButtonElement>("mark-submitted");
 const submitStatus = el<HTMLElement>("submit-status");
 const touchSection = el<HTMLElement>("touch-section");
@@ -329,6 +378,30 @@ const touchSaveBtn = el<HTMLButtonElement>("touch-save");
 const touchStatus = el<HTMLElement>("touch-status");
 const nbaSection = el<HTMLElement>("nba-section");
 const queueSection = el<HTMLElement>("queue-section");
+// 0.1.8 task card, the three collapsible sections, and the A6 org prompt.
+const orgSwitch = el<HTMLElement>("org-switch");
+const taskCard = el<HTMLElement>("task-card");
+const taskToggle = el<HTMLButtonElement>("task-toggle");
+const taskBody = el<HTMLElement>("task-body");
+const taskTitle = el<HTMLElement>("task-title");
+const taskPill = el<HTMLElement>("task-pill");
+const taskSub = el<HTMLElement>("task-sub");
+const taskOrigin = el<HTMLElement>("task-origin");
+const taskBack = el<HTMLAnchorElement>("task-back");
+const taskNotice = el<HTMLElement>("task-notice");
+const readyTitle = el<HTMLElement>("ready-title");
+const workAccessTitle = el<HTMLElement>("work-access-title");
+const workAccessNote = el<HTMLElement>("work-access-note");
+const fillProblem = el<HTMLElement>("fill-problem");
+const fillYourTurn = el<HTMLElement>("fill-your-turn");
+const fillAgainBtn = el<HTMLButtonElement>("fill-again");
+const fillDetails = el<HTMLDetailsElement>("fill-details");
+const fillDetailsBody = el<HTMLElement>("fill-details-body");
+const openTaskLink = el<HTMLAnchorElement>("open-task-link");
+const providerToggle = el<HTMLButtonElement>("provider-toggle");
+const providerBody = el<HTMLElement>("provider-body");
+const touchToggle = el<HTMLButtonElement>("touch-toggle");
+const touchBody = el<HTMLElement>("touch-body");
 
 // The last successful fill, held so "Mark submitted" can log the touch
 // against the right case and fill session. Cleared whenever the selection
@@ -378,6 +451,9 @@ let orgs: UserOrgMembership[] = [];
 let activeOrgId: string | null = null;
 let providers: ProviderListItem[] = [];
 let cases: CaseListItem[] = [];
+// The provider whose case list last loaded; null while loading or after a
+// failed read, so an empty list only reads as "no open cases" when it is.
+let casesLoadedFor: string | null = null;
 let facilities: ProviderProfileFacility[] = [];
 let facilitiesLoaded = false;
 // meta.needs_facility from the profile: several locations, server won't
@@ -419,12 +495,33 @@ let trainRecognitionRevision = 0;
 let trainRegistryRevision = 0;
 let trainUrlCandidates: MatchedPortal[] = [];
 let lastFill: LastFill | null = null;
-// Legacy SOP task selected by portal key. Typed Work submissions bypass this
-// picker and use the exact step pinned to LastFill.workContext.
-let selectedTaskId: string | null = null;
 // First "Mark submitted" click on a recently submitted case shows a warning;
 // the next click logs anyway. Reset on selection change or a fresh fill.
 let dupConfirmPending = false;
+// 0.1.8 close-out and task card state.
+type SubmitPhase = "idle" | "form" | "logging" | "done" | "failed";
+let submitPhase: SubmitPhase = "idle";
+let lastLogFailure: LogFailureView | null = null;
+let lastLogMoved = false;
+// The case and Work launch the log form, its entries and its result belong
+// to (logScopeKey). A page change inside it keeps them; a different case or a
+// new launch starts fresh. Null while nothing is being logged.
+let logScope: string | null = null;
+// The fill result on screen (null = none). Drives the pill and Details.
+let lastSummary: FillSummary | null = null;
+let fillRunning = false;
+// Chrome said no to the one-time site access ask (B8).
+let workAccessDenied = false;
+// The attention state the task card last opened itself for (5a).
+let taskAttentionKey: string | null = null;
+// The state Provider details last opened itself for (fill by hand, access
+// not allowed). It opens once per state, so closing it sticks.
+let providerAttentionKey: string | null = null;
+// The last coverage read, so the offer can be hidden and shown again.
+let lastCoverage: FillCoverage | null = null;
+// The tab the panel last detected, so a Work launch can tell "another tab"
+// from "this tab left the form".
+let detectedTabId: number | null = null;
 // Coverage fetch key — de-dupes refreshCoverage calls. Null when not fill-ready.
 // Depends on provider, facility, portal, and state — not the case.
 let coverageKey: string | null = null;
@@ -452,6 +549,9 @@ let applyingHandoffKey: string | null = null;
 // Terminal authenticated failures for one receipt. Cleared only by a newer
 // receipt key so the 30s poll cannot re-hit audited profile/case reads.
 let rejectedHandoffKey: string | null = null;
+// Work launches the panel is still loading (B1). A counter, because a second
+// launch can land while the first load is in flight.
+let workLaunchesOpening = 0;
 // Structured-touch idempotency id — created when a
 // draft first saves, REUSED on every retry (a retry can never double-log),
 // regenerated only after a success.
@@ -467,6 +567,144 @@ let searchSeq = 0;
 let loadGeneration = 0;
 function bumpGeneration(): number {
   return ++loadGeneration;
+}
+
+// ---------------------------------------------------------------------------
+// 0.1.8: three collapsible sections (task card, Provider details, Log a call,
+// email, or note). Open or closed is a per-viewer convenience kept in
+// localStorage as a boolean; the task card also opens on its own when it
+// needs the coordinator (PM decision 5a).
+// ---------------------------------------------------------------------------
+type SectionKey = "task" | "provider" | "touch";
+const SECTION_DEFAULTS: Record<SectionKey, boolean> = { task: true, provider: false, touch: false };
+const sectionParts: Record<SectionKey, { toggle: HTMLButtonElement; body: HTMLElement }> = {
+  task: { toggle: taskToggle, body: taskBody },
+  provider: { toggle: providerToggle, body: providerBody },
+  touch: { toggle: touchToggle, body: touchBody },
+};
+
+function readSectionOpen(key: SectionKey): boolean {
+  try {
+    const stored = localStorage.getItem(`minted.section.${key}`);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+  } catch {
+    // Storage blocked: the defaults stand.
+  }
+  return SECTION_DEFAULTS[key];
+}
+
+function setSectionOpen(key: SectionKey, open: boolean, remember = false): void {
+  const { toggle, body } = sectionParts[key];
+  toggle.setAttribute("aria-expanded", String(open));
+  body.hidden = !open;
+  if (!remember) return;
+  try {
+    localStorage.setItem(`minted.section.${key}`, open ? "1" : "0");
+  } catch {
+    // Not remembered; the section still toggles.
+  }
+}
+
+for (const key of Object.keys(sectionParts) as SectionKey[]) {
+  setSectionOpen(key, readSectionOpen(key));
+  sectionParts[key].toggle.addEventListener("click", () => {
+    setSectionOpen(key, sectionParts[key].toggle.getAttribute("aria-expanded") !== "true", true);
+  });
+}
+
+// The role in the org the panel is working as. Admin Details follow THIS
+// org's role, not canTrainForms (admin in any org).
+function currentMembership(): UserOrgMembership | null {
+  return orgs.length === 1
+    ? (orgs[0] ?? null)
+    : (orgs.find((o) => o.orgId === activeOrgId) ?? null);
+}
+
+function isCurrentOrgAdmin(): boolean {
+  return currentMembership()?.role === "admin";
+}
+
+function isCurrentOrgReadOnly(): boolean {
+  return currentMembership()?.role === "billing";
+}
+
+// "Copy support code": version, short case and fill ids, time, error code.
+// No names and no values, so a specialist can paste it anywhere.
+function supportButton(
+  code: string | number | null,
+  fillId: string | null = null,
+  tone: "danger" | "plain" = "plain",
+): HTMLButtonElement {
+  const text = supportCode({
+    version: getExtensionVersionInfo().version,
+    caseId: selectedCaseId(),
+    fillId,
+    at: new Date(),
+    code,
+  });
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = tone === "danger" ? "link support-code danger" : "link support-code";
+  button.textContent = "Copy support code";
+  button.title = text;
+  button.addEventListener("click", () => {
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        button.textContent = "Support code copied";
+      },
+      () => {
+        // Clipboard refused: show the code so it can be copied by hand.
+        button.textContent = text;
+      },
+    );
+  });
+  return button;
+}
+
+type NoticeTone = "ok" | "warn" | "danger" | "neutral";
+type NoticeLine = string | { text: string; strong?: boolean };
+
+// One notice box: tone, lines (the first may be a bold headline), then any
+// buttons or links. Replaces the box's content and shows it.
+function fillNotice(
+  box: HTMLElement,
+  tone: NoticeTone,
+  lines: readonly NoticeLine[],
+  extra: readonly HTMLElement[] = [],
+): void {
+  box.className = `notice notice-${tone}`;
+  box.replaceChildren();
+  for (const line of lines) {
+    const span = document.createElement("span");
+    if (typeof line === "string") {
+      span.textContent = line;
+    } else {
+      span.textContent = line.text;
+      if (line.strong) span.className = "notice-headline";
+    }
+    box.append(span);
+  }
+  box.append(...extra);
+  box.hidden = false;
+}
+
+function externalLink(label: string, href: string, className = "link"): HTMLAnchorElement {
+  const link = document.createElement("a");
+  link.className = className;
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = label;
+  return link;
+}
+
+function caseUrl(caseId: string): string {
+  return caseReturnUrl(API_BASE_URL, caseId);
+}
+
+function taskUrl(taskId: string): string {
+  return new URL(`/tasks/${encodeURIComponent(taskId)}`, API_BASE_URL).toString();
 }
 function isCurrent(generation: number): boolean {
   return generation === loadGeneration;
@@ -771,7 +1009,7 @@ function renderQuickCards(cards: QuickCards | null): void {
   }
   providerDob.textContent = cards.dateOfBirth
     ? `DOB ${formatDisplayDate(cards.dateOfBirth)}`
-    : "DOB —";
+    : "DOB not on file";
 
   renderGroupedDetails(providerIds, cards.type1Fields, selectedProviderId());
   // License facts live in the STATE LICENSE detail section from the layout —
@@ -930,7 +1168,7 @@ function renderPickerRows(query: string): void {
     // No-results state echoes the query back.
     empty.textContent = q
       ? `No fields match "${query.trim()}".`
-      : "The field list couldn't be loaded — close and reopen the panel to retry.";
+      : "The field list couldn't load. Close and reopen the panel to try again.";
     viewSettingsFields.append(empty);
   }
 }
@@ -1039,7 +1277,7 @@ async function copyValue(
       selection?.removeAllRanges();
       selection?.addRange(range);
     }
-    button.textContent = "Copy blocked — press Ctrl+C";
+    button.textContent = "Copy blocked. Press Ctrl+C.";
     window.setTimeout(() => {
       button.textContent = "Copy";
     }, 2500);
@@ -1067,7 +1305,7 @@ function renderDuplicateGuard(): void {
 
   const text = document.createElement("p");
   text.className = "dup-pickup-text";
-  text.textContent = `This case was marked submitted ${phrase}. Someone may already have done this work.`;
+  text.textContent = `This case was logged as submitted ${phrase}. Check before you work it again.`;
   dupPickup.append(text);
 
   const actions = document.createElement("div");
@@ -1075,7 +1313,7 @@ function renderDuplicateGuard(): void {
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "link";
-  dismiss.textContent = "Continue anyway";
+  dismiss.textContent = "Continue";
   dismiss.addEventListener("click", () => {
     dismissedDupCaseIds.add(caseId);
     renderDuplicateGuard();
@@ -1087,12 +1325,27 @@ function renderDuplicateGuard(): void {
   link.href = `${API_BASE_URL}/cases/${caseId}`;
   link.target = "_blank";
   link.rel = "noreferrer";
-  link.textContent = "See the touchlog ↗";
+  link.textContent = "Open case ↗";
   actions.append(link);
   dupPickup.append(actions);
 }
 
 function renderCaseNote(): void {
+  // B11: the list loaded and is empty. The ad hoc option stays in the picker.
+  const providerId = selectedProviderId();
+  const noCases = providerId != null && casesLoadedFor === providerId &&
+    cases.length === 0 && selectedCaseId() == null
+    ? providers.find((p) => p.id === providerId) ?? null
+    : null;
+  if (noCases != null) {
+    const name = [noCases.firstName, noCases.lastName].filter(Boolean).join(" ");
+    const line = document.createElement("span");
+    line.className = "case-note-body";
+    line.textContent = `${name} has no open cases. Search for another, or open Minted Panel.`;
+    caseNote.replaceChildren(line);
+    caseNote.hidden = false;
+    return;
+  }
   const id = selectedCaseId();
   const note = cases.find((c) => c.id === id)?.latestNote ?? null;
   caseNote.hidden = note == null;
@@ -1115,18 +1368,6 @@ function fmtContextDate(iso: string): string {
   return formatDisplayDate(iso);
 }
 
-function contextRow(label: string): {
-  row: HTMLDivElement;
-  labelEl: HTMLSpanElement;
-} {
-  const row = document.createElement("div");
-  row.className = "case-context-row";
-  const labelEl = document.createElement("span");
-  labelEl.className = "case-context-label";
-  labelEl.textContent = label;
-  row.append(labelEl);
-  return { row, labelEl };
-}
 
 // "not_started" → "Not started" for the pipeline pill; the raw value is the
 // server pipeline state key.
@@ -1265,195 +1506,58 @@ async function refreshFacilityCards(
   maybeRetryFacilityCards();
 }
 
-// Render read-only case context (pipeline, tracking IDs, tasks, notes).
-// stepList() renders SOP steps for the current portal; step toggles PATCH the server.
-function stepList(
-  taskId: string,
-  steps: readonly CaseContextTaskStep[],
-): HTMLElement {
-  const list = document.createElement("ul");
-  list.className = "step-list";
-  for (const step of steps) {
-    const li = document.createElement("li");
-    li.className = "step-row";
-    const onThisPage = portal != null && step.portalKey === portal.key;
-    if (onThisPage) li.classList.add("step-row-here");
-
-    const label = document.createElement("label");
-    label.className = "step-label";
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = step.isCompleted;
-    // A completed step is terminal here: un-ticking is a webapp correction,
-    // not something the panel should offer mid-fill.
-    box.disabled = step.isCompleted;
-    const text = document.createElement("span");
-    text.textContent = step.label;
-    label.append(box, text);
-    li.append(label);
-
-    if (onThisPage) {
-      const chip = document.createElement("span");
-      chip.className = "pill this-page-chip";
-      chip.textContent = "THIS PAGE";
-      li.append(chip);
-    }
-
-    const error = document.createElement("p");
-    error.className = "step-error";
-    error.hidden = true;
-    li.append(error);
-
-    box.addEventListener("change", () => {
-      if (!box.checked) return;
-      const caseId = selectedCaseId();
-      box.disabled = true;
-      error.hidden = true;
-      void (async () => {
-        const response = await sendToBackground({
-          type: "COMPLETE_TASK_STEP",
-          taskId,
-          stepId: step.id,
-        });
-        if (!response.ok) {
-          // Explicit failure: revert the box and say why (the server's own
-          // message, e.g. 'Complete "Upload W-9" first').
-          box.checked = false;
-          box.disabled = false;
-          error.hidden = false;
-          error.textContent = response.error;
-          return;
-        }
-        // Re-read the context so the whole checklist reflects the server's
-        // state (including a task that just rolled up to completed).
-        if (caseId) refreshCaseContext();
-      })();
-    });
-    list.append(li);
-  }
-  return list;
+// Touch type value → its label ("portal" → "Portal Check").
+function touchTypeLabel(value: string | null): string | null {
+  if (value == null) return null;
+  return STRUCTURED_TOUCH_TYPES.find((t) => t.value === value)?.label ?? humanizeStateKey(value);
 }
 
+function caseDetailRow(label: string, value: string, mono = false): void {
+  const term = document.createElement("span");
+  term.className = "case-context-label";
+  term.textContent = label;
+  const detail = document.createElement("span");
+  detail.className = mono ? "case-context-value mono" : "case-context-value";
+  detail.textContent = value;
+  caseContextBox.append(term, detail);
+}
+
+// Case details at the foot of the task card: status, payer reference, last
+// touch, last note. Read-only. The task list and step checkboxes are gone in
+// 0.1.8 (current task only; step work lives in Minted Panel).
 function renderCaseContext(
   context: CaseContext | null,
   deferSelectionWrites = false,
 ): void {
   caseContextData = context;
   caseContextBox.replaceChildren();
-  // Rescope #facility-select to this case's locations (or widen
-  // back to the provider's full set) BEFORE maybeApplyCaseFacility runs, so
-  // the case's primary has an <option> to land on. Independent of the
-  // hasContent gate below (a "quiet" case's location still matters) and of
-  // the render list, which is purely cosmetic beside it.
+  // Rescope #facility-select to this case's locations (or widen back to the
+  // provider's full set) BEFORE maybeApplyCaseFacility runs, so the case's
+  // primary has an <option> to land on.
   rescopeFacilitySelectOptions();
   renderCaseLocations(context);
-  // Adopt facility even when the context card is empty (new case with no notes).
-  // anything to SHOW — a freshly generated case with no note/touch/tasks/
-  // pipeline/refs yet ("quiet") still has its own selectedFacility, and that
-  // must still get adopted. Run this before the hasContent early return,
-  // unconditionally (its own internal guards handle a null context safely).
+  // Adopt the case's facility even when the case has nothing else to show.
   maybeApplyCaseFacility(deferSelectionWrites);
-  const refs = context?.referenceNumbers ?? [];
-  const note = context?.latestNote ?? null;
-  const touch = context?.latestTouch ?? null;
-  const tasks = context?.openTasks ?? [];
-  const pipeline = context?.payerPipelineState ?? null;
-  const hasContent = caseContextHasContent(context);
-  caseContextBox.hidden = context == null || !hasContent;
   renderIdentityGuard();
-  if (context == null || !hasContent) return;
-
-  // Payer pipeline state (read-only).
-  if (pipeline != null) {
-    const { row } = contextRow("Pipeline");
-    const pill = document.createElement("span");
-    pill.className = "pill pill-pipeline";
-    pill.textContent = humanizeStateKey(pipeline);
-    row.append(pill);
-    caseContextBox.append(row);
+  caseContextBox.hidden = context == null;
+  if (context != null) {
+    const status = caseStatusNow();
+    const refs = context.referenceNumbers ?? [];
+    const touch = context.latestTouch;
+    const note = context.latestNote;
+    caseDetailRow("Case status", status ?? "Not set");
+    caseDetailRow("Payer reference", refs.length > 0 ? refs.join(", ") : "None yet", refs.length > 0);
+    const touchText = touch == null
+      ? ""
+      : [
+          touchTypeLabel(touch.touchType),
+          touch.outcome ? humanizeStateKey(touch.outcome) : null,
+          touch.touchDate ? fmtContextDate(touch.touchDate) : null,
+        ].filter(Boolean).join(" · ");
+    caseDetailRow("Last touch", touchText || "None yet");
+    if (note != null) caseDetailRow("Last note", note.content);
   }
-
-  // Reference id(s) — the case's tracking ID. Hidden when the case has none.
-  if (refs.length > 0) {
-    const { row } = contextRow(
-      refs.length === 1 ? "Tracking ID" : "Tracking IDs",
-    );
-    const value = document.createElement("span");
-    value.className = "case-context-ref-value mono";
-    value.textContent = refs.join(", ");
-    row.append(value);
-    caseContextBox.append(row);
-  }
-
-  // Open tasks and SOP steps, scoped to the
-  // portal in hand when one is recognized. Ticking a step WRITES
-  // (PATCH /api/tasks/:id/steps); the server owns the ordering rule and a
-  // rejection is shown verbatim — never a false success.
-  if (tasks.length > 0) {
-    // Scope to the portal in hand: a task counts when any of its steps names
-    // the detected portal. Off a recognized page, all open tasks show.
-    const scoped = portal
-      ? tasks.filter((t) =>
-          (t.steps ?? []).some((st) => st.portalKey === portal?.key),
-        )
-      : [];
-    const shown = scoped.length > 0 ? scoped : tasks;
-    const { row } = contextRow(`Progress (${shown.length})`);
-    const list = document.createElement("ul");
-    list.className = "case-task-list";
-    for (const task of shown) {
-      const item = document.createElement("li");
-      const title = document.createElement("span");
-      title.className = "case-task-title";
-      title.textContent = task.title;
-      const chip = document.createElement("span");
-      const isFill = task.executionType === "extension_fill";
-      chip.className = isFill ? "exec-chip exec-chip-fill" : "exec-chip";
-      chip.textContent =
-        EXECUTION_TYPE_LABELS[task.executionType] ?? task.executionType;
-      item.append(title, chip);
-      if (task.dueDate) {
-        const due = document.createElement("span");
-        due.className = "case-task-due";
-        due.textContent = `due ${fmtContextDate(task.dueDate)}`;
-        item.append(due);
-      }
-      const steps = task.steps ?? [];
-      if (steps.length > 0) item.append(stepList(task.id, steps));
-      list.append(item);
-    }
-    row.append(list);
-    caseContextBox.append(row);
-  }
-
-  // Latest note: the content, with a subtle author + date meta line.
-  if (note != null) {
-    const { row } = contextRow("Latest note");
-    const body = document.createElement("span");
-    body.className = "case-context-note-body";
-    body.textContent = note.content;
-    row.append(body);
-    const date = fmtContextDate(note.createdAt);
-    const metaText = [note.authorName, date].filter(Boolean).join(" · ");
-    if (metaText) {
-      const meta = document.createElement("span");
-      meta.className = "case-context-meta";
-      meta.textContent = metaText;
-      row.append(meta);
-    }
-    caseContextBox.append(row);
-  }
-
-  // Last touch (optional): a compact "outcome · date" line.
-  if (touch != null) {
-    const { row } = contextRow("Last touch");
-    const value = document.createElement("span");
-    value.className = "case-context-touch-value";
-    const date = touch.touchDate ? fmtContextDate(touch.touchDate) : "";
-    value.textContent = [touch.outcome, date].filter(Boolean).join(" · ");
-    row.append(value);
-    caseContextBox.append(row);
-  }
+  renderTaskCard();
 }
 
 // Fetch and render the selected case's context whenever the case selection
@@ -1498,103 +1602,386 @@ function resetSubmitInputs(): void {
   wipNoteInput.value = "";
 }
 
-type WorkSubmissionMode = "legacy" | "enrollment" | "contract" | "recredentialing" | "unavailable";
-
-function workSubmissionMode(context: LastFill | null): WorkSubmissionMode {
-  if (!context?.isWorkFill) return "legacy";
-  if (context.workContext?.ownerKind === "contract") return "contract";
-  if (context.workContext?.ownerKind === "case" &&
-      context.workCaseType === "enrollment" && context.fillSessionId != null) return "enrollment";
-  if (context.workCaseType === "recredentialing") return "recredentialing";
-  return "unavailable";
+// The selected case's status label ("In Progress"), from the case list.
+function caseStatusNow(): string | null {
+  const id = selectedCaseId();
+  return cases.find((c) => c.id === id)?.status ?? null;
 }
 
-function exactWorkStepLabel(
-  context: LastFill | null,
-  caseContext: CaseContext | null,
-): string {
-  const tuple = context?.workContext;
-  if (tuple?.ownerKind !== "case") return "this exact Work step";
-  const task = caseContext?.openTasks?.find((entry) => entry.id === tuple.taskId);
-  const step = task?.steps?.find((entry) => entry.id === tuple.stepId);
-  return task && step ? `${task.title} · ${step.label}` : "this exact Enrollment Work step";
+// The live Work launch, when it is for the selected case.
+function workRecordForSelectedCase(): ActiveWorkRecord | null {
+  if (activeWorkState.status !== "active") return null;
+  const record = activeWorkState.record;
+  const caseId = selectedCaseId();
+  return caseId != null && record.tuple.ownerKind === "case" && record.tuple.ownerId === caseId
+    ? record
+    : null;
 }
 
-function submissionUnavailableMessage(mode: WorkSubmissionMode): string {
-  if (mode === "contract") {
-    return "Contract Work has no case submission action. Return to the Contract task in Minted Panel.";
+// The exact Work step this case is bound to: the live launch, or the saved
+// fill report's tuple when the launch has since moved on.
+function workTupleForSelectedCase(): CanonicalWorkContextTuple | null {
+  const record = workRecordForSelectedCase();
+  if (record != null) return record.tuple;
+  const caseId = selectedCaseId();
+  return lastFill?.isWorkFill && lastFill.caseId === caseId ? lastFill.workContext : null;
+}
+
+// Only enrollment case Work has a case submission. Contract,
+// recredentialing and unknown case types log in Minted Panel (D7); the
+// worker refuses anything else.
+function workIsLoggable(): boolean {
+  const record = workRecordForSelectedCase();
+  if (record != null) {
+    return record.tuple.ownerKind === "case" && record.caseType === "enrollment";
   }
-  if (mode === "recredentialing") {
-    return "Mark submitted is available only for Enrollment Work. Return to the exact Recredentialing task in Minted Panel.";
+  const caseId = selectedCaseId();
+  if (lastFill?.isWorkFill && lastFill.caseId === caseId) {
+    return lastFill.workContext?.ownerKind === "case" && lastFill.workCaseType === "enrollment";
   }
-  return "The exact Enrollment Work case or fill receipt is unavailable. Reopen the task in Minted Panel.";
+  return activeWorkState.status === "none" || activeWorkState.status === "blocked";
 }
 
-function submissionSuccessLine(
-  context: LastFill | null,
-  touchFillSessionId: string | null,
-  legacyTaskTitle: string | null,
-  caseContext: CaseContext | null,
-): string {
-  const mode = workSubmissionMode(context);
-  if (mode === "enrollment" && touchFillSessionId === context?.fillSessionId) {
-    return `Logged for ${exactWorkStepLabel(context, caseContext)}.`;
-  }
-  if (context?.isWorkFill) {
-    return "Submission logged, but the exact Work receipt could not be confirmed. Review the case activity.";
-  }
-  return legacyTaskTitle
-    ? `Logged to the case. Task closed: ${legacyTaskTitle}`
-    : "Logged to the case.";
+// The Work launch the selected case is under, live or timed out, else null.
+// A timed-out launch keeps its id, so its log result stays readable.
+function launchIdForSelectedCase(): string | null {
+  if (activeWorkState.status !== "active" && activeWorkState.status !== "expired") return null;
+  const tuple = activeWorkState.record.tuple;
+  return tuple.ownerKind === "case" && tuple.ownerId === selectedCaseId() ? tuple.launchReceiptId : null;
 }
 
-// Portal tasks on the filled case matching the current page — tasks "Mark submitted"
-// could close. Matched against lastFill, not the current picker selection.
-function matchingPortalTasks(): CasePortalTask[] {
-  const context = lastFill;
-  if (!context || portal == null) return [];
-  const caseItem = cases.find((c) => c.id === context.caseId);
-  return matchPortalTasks(caseItem?.portalTasks, portal.key);
+// What a log belongs to: the case plus its Work launch ("manual" without
+// one). Null when no case is picked.
+function logScopeKey(): string | null {
+  const caseId = selectedCaseId();
+  return caseId == null ? null : `${caseId}|${launchIdForSelectedCase() ?? "manual"}`;
 }
 
-// Legacy portal-key matches keep their existing picker. Typed Work fills show
-// the receipt-pinned step and never infer a task from a shared portal key.
-function renderTaskLink(): void {
-  selectedTaskId = null;
-  taskSelect.replaceChildren();
-  taskSelect.hidden = true;
-  taskLinkSingle.hidden = true;
+// Keeps the log form, its entries and its result through a page change in
+// the same scope. A different case or a new launch starts fresh.
+function dropLogStateOutsideScope(): void {
+  if (submitPhase === "idle" || logScope === logScopeKey()) return;
+  resetLogState();
+  resetSubmitInputs();
+}
 
-  if (workSubmissionMode(lastFill) === "enrollment") {
+function payerLabel(): string {
+  const caseItem = cases.find((c) => c.id === selectedCaseId());
+  return caseContextData?.payer?.name ?? caseItem?.payerName ?? "the payer";
+}
+
+// Open tasks on this case whose steps use the form on this tab. The case
+// list names them; the context adds how many of their other steps are open.
+function formTasks(): FormTask[] {
+  if (portal == null) return [];
+  const portalKey = portal.key;
+  const caseItem = cases.find((c) => c.id === selectedCaseId());
+  return matchPortalTasks(caseItem?.portalTasks, portalKey).map((match) => {
+    const task = caseContextData?.openTasks?.find((t) => t.id === match.taskId);
+    const otherOpenSteps = (task?.steps ?? [])
+      .filter((step) => !step.isCompleted && step.portalKey !== portalKey).length;
+    return { taskId: match.taskId, title: match.title, otherOpenSteps };
+  });
+}
+
+// What logging will do, stated before the click (9.2). Work names its exact
+// step; manual mode follows the fixed table and never shows a picker.
+function currentPlan(): SubmissionPlan {
+  const tuple = workTupleForSelectedCase();
+  if (tuple != null && tuple.ownerKind === "case") {
+    const task = caseContextData?.openTasks?.find((t) => t.id === tuple.taskId) ?? null;
+    const step = task?.steps?.find((entry) => entry.id === tuple.stepId) ?? null;
+    return {
+      kind: "work",
+      task: task == null
+        ? null
+        : {
+            taskId: task.id,
+            title: task.title,
+            otherOpenSteps: (task.steps ?? []).filter((entry) => !entry.isCompleted && entry.id !== tuple.stepId).length,
+          },
+      stepLabel: step?.label ?? null,
+    };
+  }
+  return { kind: "manual", tasks: formTasks() };
+}
+
+// The one task the card is about: the launched task, or the single task on
+// this case that uses this form.
+function taskForCard(): CaseContextTask | null {
+  const tasks = caseContextData?.openTasks ?? [];
+  // A timed-out launch still names its task, so the card keeps its title.
+  const expired = activeWorkState.status === "expired" &&
+    activeWorkState.record.tuple.ownerKind === "case" &&
+    activeWorkState.record.tuple.ownerId === selectedCaseId()
+    ? activeWorkState.record.tuple
+    : null;
+  const tuple = workTupleForSelectedCase() ?? expired;
+  if (tuple != null && tuple.ownerKind === "case") {
+    return tasks.find((t) => t.id === tuple.taskId) ?? null;
+  }
+  const matches = formTasks();
+  const only = matches.length === 1 ? matches[0] : undefined;
+  return only ? (tasks.find((t) => t.id === only.taskId) ?? null) : null;
+}
+
+// A Work launch is live but the coordinator is on another tab (B3, C8).
+function workTabElsewhere(): boolean {
+  if (activeWorkState.status !== "active") return false;
+  return detectedTabId !== activeWorkState.record.boundTabId;
+}
+
+// Log it is offered on a recognized form for a picked or launched case, with
+// or without a fill (B2). Never on ad hoc, read-only, or non-enrollment Work.
+function canLogSubmission(): boolean {
+  if (selectedCaseId() == null || isCurrentOrgReadOnly() || !currentSelectionAllowsCaseWork()) return false;
+  if (!workIsLoggable() || activeWorkState.status === "expired") return false;
+  // A launch keeps its case on any page of the payer's site in the launched
+  // tab, so the confirmation page after Submit can log it (Q3).
+  if (workRecordForSelectedCase() != null) return !workTabElsewhere();
+  return portal != null;
+}
+
+// The launched tab is on a payer page that isn't the form (C6, D2).
+function workOffForm(): boolean {
+  return workRecordForSelectedCase() != null && !workTabElsewhere() && portal == null;
+}
+
+function computeTaskCardState(): TaskCardState {
+  if (isCurrentOrgReadOnly()) return { kind: "readOnly" };
+  if (activeWorkState.status === "expired") return { kind: "timedOut" };
+  if (workTabElsewhere()) return { kind: "wrongTab" };
+  if (!workPortalAccess.hidden) return workAccessDenied ? { kind: "denied" } : { kind: "access" };
+  if (submitPhase === "logging") return { kind: "logging" };
+  if (submitPhase === "done") return { kind: "logged", submitted: lastLogMoved };
+  // A held log form shows only where it can be sent (renderLogControls).
+  if (submitPhase === "failed" && (lastLogFailure?.retry !== true || canLogSubmission())) return { kind: "logFailed" };
+  if (submitPhase === "form" && canLogSubmission()) return { kind: "log" };
+  if (fillRunning) return { kind: "filling" };
+  if (!fillProblem.hidden) return { kind: "failed" };
+  if (lastSummary != null && !fillResults.hidden) {
+    return lastSummary.filled > 0
+      ? { kind: "filled", filled: lastSummary.filled, needYou: needsYou(lastSummary).length }
+      : { kind: "nothing" };
+  }
+  if (workOffForm()) return { kind: "byHand" };
+  if (portal == null) return { kind: "noForm" };
+  if (caseSelect.value === AD_HOC_CASE_SELECTION) return { kind: "adHoc" };
+  return { kind: "ready" };
+}
+
+function noticeButton(label: string, className: "primary" | "secondary", onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+// Brings the launched tab forward, and its window too: the tab may sit in
+// another window. Best effort; a closed tab ends the link anyway.
+async function focusTab(tabId: number): Promise<void> {
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    const windowId = tab?.windowId ?? (await chrome.tabs.get(tabId)).windowId;
+    await chrome.windows.update(windowId, { focused: true });
+  } catch {
+    // The tab or window is gone; the worker ends the link.
+  }
+}
+
+// What the task notice says now. A render with the same notice leaves the
+// live region alone, so a screen reader doesn't read it again.
+let taskNoticeKey: string | null = null;
+
+function showTaskNotice(
+  tone: NoticeTone,
+  lines: readonly NoticeLine[],
+  extra: readonly HTMLElement[] = [],
+  salt = "",
+): void {
+  const key = JSON.stringify([tone, lines, extra.map((node) => node.outerHTML), salt]);
+  if (!taskNotice.hidden && key === taskNoticeKey) return;
+  taskNoticeKey = key;
+  fillNotice(taskNotice, tone, lines, extra);
+}
+
+// The one notice for states where Fill is not the next step: view only,
+// link timed out, wrong tab, and Work that logs in Minted Panel (D7).
+// Returns true when it asks her to fill this page by hand.
+function renderTaskNotice(state: TaskCardState, task: CaseContextTask | null): boolean {
+  const payer = payerLabel();
+  if (state.kind === "readOnly") {
+    showTaskNotice("neutral", [
+      { text: "Your account can view this case but not fill it.", strong: true },
+      "Ask an admin to change your role. You can still copy values from Provider details.",
+    ]);
+    return false;
+  }
+  if (state.kind === "timedOut" && activeWorkState.status === "expired") {
+    const caseId = activeWorkState.record.tuple.ownerKind === "case" ? activeWorkState.record.tuple.ownerId : null;
+    showTaskNotice("neutral", [
+      { text: "This link timed out after 60 minutes.", strong: true },
+      "To keep provider data safe, Minted unlinks idle tabs. Open the case and click Work in portal again.",
+    ], caseId == null ? [] : [externalLink("Back to case ↗", caseUrl(caseId), "secondary button-link")]);
+    return false;
+  }
+  if (state.kind === "wrongTab" && activeWorkState.status === "active") {
+    const tabId = activeWorkState.record.boundTabId;
+    // A log form she opened waits for her on the launched tab.
+    const next = submitPhase === "form" || submitPhase === "failed" ? "log it" : "fill";
+    showTaskNotice("warn", [`You're on a different tab. Switch to the ${payer} tab to ${next}.`], [
+      noticeButton(`Go to ${payer} tab`, "primary", () => {
+        void focusTab(tabId);
+      }),
+    ], String(tabId));
+    return false;
+  }
+  if (workOffForm() && submitPhase === "idle") {
+    showTaskNotice("neutral", [
+      "Minted hasn't learned this page yet. Fill it by hand. Provider details are open below.",
+    ]);
+    return true;
+  }
+  if (selectedCaseId() != null && !workIsLoggable() && activeWorkState.status === "active") {
+    showTaskNotice("neutral", ["Log this work in Minted Panel."],
+      task == null ? [] : [externalLink("Open task ↗", taskUrl(task.id), "link")]);
+    return false;
+  }
+  taskNotice.hidden = true;
+  taskNoticeKey = null;
+  return false;
+}
+
+// Log it, the log form, and the result of logging. Pure DOM state; the
+// handlers set submitPhase and call renderTaskCard. The form shows only
+// where it can be sent; elsewhere it is held, entries and all.
+function renderLogControls(state: TaskCardState): void {
+  const payer = payerLabel();
+  const canLog = canLogSubmission();
+  const retrying = submitPhase === "failed" && lastLogFailure?.retry === true;
+  // A refusal Try again can't fix: its result stays, with its way forward.
+  const refused = submitPhase === "failed" && !retrying;
+  logLink.textContent = `Submitted on ${payer}? Log it`;
+  logLink.hidden = !(canLog && submitPhase === "idle" && !fillRunning &&
+    state.kind !== "access" && state.kind !== "denied");
+  const formOpen = (submitPhase === "form" || retrying) && canLog;
+  submitDetails.hidden = !formOpen;
+  submitTitle.textContent = `Did you submit on ${payer}?`;
+  payerRefLabel.textContent = `${payer} confirmation number (optional)`;
+  markSubmittedBtn.hidden = !(formOpen || submitPhase === "logging");
+  markSubmittedBtn.disabled = submitPhase === "logging";
+  markSubmittedBtn.classList.toggle("filling", submitPhase === "logging");
+  markSubmittedBtn.textContent = submitPhase === "logging"
+    ? "Logging…"
+    : retrying
+      ? "Try again"
+      : dupConfirmPending ? "Log again" : "Log submission";
+  dupWarn.hidden = !(dupConfirmPending && submitPhase === "form" && canLog);
+  dupCancelBtn.hidden = dupWarn.hidden;
+  submitBackBtn.hidden = submitPhase !== "form" || dupConfirmPending || !canLog;
+  if (formOpen) {
+    taskLinkSingle.textContent = submissionPlanLine(currentPlan());
+    submitMoves.textContent = MOVES_TO_SUBMITTED_LINE;
+    submitMoves.hidden = !logMovesToSubmitted(caseStatusNow());
     taskLink.hidden = false;
-    taskLinkLabel.textContent = "Work step";
-    taskLinkSingle.hidden = false;
-    taskLinkSingle.textContent = `This fill is pinned to ${exactWorkStepLabel(lastFill, caseContextData)}.`;
+  }
+  // The result of logging. A failure Try again can fix waits with its form.
+  const resultShown = submitPhase === "done" || refused || (retrying && canLog);
+  submitStatus.hidden = !resultShown;
+  submitNext.hidden = !resultShown || submitNext.childElementCount === 0;
+}
+
+// Provider details opens itself once per state that needs values typed by
+// hand: each page Minted hasn't learned, and site access not allowed. Closing
+// it then sticks until the state changes. Null: no such state.
+function openProviderDetailsOnce(attention: string | null): void {
+  if (attention != null && attention !== providerAttentionKey) setSectionOpen("provider", true);
+  providerAttentionKey = attention;
+}
+
+// The task card: title, one pill, subtitle, provenance, and which of its
+// parts show. Called after every state change; opens itself when the
+// coordinator needs to act or read a result (5a).
+function renderTaskCard(): void {
+  const caseId = selectedCaseId();
+  const adHoc = caseSelect.value === AD_HOC_CASE_SELECTION;
+  taskCard.hidden = caseId == null && !adHoc;
+  if (taskCard.hidden) {
+    portalStatus.hidden = false;
+    taskAttentionKey = null;
+    openProviderDetailsOnce(null);
     return;
   }
+  dropLogStateOutsideScope();
+  const state = computeTaskCardState();
+  const task = adHoc ? null : taskForCard();
+  const caseItem = cases.find((c) => c.id === caseId);
+  const payer = payerLabel();
 
-  taskLinkLabel.textContent = "Checklist task";
-  const matches = matchingPortalTasks();
-  const first = matches[0];
-
-  if (!first) {
-    taskLink.hidden = true;
-    return;
+  taskTitle.textContent = task?.title ??
+    (adHoc ? "Ad hoc fill" : caseItem ? `${caseItem.payerName ?? "Case"} · ${caseItem.state}` : "Fill this form");
+  const pill = taskCardPill(state);
+  taskPill.hidden = pill == null;
+  if (pill != null) {
+    taskPill.textContent = pill.text;
+    taskPill.className = `pill pill-tone-${pill.tone}`;
   }
-  taskLink.hidden = false;
+  const provider = providers.find((p) => p.id === selectedProviderId());
+  const providerName = caseContextData?.provider?.name ??
+    (provider ? `${provider.firstName} ${provider.lastName}` : null);
+  const where = adHoc ? null : [caseItem ? payer : null, caseContextData?.state ?? caseItem?.state ?? null]
+    .filter(Boolean).join(" ");
+  const sub = [
+    providerName,
+    where || null,
+    task?.dueDate ? `due ${fmtContextDate(task.dueDate)}` : null,
+    task ? (EXECUTION_TYPE_LABELS[task.executionType] ?? null) : null,
+  ].filter((part): part is string => Boolean(part));
+  taskSub.textContent = sub.join(" · ");
+  taskSub.hidden = sub.length === 0;
 
-  if (matches.length === 1) {
-    selectedTaskId = first.taskId;
-    taskLinkSingle.hidden = false;
-    taskLinkSingle.textContent = `Will close task: ${first.title}`;
-    return;
+  const launched = caseId != null && (workRecordForSelectedCase() != null ||
+    (activeCase?.source === "handoff" && activeCase.caseId === caseId && currentHandoffSelectionIsApplied()));
+  taskOrigin.hidden = !launched;
+  if (launched && caseId != null) taskBack.href = caseUrl(caseId);
+
+  const byHand = renderTaskNotice(state, task);
+
+  const parked = ["readOnly", "timedOut", "wrongTab", "access", "denied", "log", "logging", "logged", "logFailed"]
+    .includes(state.kind);
+  const showingResult = lastSummary != null && !fillResults.hidden;
+  fillResults.classList.toggle("is-parked", submitPhase !== "idle");
+  // The pickup warning has done its job once she is logging (E3 asks again).
+  dupPickup.classList.toggle("is-parked", submitPhase !== "idle");
+  fillBtn.hidden = parked || showingResult || portal == null;
+  fillNote.hidden = fillBtn.hidden;
+  fillNote.textContent = fillRunning
+    ? "Some questions only appear after others are answered. Minted waits for them. Stay on this tab."
+    : "You click Continue and Submit. Minted never submits.";
+  coveragePanel.hidden = lastCoverage == null || parked || showingResult || fillRunning;
+  readyTitle.hidden = !(state.kind === "ready" || state.kind === "adHoc");
+  readyTitle.textContent = state.kind === "adHoc"
+    ? "Ad hoc fill. Nothing is logged to a case."
+    : `${caseItem ? payer : (portal?.label ?? "Payer")} form found on this tab.`;
+  openProviderDetailsOnce(state.kind === "denied"
+    ? "denied"
+    : byHand ? `byHand:${detectedPageUrl ?? ""}` : null);
+  portalStatus.hidden = portal != null || state.kind === "timedOut" || state.kind === "wrongTab" || workOffForm();
+
+  renderLogControls(state);
+
+  // One "Open task" link at a time: a log result may already carry it.
+  openTaskLink.hidden = caseId == null || caseContextBox.hidden || !submitNext.hidden;
+  if (caseId != null) {
+    openTaskLink.textContent = task ? "Open task in Minted Panel ↗" : "Open case in Minted Panel ↗";
+    openTaskLink.href = task ? taskUrl(task.id) : caseUrl(caseId);
   }
 
-  taskSelect.hidden = false;
-  taskSelect.add(new Option("Don't link a task", ""));
-  for (const t of matches) taskSelect.add(new Option(t.title, t.taskId));
-  taskSelect.selectedIndex = 0; // preselect none — the human chooses a task
-  selectedTaskId = null;
+  const attention = taskCardNeedsAttention(state) ? JSON.stringify(state) : null;
+  if (attention != null && attention !== taskAttentionKey) setSectionOpen("task", true);
+  taskAttentionKey = attention;
 }
 
 // How long ago the selected case was last marked submitted, when inside the
@@ -1658,7 +2045,7 @@ function renderGroupSelector(provider: ProviderListItem | null): void {
   }
 
   groupField.hidden = false;
-  const groupPlaceholder = new Option("Select a group…", "");
+  const groupPlaceholder = new Option("Pick the group for this case", "");
   groupPlaceholder.disabled = true;
   groupSelect.add(groupPlaceholder);
 
@@ -1729,28 +2116,46 @@ function clearFillResults(): void {
   fillAiClearBtn.disabled = false;
   fillAiRetryBtn.disabled = false;
   fillAiRetryBtn.hidden = true;
-  nbaSection.hidden = true;
-  nbaSection.replaceChildren();
-  touchStatus.hidden = true;
   fillResults.hidden = true;
   fillReportTime.hidden = true;
   fillAttemptedBox.hidden = true;
   fillNotCheckedBox.hidden = true;
   fillSkippedBox.hidden = true;
   fillManualBox.hidden = true;
+  fillYourTurn.hidden = true;
   fillEventWarn.hidden = true;
+  fillDetails.hidden = true;
+  fillProblem.hidden = true;
   gapFlag.hidden = true;
-  submitDetails.hidden = true;
-  taskLink.hidden = true;
-  selectedTaskId = null;
-  submitHint.hidden = true;
-  dupWarn.hidden = true;
+  lastSummary = null;
+  lastFill = null;
+  // The log form, its entries and its result stay through a page change (the
+  // payer's confirmation page, a tab switch) in the same case and launch.
+  // A different case or a new launch starts fresh.
+  dropLogStateOutsideScope();
+}
+
+// Back to "nothing logged yet": the log form closed, no result, no warning.
+function resetLogState(): void {
+  submitPhase = "idle";
+  logScope = null;
+  lastLogFailure = null;
+  lastLogMoved = false;
   dupConfirmPending = false;
+  taskLink.hidden = true;
+  submitDetails.hidden = true;
+  dupWarn.hidden = true;
+  dupCancelBtn.hidden = true;
+  submitBackBtn.hidden = true;
   markSubmittedBtn.hidden = true;
   markSubmittedBtn.disabled = false;
-  markSubmittedBtn.textContent = "Mark submitted";
+  markSubmittedBtn.classList.remove("filling");
+  markSubmittedBtn.textContent = "Log submission";
   submitStatus.hidden = true;
-  lastFill = null;
+  submitNext.hidden = true;
+  submitNext.replaceChildren();
+  nbaSection.hidden = true;
+  nbaSection.replaceChildren();
 }
 
 function currentHandoffSelectionIsApplied(
@@ -1815,6 +2220,43 @@ function isFillReady(): boolean {
   );
 }
 
+// A received launch is still being applied (B1): a handoff under its
+// authenticated reads, or a Work launch the panel is loading.
+function caseOpening(): boolean {
+  return applyingHandoffKey != null || workLaunchesOpening > 0;
+}
+
+// The B1 line. Names come only from what the panel already holds.
+function openingLine(): string {
+  const work = workLaunchesOpening > 0 && activeWorkState.status === "active" &&
+    activeWorkState.record.tuple.ownerKind === "case"
+    ? activeWorkState.record.tuple
+    : null;
+  const handoff = applyingHandoffKey != null ? activeCase : null;
+  const providerId = work?.providerId ?? handoff?.providerId ?? null;
+  const caseId = work?.ownerId ?? handoff?.caseId ?? null;
+  const provider = providers.find((p) => p.id === providerId);
+  const caseItem = cases.find((c) => c.id === caseId);
+  if (provider == null || !caseItem?.payerName || !caseItem.state) {
+    return "Opening the case from Minted Panel…";
+  }
+  const name = [provider.firstName, provider.lastName].filter(Boolean).join(" ");
+  return `Opening ${name}, ${caseItem.payerName} ${caseItem.state}…`;
+}
+
+// Loads a live Work launch with the B1 line up and the queue away.
+async function whileWorkOpens(load: () => Promise<void>): Promise<void> {
+  if (activeWorkState.status !== "active") return load();
+  workLaunchesOpening += 1;
+  updateFillReady();
+  try {
+    await load();
+  } finally {
+    workLaunchesOpening -= 1;
+    updateFillReady();
+  }
+}
+
 function updateFillReady(): void {
   syncQueueVisibility();
   const portalOpen = portal != null && portalTabId != null;
@@ -1822,16 +2264,22 @@ function updateFillReady(): void {
     portalTabId == null ? null : { id: portalTabId },
     detectedPageUrl,
   );
+  const formName = selectedCaseId() != null ? payerLabel() : (portal?.label ?? "Payer");
   portalStatus.textContent = activeWorkState.status === "blocked"
-    ? "The exact Work context ended. Re-launch it or make a manual selection before filling."
+    ? "The link to the case ended. Pick a case here, or open it in Minted Panel and click Work in portal."
     : activeWorkState.status === "expired"
-      ? "The exact Work context expired. Re-launch it from Minted Panel."
+      ? "This link timed out after 60 minutes. Open the case and click Work in portal again."
       : activeWorkState.status === "active" && visibleWorkRecord == null
-        ? "Return to the exact launched portal tab to continue this Work context."
+        ? `Switch to the ${formName} tab to keep working this case.`
         : portalOpen
-          ? `${portal?.label} form detected in the current tab.`
-          : "Open a registered payer portal in the current tab to fill it.";
+          ? `${formName} form found on this tab.`
+          : "Open the payer's form in this tab to fill it.";
   portalStatus.classList.toggle("detected", portalOpen);
+  // B1: a received launch is still loading. Say so, neutrally.
+  if (caseOpening()) {
+    portalStatus.textContent = openingLine();
+    portalStatus.classList.remove("detected");
+  }
   // The server flagged several locations and none is picked yet.
   const facilityBlocked = needsFacility && selectedFacilityId() == null;
   facilityHint.hidden = !facilityBlocked;
@@ -1845,6 +2293,7 @@ function updateFillReady(): void {
   // Every gate-state change routes through here, so this is the one place the
   // pre-fill coverage sensor re-evaluates itself.
   refreshCoverage();
+  renderTaskCard();
 }
 
 // The coverage sensor reflects the profile (provider + state + facility) and the
@@ -1966,35 +2415,33 @@ function gapActionLink(
 // Coverage panel: "Can fill M of N mapped fields" plus one row per gap.
 // Read-only — labels and reasons only, never field values.
 function renderCoverage(coverage: FillCoverage | null): void {
-  coveragePanel.hidden = coverage == null;
+  lastCoverage = coverage;
+  coveragePanel.hidden = coverage == null || !fillResults.hidden || submitPhase !== "idle";
   if (coverage == null) {
     coverageGaps.replaceChildren();
     refreshMapsBtn.hidden = true;
     return;
   }
   const noun = coverage.total === 1 ? "field" : "fields";
-  coverageCount.textContent = `Can fill ${coverage.available} of ${coverage.total} mapped ${noun}.`;
+  coverageCount.textContent = `We can fill ${coverage.available} of ${coverage.total} ${noun} on this form.`;
 
-  // Show proven chip only after a successful dry run. An unproven
-  // form still fills; it just says so and the button drops to secondary.
+  // A form without a test run still fills; it just says so (B16).
   const proven = portal?.proven === true;
   provenChip.hidden = !proven;
   unprovenNote.hidden = proven;
   unprovenNote.textContent = proven
     ? ""
-    : "This form hasn't been proven by a dry run — check the result before you submit.";
-  fillBtn.classList.toggle("secondary", !proven);
-  fillBtn.classList.toggle("primary", proven);
+    : "This form hasn't had a test run. Check the result before you submit.";
 
-  // Drift warning: selectors missing since the last fill on this portal mean
-  // the form changed. Stated before the run, with the count, so a partial
-  // fill is never a surprise.
+  // Mapping drift and the per-field gap list are admin detail (B16).
+  const admin = isCurrentOrgAdmin();
   const broken = lastReportBrokenCount;
-  driftStrip.hidden = broken === 0;
+  driftStrip.hidden = broken === 0 || !admin;
   driftStrip.textContent =
     broken === 0
       ? ""
-      : `${broken} mapped ${broken === 1 ? "field" : "fields"} went missing on the last fill — this form may have changed.`;
+      : `${broken} mapped ${broken === 1 ? "field" : "fields"} went missing on the last fill. This form may have changed.`;
+  coverageGaps.hidden = !admin || coverage.gaps.length === 0;
 
   coverageGaps.replaceChildren();
   const portalKey = portal?.key ?? null;
@@ -2015,7 +2462,7 @@ function renderCoverage(coverage: FillCoverage | null): void {
   // After fix-it in the panel: after a fix-it completes in the platform, one click
   // refetches the maps + profile and re-checks coverage — the newly trained
   // field moves from the gap list into the fillable count.
-  refreshMapsBtn.hidden = partitionGaps(coverage.gaps).mappingGaps.length === 0;
+  refreshMapsBtn.hidden = !admin || partitionGaps(coverage.gaps).mappingGaps.length === 0;
 }
 
 refreshMapsBtn.addEventListener("click", () => {
@@ -2100,147 +2547,178 @@ function fmtReportTime(iso: string): string {
     : `${formatDisplayDate(iso)}, ${time}`;
 }
 
+// After a fill, the log state starts fresh. A restored report that was
+// already logged shows as logged, in the current case and launch; one logged
+// under an earlier launch of this case leaves the new launch to log fresh.
 function renderSubmissionActions(
   restored?: { completedAt: string; submitted: boolean },
 ): void {
-  const context = lastFill;
-  const mode = workSubmissionMode(context);
-  const hasCase = mode === "enrollment"
-    ? context?.caseId != null
-    : (context?.caseId ?? selectedCaseId()) != null;
-
-  if (mode === "contract" || mode === "recredentialing" || mode === "unavailable" ||
-      (mode === "enrollment" && !hasCase)) {
-    submitDetails.hidden = true;
-    taskLink.hidden = true;
-    selectedTaskId = null;
-    submitHint.hidden = true;
-    dupWarn.hidden = true;
-    dupConfirmPending = false;
-    markSubmittedBtn.hidden = true;
-    markSubmittedBtn.disabled = false;
-    markSubmittedBtn.textContent = "Mark submitted";
-    submitStatus.hidden = false;
-    submitStatus.classList.remove("partial");
-    submitStatus.textContent = submissionUnavailableMessage(
-      mode === "enrollment" ? "unavailable" : mode,
-    );
+  if (restored == null) {
+    resetLogState();
     return;
   }
-
-  if (!hasCase) {
-    submitDetails.hidden = true;
-    taskLink.hidden = true;
-    selectedTaskId = null;
-    submitHint.hidden = true;
-    dupWarn.hidden = true;
-    dupConfirmPending = false;
-    markSubmittedBtn.hidden = true;
-    submitStatus.hidden = false;
-    submitStatus.classList.remove("partial");
-    submitStatus.textContent = "Ad hoc fill completed — logged under provider.";
-    return;
-  }
-
-  const submitted = restored?.submitted === true;
-  submitDetails.hidden = submitted;
-  if (!submitted) {
-    resetSubmitInputs();
-    renderTaskLink();
-  } else {
-    taskLink.hidden = true;
-    selectedTaskId = null;
-  }
-  submitHint.hidden = submitted;
-  dupWarn.hidden = true;
+  const caseId = selectedCaseId();
+  if (restored.submitted !== true || lastFill?.caseId == null || lastFill.caseId !== caseId) return;
+  const liveLaunch = launchIdForSelectedCase();
+  if (liveLaunch != null && lastFill.workContext?.launchReceiptId !== liveLaunch) return;
+  submitPhase = "done";
+  logScope = logScopeKey();
   dupConfirmPending = false;
-  markSubmittedBtn.hidden = submitted;
-  markSubmittedBtn.disabled = false;
-  markSubmittedBtn.textContent = "Mark submitted";
-  submitStatus.hidden = !submitted;
-  submitStatus.classList.remove("partial");
-  if (submitted) {
-    submitStatus.textContent = mode === "enrollment"
-      ? submissionSuccessLine(context, context?.fillSessionId ?? null, null, caseContextData)
-      : "Logged to the case.";
-  }
+  lastLogFailure = null;
+  lastLogMoved = false;
+  setLiveRole(submitStatus, "status");
+  fillNotice(submitStatus, "ok", [{ text: "Logged to the case.", strong: true }]);
+  submitNext.replaceChildren();
+  submitNext.hidden = true;
 }
 
-// The review state: filled count, the skipped/manual lists, and the
-// "Mark submitted" button the human presses only after submitting the portal
-// form themselves (the extension never automates the portal's submit).
-// `restored` marks a report re-rendered from the persisted record: it gets a
-// when-it-ran label, and an already-submitted one shows the logged state
-// instead of the button.
+// Fields on this form that need the coordinator: missing data, uploads, and
+// fields marked for a human. Everything else (drift, other pages, hidden
+// controls) is engineering detail and lives in admin Details.
+const NEED_REASONS: Partial<Record<NonNullable<ReportedField["kind"]>, string>> = {
+  no_value: "not on file",
+  file: "upload it by hand",
+  manual: "fill it by hand",
+  review: "check it by hand",
+};
+
+function needsYou(summary: FillSummary): ReportedField[] {
+  return summary.manual.filter((field) => field.kind != null && field.kind in NEED_REASONS);
+}
+
+function needRow(field: ReportedField, providerId: string | null): HTMLElement {
+  const row = document.createElement("span");
+  row.className = "need-row";
+  const label = document.createElement("span");
+  label.textContent = `${field.label} · ${(field.kind && NEED_REASONS[field.kind]) ?? field.reason}`;
+  row.append(label);
+  if (field.kind === "no_value") {
+    const action = dataFixAction(field.recordPath, providerId, API_BASE_URL);
+    if (action) row.append(externalLink("Add in Minted Panel ↗", action.href));
+  }
+  return row;
+}
+
+// The engineer's view of a fill, for admins of the current org only:
+// counts, the fill record, the form key and mapping, the work context, every
+// skip with its reason, and Fix mapping.
+function renderFillDetails(summary: FillSummary): void {
+  fillDetails.hidden = !isCurrentOrgAdmin();
+  if (fillDetails.hidden) return;
+  const portalKey = lastFill?.portalKey ?? portal?.key ?? null;
+  const lines: string[] = [`Fields written: ${summary.filled}`];
+  if (summary.fieldsAttempted != null) {
+    lines.push(`Setter attempts: ${summary.fieldsAttempted} · checked after writing: ${summary.fieldsVerified ?? 0}`);
+  }
+  if (summary.pageFields != null && summary.pageFields > 0) {
+    lines.push(`Fillable controls on the page: about ${summary.pageFields}`);
+  }
+  lines.push(summary.eventRecorded
+    ? "Fill record: saved"
+    : `Fill record: not saved. ${summary.eventError ?? ""}`.trim());
+  if (portalKey) lines.push(`Form: ${portalKey}${portal ? ` · mapping ${portal.mappingGeneration}` : ""}`);
+  const tuple = summary.workContext;
+  if (tuple) lines.push(`Work context: ${tuple.ownerKind} · ${tuple.portalKey} · mapping ${tuple.mappingGeneration}`);
+  const warning = partialFillWarning(summary.manual, summary.skipped.length);
+  if (warning) lines.push(warning);
+  fillDetailsBody.replaceChildren(...lines.map((text) => {
+    const line = document.createElement("p");
+    line.textContent = text;
+    return line;
+  }));
+  const links = document.createElement("p");
+  links.className = "admin-details-links";
+  if (portalKey) links.append(externalLink("Fix mapping ↗", `${API_BASE_URL}${trainFlowPath(portalKey)}`));
+  links.append(supportButton(summary.eventRecorded ? "fill" : "record", summary.attemptId ?? summary.fillSessionId));
+  fillDetailsBody.append(links);
+  const actions = {
+    portalKey,
+    providerId: lastFill?.providerId ?? selectedProviderId(),
+  };
+  fieldList(fillSkippedBox, "Not filled on this page:", summary.skipped, actions);
+  fieldList(fillNotCheckedBox, "Not checked:", summary.notChecked ?? []);
+  fieldList(fillAttemptedBox, "Form-wide planning items (page not checked):", summary.manual, actions);
+}
+
+// The fill result: one plain headline, the fields that need her, her next
+// steps, and the record line. No AI review in 0.1.8 (AI_FILL_ENABLED).
 function renderFillSummary(
   summary: FillSummary,
   restored?: { completedAt: string; submitted: boolean },
 ): void {
+  lastSummary = summary;
   fillResults.hidden = false;
+  fillProblem.hidden = true;
   fillReportTime.hidden = restored == null;
-  lastAiReview = summary.aiReview ?? null;
-  if (restored)
-    fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
-  const staticFilled = summary.staticFilled ?? summary.filled;
-  const aiFilled = summary.aiFilled ?? 0;
-  // The heading carries the counts, so no pill; the rows are the filled field
-  // LABELS from the page result — values are never retained (PHI). The page
-  // denominator keeps coverage honest: "24 mapped" on a ~117-field form is
-  // partial coverage, not a fully trained form.
-  const pageNote =
-    summary.pageFields != null && summary.pageFields > 0
-      ? ` The page has ~${summary.pageFields} fillable fields.`
-      : "";
-  if (summary.fieldsAttempted != null) {
-    const identifiedCurrentStep = summary.fieldOutcomes?.filter((field) => field.stepKey != null).length;
-    const currentStepNote = identifiedCurrentStep == null ? "" : ` ${identifiedCurrentStep} mapped fields have a confirmed current step.`;
-    fillSummaryBox.replaceChildren(bucketDetails(
-      `Verified ${summary.fieldsVerified ?? 0}; ${summary.fieldsAttempted} setter attempts remain unverified.${currentStepNote}${pageNote}`,
-      null,
-      [],
-    ));
-    fieldList(fillAttemptedBox, "Attempted but not verified:", (summary.attemptedLabels ?? []).map((label) => ({
-      label,
-      reason: "setter was attempted; the portal state was not checked",
-      kind: "unverified",
-    })));
-    fieldList(fillNotCheckedBox, "Not checked:", summary.notChecked ?? []);
+  lastAiReview = AI_FILL_ENABLED ? (summary.aiReview ?? null) : null;
+  if (restored) fillReportTime.textContent = `From ${fmtReportTime(restored.completedAt)}`;
+  const providerId = lastFill?.providerId ?? selectedProviderId();
+  const payer = selectedCaseId() != null ? payerLabel() : (portal?.label ?? "payer");
+  const fillId = summary.attemptId ?? summary.fillSessionId;
+  const needs = needsYou(summary);
+
+  if (summary.filled > 0) {
+    const noun = summary.filled === 1 ? "field" : "fields";
+    fillNotice(fillSummaryBox, "ok", [
+      { text: `Filled ${summary.filled} ${noun} on this page.`, strong: true },
+      "Green outline on the page = filled by Minted.",
+    ]);
   } else {
-    const attempted = summary.filled + summary.skipped.length;
-    fillSummaryBox.replaceChildren(
-      bucketDetails(
-        `Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled} of ${attempted} actual writes.${pageNote}`,
-        null,
-        summary.writtenSelectors ?? summary.filledLabels,
-      ),
-    );
-    fieldList(fillAttemptedBox, "Attempted but not verified:", []);
-    fieldList(fillNotCheckedBox, "Not checked:", []);
+    fillNotice(fillSummaryBox, "danger", [
+      { text: "Nothing was filled on this page.", strong: true },
+      "Minted couldn't find this page's trained fields. The portal may have changed.",
+    ], [supportButton("nothing-filled", fillId, "danger")]);
+    // She fills it by hand: put the values in reach.
+    setSectionOpen("provider", true);
   }
-  renderAiReview(summary.aiReview ?? null, restored ?? null);
-  fieldList(fillSkippedBox, "Not filled:", summary.skipped);
-  // Manual/gap bucket shows fix-it links, scoped to the
-  // fill that actually ran (lastFill), not whatever is selected now.
-  fieldList(fillManualBox, "Form-wide planning items — page not checked:", summary.manual, {
-    portalKey: lastFill?.portalKey ?? portal?.key ?? null,
-    providerId: lastFill?.providerId ?? selectedProviderId(),
-  });
+
+  if (needs.length > 0) {
+    const head = `${needs.length} ${needs.length === 1 ? "field needs" : "fields need"} you`;
+    fillNotice(fillManualBox, "warn", [{ text: head, strong: true }],
+      needs.map((field) => needRow(field, providerId)));
+  } else {
+    fillManualBox.hidden = true;
+  }
+
+  if (summary.filled > 0) {
+    const steps: string[] = [];
+    if (needs.length > 0) steps.push(`Fill the ${needs.length === 1 ? "field" : `${needs.length} fields`} above on the ${payer} page.`);
+    steps.push("Look over the green fields.");
+    steps.push(`Click Continue or Submit on the ${payer} page.`);
+    fillNotice(fillYourTurn, "neutral", [
+      { text: "Your turn", strong: true },
+      ...steps.map((step, index) => `${index + 1}. ${step}`),
+    ]);
+  } else {
+    fillNotice(fillYourTurn, "neutral", [
+      "Still nothing? Fill this page by hand, and tell your admin this form needs retraining.",
+    ]);
+  }
+
+  const statusLines: HTMLElement[] = [];
   if (!summary.eventRecorded) {
-    fillEventWarn.hidden = false;
-    // The background composes the full warning line (it knows the failure
-    // kind); render it as-is.
-    fillEventWarn.textContent =
-      summary.eventError ??
-      "Fill applied, but it couldn't be logged to Minted Panel. Retry from the case record.";
+    const line = document.createElement("span");
+    line.textContent = "Minted Panel didn't save a record of this fill. That's on us. You can keep going.";
+    statusLines.push(line, supportButton("record", fillId));
   }
+  if (lastFill != null && lastFill.caseId == null) {
+    const provider = providers.find((p) => p.id === lastFill?.providerId);
+    const name = provider ? `${provider.firstName} ${provider.lastName}` : "the provider";
+    const line = document.createElement("span");
+    line.textContent = `This fill is saved under ${name}, not a case. To log a submission, pick the case.`;
+    statusLines.push(line);
+  }
+  fillEventWarn.replaceChildren(...statusLines);
+  fillEventWarn.hidden = statusLines.length === 0;
+  gapFlag.hidden = true;
 
-  // Only current-run fields belong in the gap count. Planner items cover maps
-  // across every step, so their page presence was not checked in this run.
-  const warning = partialFillWarning(summary.manual, summary.skipped.length);
-  gapFlag.hidden = warning == null;
-  gapFlag.textContent = warning ?? "";
+  fillAgainBtn.textContent = summary.filled > 0 ? "Fill this page again" : "Try again";
+  fillAgainBtn.className = summary.filled > 0 ? "secondary" : "primary";
 
+  renderAiReview(AI_FILL_ENABLED ? (summary.aiReview ?? null) : null, restored ?? null);
+  renderFillDetails(summary);
   renderSubmissionActions(restored);
+  renderTaskCard();
 }
 
 function renderAiReview(review: AiFillReview | null, restored: { completedAt: string; submitted: boolean } | null = null): void {
@@ -2278,10 +2756,12 @@ async function loadCases(
   // Drop the previous provider's rows NOW — the active-cases list must never
   // show provider A's cases under provider B while the fetch is in flight.
   cases = [];
+  casesLoadedFor = null;
   renderActiveCases();
   caseSelect.disabled = true;
   caseSelect.replaceChildren(new Option("Loading cases…", ""));
   renderCaseStatusPill();
+  renderCaseNote();
   // No valid case is selected during the load — hide any prior case's context.
   refreshCaseContext();
   updateFillReady();
@@ -2299,6 +2779,7 @@ async function loadCases(
   }
 
   cases = response.data;
+  casesLoadedFor = providerId;
   let rememberedId: string | null;
   if (options.preferredCaseId != null) {
     rememberedId = cases.some((c) => c.id === options.preferredCaseId)
@@ -2328,7 +2809,7 @@ async function loadCases(
   if (!isCurrent(generation)) return { status: "stale" };
   selectedGroupId = rememberedGroup.ok ? rememberedGroup.data : null;
   caseSelect.replaceChildren();
-  const placeholder = new Option("Select a case or ad hoc fill…", "", true, rememberedId == null);
+  const placeholder = new Option("Pick a case", "", true, rememberedId == null);
   placeholder.disabled = true;
   caseSelect.add(placeholder);
   caseSelect.add(new Option("No case · Ad hoc fill", AD_HOC_CASE_SELECTION, false, rememberedId === AD_HOC_CASE_SELECTION));
@@ -2501,7 +2982,7 @@ function rescopeFacilitySelectOptions(): void {
   const preselect = currentId != null && scopeIds.has(currentId) ? currentId : null;
   facilitySelect.replaceChildren();
   const placeholder = new Option(
-    "Select a location…",
+    "Pick a location",
     "",
     true,
     preselect == null,
@@ -2675,7 +3156,7 @@ async function loadFacilities(
   }
   facilitySelect.replaceChildren();
   const placeholder = new Option(
-    "Select a location…",
+    "Pick a location",
     "",
     true,
     rememberedId == null,
@@ -2894,7 +3375,7 @@ async function loadOrgs(generation: number): Promise<void> {
   renderOrgContext();
   orgSelect.replaceChildren();
   const placeholder = new Option(
-    "Select an organization…",
+    "Pick the organization you're working in",
     "",
     true,
     storedId == null,
@@ -2967,10 +3448,19 @@ async function detectPortal(): Promise<void> {
   const nextIdentity = nextPortal == null
     ? null
     : `${nextPortal.portalId}:${nextPortal.key}:${nextPortal.mappingGeneration}:${workRecord?.tuple.launchReceiptId ?? "legacy"}`;
-  if (portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
-      detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity) invalidateFillSelection();
+  const pageChanged = portalTabId !== (nextPortal != null ? tab?.id ?? null : null) ||
+    detectedPageUrl !== pageUrl || detectedPortalIdentity !== nextIdentity;
+  if (pageChanged) {
+    invalidateFillSelection();
+    // A test-mode result belongs to the page it ran on.
+    if (sandboxActive) {
+      resetSandboxResult();
+      renderSandboxBar();
+    }
+  }
   detectedPageUrl = pageUrl;
   detectedPortalIdentity = nextIdentity;
+  detectedTabId = tab?.id ?? null;
   portal = nextPortal;
   portalTabId = portal != null && tab?.id != null ? tab.id : null;
   updateFillReady();
@@ -2990,6 +3480,13 @@ async function detectPortal(): Promise<void> {
 // stays hidden. Reads the registry we already fetched, so it needs no host
 // permission to decide what to ask for.
 async function refreshPortalAccessPrompt(): Promise<void> {
+  const revision = await updatePortalAccessPrompt();
+  // The ask sits in Fill's spot, so the task card follows whatever the
+  // latest check decided (a stale check leaves it to the newer one).
+  if (revision === portalAccessPromptRevision) renderTaskCard();
+}
+
+async function updatePortalAccessPrompt(): Promise<number> {
   const revision = ++portalAccessPromptRevision;
   portalAccess.hidden = true;
   workPortalAccess.hidden = true;
@@ -3010,7 +3507,7 @@ async function refreshPortalAccessPrompt(): Promise<void> {
       (!portalRegistryLoaded || workPortalAbsentFromRegistry(record, portalRows))
     ) {
       const targetResponse = await sendToBackground({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
-      if (revision !== portalAccessPromptRevision) return;
+      if (revision !== portalAccessPromptRevision) return revision;
       const target = targetResponse.ok ? targetResponse.data : null;
       const pattern = target == null ? null : workPortalPermissionPattern(target.origin);
       if (
@@ -3018,17 +3515,30 @@ async function refreshPortalAccessPrompt(): Promise<void> {
         workPortalGrantTargetMatches(target, record, tab?.id ?? null)
       ) {
         const alreadyGranted = await hasOriginPermissions([pattern]);
-        if (revision !== portalAccessPromptRevision) return;
+        if (revision !== portalAccessPromptRevision) return revision;
         if (!alreadyGranted) {
           workPortalAccessCandidate = { ...target, pattern };
+          const payer = payerLabel();
+          workAccessTitle.textContent = `One-time setup for this ${payer} site`;
+          workPortalAccessGrant.textContent = `Allow Minted on this ${payer} site`;
+          if (workAccessDenied) {
+            fillNotice(workAccessNote, "warn", [
+              `Minted can't fill this site without your OK. You can still copy values from Provider details below.`,
+            ]);
+          } else {
+            workAccessNote.className = "btn-note";
+            workAccessNote.textContent = "Chrome will ask. Click Allow.";
+          }
           workPortalAccess.hidden = false;
+        } else {
+          workAccessDenied = false;
         }
-        return;
+        return revision;
       }
     }
   }
 
-  if (portal != null) return;
+  if (portal != null) return revision;
   // The origins to ask for come from whichever registry this job works
   // against: the org's in case mode, the shared library's while training.
   const patterns = portalOriginPatterns(
@@ -3036,9 +3546,13 @@ async function refreshPortalAccessPrompt(): Promise<void> {
   );
   if (patterns.length === 0) {
     portalAccess.hidden = true;
-    return;
+    return revision;
   }
+  const training = panelMode === "train";
+  portalAccessText.textContent = training ? TRAIN_ACCESS_TEXT : CASE_ACCESS_TEXT;
+  portalAccessGrant.textContent = training ? TRAIN_ACCESS_BUTTON : CASE_ACCESS_BUTTON;
   portalAccess.hidden = await hasOriginPermissions(patterns);
+  return revision;
 }
 
 function workPortalPermissionPattern(origin: string): string | null {
@@ -3127,6 +3641,7 @@ workPortalAccessGrant.addEventListener("click", () => {
   void (async () => {
     try {
       const granted = await grantRequest;
+      workAccessDenied = !granted;
       if (!granted) return;
       const response = await sendToBackground({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
       const target = response.ok ? response.data : null;
@@ -3159,7 +3674,8 @@ workPortalAccessGrant.addEventListener("click", () => {
 // releasing shows it again — no confirmation either way.
 function syncQueueVisibility(): void {
   const inHand = selectedProviderId() != null || selectedCaseId() != null;
-  if (inHand) {
+  // B1: no queue under a launch that is still opening.
+  if (inHand || caseOpening()) {
     queueSection.hidden = true;
     return;
   }
@@ -3216,7 +3732,10 @@ function showMain(auth: AuthState): void {
     // Fresh context: this restore load (and every loader it chains into) runs
     // under one generation so it populates uninterrupted. The handoff check
     // runs AFTER orgs load — the org validation needs the membership list.
-    void loadOrgs(bumpGeneration()).then(() => refreshActiveCase());
+    void whileWorkOpens(async () => {
+      await loadOrgs(bumpGeneration());
+      await refreshActiveCase();
+    });
     void detectPortal();
     void restoreCapture();
   })();
@@ -3256,7 +3775,9 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeAvatarMenu();
 });
 
-function showSignin(): void {
+// `expired` is true only when a request came back 401 mid-work
+// (handleSessionExpired). The worker keeps the linked case for the same user.
+function showSignin(expired = false): void {
   signinForm.reset();
   setError(signinError, null);
   showView("signin");
@@ -3264,15 +3785,42 @@ function showSignin(): void {
   // Apply pending handoff after sign-in is a first-class path — the
   // sign-in view says a case is waiting instead of silently dropping it.
   signinHandoffHint.hidden = true;
+  signinExpiredHint.hidden = true;
   void (async () => {
-    const response = await sendToBackground({ type: "GET_ACTIVE_CASE" });
-    signinHandoffHint.hidden = !(
-      response.ok &&
-      response.data.status === "active" &&
-      response.data.record.source === "handoff"
-    );
+    const [caseResponse, workResponse] = await Promise.all([
+      sendToBackground({ type: "GET_ACTIVE_CASE" }),
+      expired ? sendToBackground({ type: "GET_ACTIVE_WORK" }) : Promise.resolve(null),
+    ]);
+    const record = caseResponse.ok && caseResponse.data.status === "active"
+      ? caseResponse.data.record
+      : null;
+    const workLinked = workResponse?.ok === true && workResponse.data.status === "active";
+    // A4 when the session ended with a case or launch linked, else A3.
+    const showExpired = expired && (record != null || workLinked);
+    signinExpiredHint.hidden = !showExpired;
+    signinHandoffHint.hidden = showExpired || record?.source !== "handoff";
   })();
   emailInput.focus();
+}
+
+// The worker answers 401 only after its own refresh failed, so the session
+// is gone (A4). Fall back to the sign-in view; worker state is kept.
+function handleSessionExpired(): void {
+  if (views.main.hidden) return;
+  bumpGeneration();
+  resetPanelSession();
+  showSignin(true);
+}
+
+// Every panel request goes through here so a dead session reaches the
+// sign-in view instead of an error box.
+function sendToBackground<T extends BgRequest["type"]>(
+  request: Extract<BgRequest, { type: T }>,
+): Promise<BgResponse<BgResponseMap[T]>> {
+  return sendToWorker<T>(request).then((response) => {
+    if (!response.ok && response.code === 401) handleSessionExpired();
+    return response;
+  });
 }
 
 signinForm.addEventListener("submit", (event) => {
@@ -3302,39 +3850,50 @@ signoutBtn.addEventListener("click", () => {
   bumpGeneration();
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
-    // The sandbox's designated provider is org-specific and the panel is
-    // about to lose all org context — leaving it "active" would carry stale
-    // sandbox chrome into the next sign-in.
-    clearSandboxOnRealSelection();
-    orgs = [];
-    membershipsLoaded = false;
-    orgReady = false;
-    activeOrgId = null;
-    renderOrgContext();
-    providers = [];
-    cases = [];
-    facilities = [];
-    facilitiesLoaded = false;
-    needsFacility = false;
-    caseContextCaseId = null;
-    // Sign-out clears in-memory values the panel holds —
-    // cards, context, search results, banners, the touch draft.
-    activeCase = null;
-    activeCaseStatus = "none";
-    appliedHandoffSelection = null;
-    applyingHandoffKey = null;
-    rejectedHandoffKey = null;
-    handoffNotice = null;
-    renderHandoffBanner();
-    renderQuickCards(null);
-    renderActiveCases();
-    hideSearchResults();
-    searchInput.value = "";
-    resetTouchForm();
-    renderCaseContext(null);
+    resetPanelSession();
+    // A held log form and its entries never carry over to the next person.
+    resetLogState();
+    payerRefInput.value = "";
+    wipNoteInput.value = "";
     showSignin();
   })();
 });
+
+// The panel's in-memory session. Sign-out and an expired session both clear
+// it; on expiry the worker keeps its own state for the same user.
+function resetPanelSession(): void {
+  // The sandbox's designated provider is org-specific and the panel is
+  // about to lose all org context — leaving it "active" would carry stale
+  // sandbox chrome into the next sign-in.
+  clearSandboxOnRealSelection();
+  orgs = [];
+  membershipsLoaded = false;
+  orgReady = false;
+  activeOrgId = null;
+  renderOrgContext();
+  providers = [];
+  cases = [];
+  casesLoadedFor = null;
+  facilities = [];
+  facilitiesLoaded = false;
+  needsFacility = false;
+  caseContextCaseId = null;
+  // Sign-out clears in-memory values the panel holds —
+  // cards, context, search results, banners, the touch draft.
+  activeCase = null;
+  activeCaseStatus = "none";
+  appliedHandoffSelection = null;
+  applyingHandoffKey = null;
+  rejectedHandoffKey = null;
+  handoffNotice = null;
+  renderHandoffBanner();
+  renderQuickCards(null);
+  renderActiveCases();
+  hideSearchResults();
+  searchInput.value = "";
+  resetTouchForm();
+  renderCaseContext(null);
+}
 
 refreshBtn.addEventListener("click", () => {
   const generation = bumpGeneration();
@@ -3485,6 +4044,36 @@ bindAiReviewActions(
   },
 );
 
+// Fill problems show on the task card with a support code (C7 to C11).
+const FILL_TAB_MOVED = "The form's tab is no longer the active tab. Switch back to it, then click Fill this page again.";
+const FILL_PAGE_CHANGED = "The page changed while Minted was filling, so nothing was filled. Click Fill this page again.";
+const FILL_PAGE_MOVED_ON = "The page changed after Minted filled it. Check the form, then click Fill this page again if you need to.";
+const FILL_SELECTION_CHANGED = "You changed the case while Minted was filling. The form may be partly filled. Check it, then click Fill this page again.";
+const FILL_FAILED = "Something on this page stopped the fill. Try again, or fill it by hand.";
+
+function fillLostPageText(): string {
+  const payer = selectedCaseId() != null ? payerLabel() : (portal?.label ?? "payer");
+  return `Minted lost touch with the ${payer} page. Reload it, then click Fill this page again.`;
+}
+
+// Who and where a fill is for. A different key after a fill means the
+// coordinator changed the selection while it ran.
+function fillSelectionKey(): string {
+  return [selectedProviderId(), selectedCaseId() ?? caseSelect.value, selectedFacilityId(), selectedGroupId].join("|");
+}
+
+function showFillProblem(text: string, code: string | number | null, reloadTabId: number | null = null): void {
+  const extra: HTMLElement[] = [];
+  if (reloadTabId != null) {
+    extra.push(noticeButton("Reload page", "secondary", () => {
+      void chrome.tabs.reload(reloadTabId).catch(() => undefined);
+    }));
+  }
+  extra.push(supportButton(code, null, "danger"));
+  fillNotice(fillProblem, "danger", [text], extra);
+  renderTaskCard();
+}
+
 fillBtn.addEventListener("click", () => {
   // Capture the selection generation at click. If the operator switches
   // provider/org/case while this fill is in flight, the generation changes and
@@ -3505,6 +4094,7 @@ fillBtn.addEventListener("click", () => {
   // facility resolved. Case is optional for ad hoc fills.
   if (!orgResolved() || !providerId) return;
   if (!facilitiesLoaded || (needsFacility && facilityId == null)) return;
+  const clickSelection = fillSelectionKey();
   void (async () => {
     // The panel outlives tab switches, so never trust detection state from
     // earlier: re-read the active tab and re-match its URL at click time.
@@ -3523,10 +4113,7 @@ fillBtn.addEventListener("click", () => {
       // stale or mismatched Work context closed instead of falling through to
       // legacy selection writes or URL-based fill recognition.
       if (hasWorkContext && workRecord == null) {
-        setError(
-          mainError,
-          "The enrollment form is no longer the active tab - switch back to it and try again.",
-        );
+        showFillProblem(FILL_TAB_MOVED, "tab");
         return;
       }
       // Work carries its own provider/case/facility tuple. The UI's legacy
@@ -3545,15 +4132,12 @@ fillBtn.addEventListener("click", () => {
         if (!isFillCurrent()) return;
         workRecord = activeWorkRecordForTab(tab, originalUrl);
         if (hasWorkContext && workRecord == null) {
-          setError(
-            mainError,
-            "The enrollment form is no longer the active tab - switch back to it and try again.",
-          );
+          showFillProblem(FILL_TAB_MOVED, "tab");
           return;
         }
       }
     } catch (error) {
-      setError(mainError, error instanceof Error ? error.message : "Could not select group");
+      showFillProblem(error instanceof Error ? error.message : "Could not save the group. Try again.", "group");
       return;
     }
     if (!isFillCurrent()) return;
@@ -3565,25 +4149,25 @@ fillBtn.addEventListener("click", () => {
     portalTabId = clickPortal != null && tab?.id != null ? tab.id : null;
     updateFillReady();
     if (!clickPortal || tab?.id == null) {
-      setError(
-        mainError,
-        "The enrollment form is no longer the active tab - switch back to it and try again.",
-      );
+      showFillProblem(FILL_TAB_MOVED, "tab");
       return;
     }
     setError(mainError, null);
     fillBtn.disabled = true;
     fillBtn.textContent = "Filling…";
     fillBtn.classList.add("filling");
-    fillNote.hidden = false;
+    fillRunning = true;
+    renderTaskCard();
     let response: Awaited<ReturnType<typeof sendToBackground<"FILL">>>;
     try {
       let aiScanId: string | undefined;
       let aiMatches: Array<{ selector: string; token: string; confidence: number }> = [];
       let aiStatus: "unavailable" | "no-matches" | "error" | undefined;
-      const nanoReady = await canUseNano();
+      const nanoReady = AI_FILL_ENABLED ? await canUseNano() : false;
       if (!isFillCurrent()) return;
-      if (!nanoReady) {
+      if (!AI_FILL_ENABLED) {
+        // AI is off: no scan, no status, so the fill reports no AI review.
+      } else if (!nanoReady) {
         aiStatus = "unavailable";
       } else {
         const prepared = await sendToBackground({
@@ -3606,7 +4190,7 @@ fillBtn.addEventListener("click", () => {
           aiMatches = matches.filter((match) => match.confidence >= 0.85);
           if (aiMatches.length === 0) aiStatus = "no-matches";
         } else if (/selection changed|form changed|expired/i.test(prepared.error)) {
-          setError(mainError, prepared.error);
+          showFillProblem(prepared.error, "ai-prepare");
           return;
         } else {
           aiStatus = "error";
@@ -3628,7 +4212,7 @@ fillBtn.addEventListener("click", () => {
         currentPortal?.key !== clickPortal.key ||
         currentPortal?.mappingGeneration !== clickPortal.mappingGeneration
       ) {
-        setError(mainError, "The portal page changed during AI review. Run Fill again.");
+        showFillProblem(FILL_PAGE_CHANGED, "page-changed");
         return;
       }
 
@@ -3647,20 +4231,31 @@ fillBtn.addEventListener("click", () => {
         ...(aiStatus ? { aiStatus } : {}),
       });
     } catch (error) {
-      setError(mainError, error instanceof Error ? error.message : "AI review failed.");
+      showFillProblem(error instanceof Error ? error.message : FILL_FAILED, "fill");
       return;
     } finally {
       fillBtn.textContent = "Fill this page";
       fillBtn.disabled = false;
       fillBtn.classList.remove("filling");
-      fillNote.hidden = true;
+      fillRunning = false;
       updateFillReady();
     }
-    // Selection changed mid-fill: drop this result so it can't render under the
-    // provider now selected. Button chrome above is already restored.
-    if (!isFillCurrent()) return;
+    // Selection changed mid-fill: drop this result so it can't render under
+    // the case now selected, and say so (C11): the form may be partly filled.
+    if (!isFillCurrent()) {
+      if (response.ok) {
+        showFillProblem(
+          fillSelectionKey() === clickSelection ? FILL_PAGE_MOVED_ON : FILL_SELECTION_CHANGED,
+          "dropped",
+        );
+      }
+      return;
+    }
     if (!response.ok) {
-      setError(mainError, response.error);
+      const lostPage = /could not establish connection|receiving end does not exist|could not reach the enrollment form|no tab with id|cannot access|cannot be scripted/i
+        .test(response.error);
+      if (lostPage) showFillProblem(fillLostPageText(), response.code ?? "no-page", tab.id);
+      else showFillProblem(response.error, response.code ?? "fill");
       return;
     }
     lastFill = {
@@ -3679,17 +4274,8 @@ fillBtn.addEventListener("click", () => {
   })();
 });
 
-// Several matching tasks: the human picks which one (or none) to close.
-taskSelect.addEventListener("change", () => {
-  selectedTaskId = taskSelect.value || null;
-});
-
-// After submit, refresh cases so closed tasks drop off, refetch the provider's
-// cases so the now-completed task drops out of portalTasks and can't be
-// re-offered on a later fill of the same case. Reuses the case-picker's existing
-// GET /api/cases call — no new endpoint. Best-effort and generation-guarded: a
-// stale response (provider/org switched meanwhile) is discarded, and an error
-// leaves the last-known cases in place (never raises the error box).
+// After logging, refresh the case list so the status pill and the
+// duplicate guard see the new state. Best-effort and generation-guarded.
 async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
   const generation = loadGeneration;
   const response = await sendToBackground({ type: "LIST_CASES", providerId });
@@ -3697,118 +4283,167 @@ async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
   cases = response.data;
   renderCaseStatusPill();
   renderCaseNote();
+  renderTaskCard();
+}
+
+// Moves focus to the first of these that shows, once the control she used
+// has hidden, so keyboard and screen reader users keep their place.
+function focusFirstShown(...targets: HTMLElement[]): void {
+  const target = targets.find((node) => node.isConnected && node.closest("[hidden]") == null);
+  target?.focus({ preventScroll: true });
+}
+
+// A log failure interrupts; everything else waits its turn.
+function setLiveRole(box: HTMLElement, role: "status" | "alert"): void {
+  box.setAttribute("role", role);
+  box.setAttribute("aria-live", role === "alert" ? "assertive" : "polite");
+}
+
+// "Submitted on {payer}? Log it": works with or without a fill (B2). After a
+// refusal ("Log it again") the form opens with her entries.
+function openLogForm(): void {
+  if (!canLogSubmission()) return;
+  if (submitPhase !== "failed") resetSubmitInputs();
+  dupConfirmPending = false;
+  lastLogFailure = null;
+  submitPhase = "form";
+  logScope = logScopeKey();
+  renderTaskCard();
+  focusFirstShown(payerRefInput, markSubmittedBtn);
+}
+
+logLink.addEventListener("click", openLogForm);
+
+// A manual log picks its task again on every try, so after a refusal she can
+// check the case and log again. Typed Work can't: the same launch sends the
+// same step and gets the same answer (E10). Only a relaunch changes it, and a
+// relaunch starts fresh anyway.
+function relogButton(): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "link";
+  button.textContent = "Log it again";
+  button.addEventListener("click", openLogForm);
+  return button;
+}
+
+// Closing the form puts focus back on Log it, or on the task title.
+function closeLogForm(): void {
+  resetLogState();
+  renderTaskCard();
+  focusFirstShown(logLink, taskToggle);
+}
+
+submitBackBtn.addEventListener("click", closeLogForm);
+
+dupCancelBtn.addEventListener("click", closeLogForm);
+
+fillAgainBtn.addEventListener("click", () => {
+  fillBtn.click();
+});
+
+function logNextLink(link: "task" | "case" | null, caseId: string, taskId: string | null): HTMLElement[] {
+  if (link === "task" && taskId != null) return [externalLink("Open task in Minted Panel ↗", taskUrl(taskId))];
+  if (link === "case" || link === "task") return [externalLink("Open case in Minted Panel ↗", caseUrl(caseId))];
+  return [];
 }
 
 // Pressed by the human only after they submit the portal form themselves.
-// The background reuses one idempotency id per (case, fill session), so a
-// retry after a failure can never double-log the touch. Legacy fills may carry
-// a portal-key task choice; typed Work is bound only to its saved exact tuple.
+// The worker reuses one idempotency id per attempt, so a retry after a
+// failure can never double-log. Typed Work is bound to its exact launch or
+// saved fill; a manual log closes a task only under the 9.2 rule.
 markSubmittedBtn.addEventListener("click", () => {
-  const context = lastFill;
-  if (!context || !context.caseId) return;
-  const submissionMode = workSubmissionMode(context);
-  if (submissionMode !== "legacy" && submissionMode !== "enrollment") return;
-  const caseId = context.caseId;
+  const caseId = selectedCaseId();
+  const providerId = selectedProviderId();
+  if (caseId == null || providerId == null || !canLogSubmission()) return;
+  if (submitPhase !== "form" && submitPhase !== "failed") return;
 
-  // On a case submitted inside the duplicate window, the first click
-  // surfaces a warning and re-labels the button; the next click logs anyway.
-  if (!dupConfirmPending) {
-    const caseItem = cases.find((c) => c.id === caseId);
-    const phrase = recentSubmissionPhrase(caseItem);
-    // Duplicate warning shows on pickup, where it can still save the
-    // work. Submitting stays a one-click confirm rather than a second warning:
-    // by here the human has already seen the pickup notice and done the fill.
-    if (phrase != null && !dismissedDupCaseIds.has(caseItem?.id ?? "")) {
+  // E3: a case logged as submitted recently asks once, with a way out.
+  if (!dupConfirmPending && submitPhase === "form") {
+    const phrase = recentSubmissionPhrase(cases.find((c) => c.id === caseId));
+    if (phrase != null && !dismissedDupCaseIds.has(caseId)) {
       dupConfirmPending = true;
-      dupWarn.hidden = false;
-      dupWarn.textContent = `This case was marked submitted ${phrase}. Log another submission?`;
-      markSubmittedBtn.textContent = "Log anyway";
+      dupWarn.textContent = `This case was already logged as submitted ${phrase}. Log it again?`;
+      renderTaskCard();
       return;
     }
   }
-  // Capture a legacy task choice before the async request; typed Work never
-  // sends a task inferred from the case's portal-key list.
-  const closedTaskId = submissionMode === "legacy" ? selectedTaskId : null;
-  const closedTaskTitle = closedTaskId
-    ? (matchingPortalTasks().find((t) => t.taskId === closedTaskId)?.title ??
-      null)
-    : null;
+
+  const work = workRecordForSelectedCase();
+  const fill = lastFill != null && lastFill.caseId === caseId ? lastFill : null;
+  const isWork = work != null || fill?.isWorkFill === true;
+  const plan = currentPlan();
+  const taskId = !isWork && plan.kind === "manual" ? (manualTaskToClose(plan.tasks)?.taskId ?? null) : null;
+  const linkTaskId = plan.kind === "work" ? (plan.task?.taskId ?? null) : (plan.tasks.length === 1 ? (plan.tasks[0]?.taskId ?? null) : null);
+  const statusBefore = caseStatusNow();
+  const confirmation = payerRefInput.value;
+  const portalKey = work?.tuple.portalKey ?? fill?.portalKey ?? portal?.key ?? null;
+  if (portalKey == null) return;
+  const generation = loadGeneration;
+  const scope = logScopeKey();
+
+  submitPhase = "logging";
+  logScope = scope;
+  renderTaskCard();
   void (async () => {
     setError(mainError, null);
-    markSubmittedBtn.disabled = true;
-    markSubmittedBtn.textContent = "Logging…";
     const response = await sendToBackground({
       type: "MARK_SUBMITTED",
-      providerId: context.providerId,
+      providerId: fill?.providerId ?? providerId,
       caseId,
-      portalKey: context.portalKey,
-      fillSessionId: context.fillSessionId,
-      isWorkFill: context.isWorkFill,
-      payerReferenceId: payerRefInput.value,
+      portalKey,
+      fillSessionId: fill?.fillSessionId ?? null,
+      isWorkFill: isWork,
+      payerReferenceId: confirmation,
       wipNote: wipNoteInput.value,
-      taskId: closedTaskId,
-      // Optionally bump case status to Submitted alongside the touch.
-      // Explicit and per-request — the extension never changes status implicitly.
+      taskId,
+      // Asks the panel to report what its trigger did to the case status.
+      // Every submission log moves a Not Started or In Progress case.
       bumpStatus: true,
     });
+    // A different case or a new launch dropped this log's state already.
+    if (!isCurrent(generation) || selectedCaseId() !== caseId || logScopeKey() !== scope) return;
     if (!response.ok) {
-      // A 404 here can also mean a cross-org/invalid task_id — surface the
-      // server's message as-is and let the human retry. Never auto-retry with
-      // the task stripped.
-      //
-      // On failure, keep form values for retry: the typed values stay on screen, the
-      // state says UNSENT in as many words, and the button becomes an explicit
-      // retry. The worker reuses the same idempotency id across retries, so a
-      // retry after a network drop replays the anchor rather than double-
-      // logging — the safe thing to do is press it again.
-      markSubmittedBtn.disabled = false;
-      markSubmittedBtn.textContent = "Retry — mark submitted";
-      submitStatus.hidden = false;
-      submitStatus.classList.add("partial");
-      submitStatus.textContent = navigator.onLine
-        ? "Not logged yet — nothing was recorded on the case. Your entries are kept; press retry."
-        : "You're offline — nothing was recorded on the case. Your entries are kept; retry when you reconnect.";
-      setError(mainError, response.error);
+      // Entries stay in the form. Only a request that never landed offers
+      // Try again; a refusal points where it can be fixed (E9 to E11).
+      const view = logFailureView(response.code, response.error, isWork ? "work" : "manual");
+      submitPhase = "failed";
+      lastLogFailure = view;
+      setLiveRole(submitStatus, "alert");
+      fillNotice(submitStatus, view.tone, [view.text], [supportButton(response.code ?? "offline", fill?.fillSessionId ?? null)]);
+      const next = [
+        ...logNextLink(view.link, caseId, linkTaskId),
+        ...(!isWork && !view.retry ? [relogButton()] : []),
+      ];
+      submitNext.replaceChildren(...next);
+      submitNext.hidden = next.length === 0;
+      renderTaskCard();
+      focusFirstShown(submitStatus, taskToggle);
       return;
     }
+    const view: AfterLogView = afterLogView({
+      plan,
+      bump: response.data.statusBump,
+      statusBefore,
+      confirmationNumber: confirmation,
+    });
+    if (fill && lastFill === fill) lastFill = { ...fill, submitted: true };
+    submitPhase = "done";
+    logScope = scope;
+    lastLogFailure = null;
+    lastLogMoved = response.data.statusBump?.applied === true;
     dupConfirmPending = false;
-    dupWarn.hidden = true;
-    if (lastFill?.fillSessionId === context.fillSessionId) {
-      lastFill = { ...lastFill, submitted: true };
-    }
-    submitStatus.classList.remove("partial");
-    submitDetails.hidden = true;
-    taskLink.hidden = true;
-    selectedTaskId = null;
-    submitHint.hidden = true;
-    markSubmittedBtn.hidden = true;
-    submitStatus.hidden = false;
-    // Report the touch and the status bump separately and honestly. A
-    // skipped bump is not a failed touch: the submission IS recorded, and the
-    // reason (illegal edge, role, concurrency) comes from the server.
-    const bump = response.data.statusBump;
-    const lines = [submissionSuccessLine(
-      context,
-      response.data.touch.fillSessionId ?? null,
-      closedTaskTitle,
-      caseContextData,
-    )];
-    if (bump?.applied) lines.push("Case moved to Submitted.");
-    else if (bump && !bump.applied) {
-      lines.push(
-        `Status unchanged — ${bump.reason ?? "the case couldn't be moved to Submitted."}`,
-      );
-    }
-    submitStatus.textContent = lines.join(" ");
-    submitStatus.classList.toggle("partial", bump != null && !bump.applied);
-    if (lastAiReview) {
-      lastAiReview = { ...lastAiReview, learning: response.data.learning };
-      renderAiReview(lastAiReview, { completedAt: "", submitted: true });
-    }
-    // Point 6: drop the now-closed task from the case's portalTasks so a later
-    // fill of the same case won't re-offer it.
-    if (closedTaskId) void refreshCasesAfterSubmit(context.providerId);
-    // After success, surface the next-best-action queue top.
+    setLiveRole(submitStatus, "status");
+    fillNotice(submitStatus, "ok", [{ text: view.headline, strong: true }, ...view.lines]);
+    const next = logNextLink(view.link, caseId, linkTaskId);
+    submitNext.replaceChildren(...next);
+    submitNext.hidden = next.length === 0;
+    renderTaskCard();
+    focusFirstShown(submitStatus, taskToggle);
+    // The status, last touch and task list changed on the server.
+    void refreshCasesAfterSubmit(providerId);
+    caseContextCaseId = null;
+    void refreshCaseContext();
     void refreshNextBestAction(caseId);
   })();
 });
@@ -4142,7 +4777,7 @@ function renderSearchResults(data: SearchResults): void {
         `${row.payerName ?? "Unknown payer"} · ${row.state}`,
       ]
         .filter(Boolean)
-        .join(" — ");
+        .join(" · ");
       button.append(title);
       const meta = document.createElement("span");
       meta.className = "search-row-meta";
@@ -4260,6 +4895,10 @@ searchInput.addEventListener("input", () => {
 // non-member context is discarded, the record is gone but the user must see
 // why).
 let handoffNotice: string | null = null;
+// D6: the launch the panel last showed live (see carriedLaunchId), and the
+// one-time neutral notice naming the launch that replaced it.
+let shownLaunchId: string | null = null;
+let launchSwapNotice: { launchReceiptId: string; text: string } | null = null;
 
 function handoffKey(record: ActiveCaseRecord): string {
   return activeCaseReceiptKey(record);
@@ -4278,13 +4917,18 @@ function renderHandoffBanner(): void {
   handoffBanner.replaceChildren();
   handoffBanner.hidden = true;
   handoffBanner.classList.remove("banner-warn");
+  orgSwitch.replaceChildren();
+  orgSwitch.hidden = true;
 
   if (handoffNotice != null) {
-    handoffBanner.hidden = false;
-    handoffBanner.classList.add("banner-warn");
+    // Before an org resolves #case-work is hidden, so a launch notice (A7)
+    // shows above the org picker instead, like the A6 prompt.
+    const box = orgReady ? handoffBanner : orgSwitch;
+    box.hidden = false;
+    box.classList.add("banner-warn");
     const text = document.createElement("span");
     text.textContent = handoffNotice;
-    handoffBanner.append(
+    box.append(
       text,
       bannerButton("Dismiss", () => {
         handoffNotice = null;
@@ -4294,28 +4938,41 @@ function renderHandoffBanner(): void {
     return;
   }
 
-  if (activeWorkState.status === "expired") {
+  // D6: another launch replaced the one on screen. Neutral, shown once, and
+  // only while the launch it names is still the live one.
+  if (launchSwapNotice != null && activeWorkState.status === "active" &&
+      activeWorkState.record.tuple.launchReceiptId === launchSwapNotice.launchReceiptId) {
     handoffBanner.hidden = false;
-    handoffBanner.classList.add("banner-warn");
     const text = document.createElement("span");
-    text.textContent = "This exact Work context expired after 60 minutes idle. Re-launch the task from Minted Panel to continue.";
-    handoffBanner.append(text);
+    text.textContent = launchSwapNotice.text;
+    handoffBanner.append(
+      text,
+      bannerButton("Dismiss", () => {
+        launchSwapNotice = null;
+        renderHandoffBanner();
+      }),
+    );
     return;
   }
+
+  // A timed-out link is explained on the task card (D4). The live link's
+  // technical line (owner, form key, mapping) is in admin Details now.
+  if (activeWorkState.status === "expired" || activeWorkState.status === "active") return;
   if (activeWorkState.status === "blocked") {
+    // D5: say why the link ended. The payer is named only when the selected
+    // case is the one whose link ended.
+    const ended = activeWorkState;
+    const caseId = selectedCaseId();
+    const payer = caseId != null && (ended.ownerId == null || ended.ownerId === caseId) ? payerLabel() : null;
+    const endedCaseId = workEndedCaseId(ended);
     handoffBanner.hidden = false;
     handoffBanner.classList.add("banner-warn");
     const text = document.createElement("span");
-    text.textContent = "The exact Work tab or context ended. Relaunch the task from Minted Panel, or make a manual selection before filling.";
+    text.textContent = workEndedLine(ended.reason, payer);
     handoffBanner.append(text);
-    return;
-  }
-  if (activeWorkState.status === "active") {
-    handoffBanner.hidden = false;
-    const text = document.createElement("span");
-    const work = activeWorkState.record;
-    text.textContent = `Exact Work context · ${work.tuple.ownerKind} · ${work.tuple.portalKey} · mapping ${work.tuple.mappingGeneration}. Fill is bound to its launched tab.`;
-    handoffBanner.append(text);
+    if (endedCaseId != null) {
+      handoffBanner.append(externalLink("Back to case ↗", caseUrl(endedCaseId), "link banner-action"));
+    }
     return;
   }
 
@@ -4356,10 +5013,11 @@ function renderHandoffBanner(): void {
     const resolvedOrg =
       orgs.length === 1 ? (orgs[0]?.orgId ?? null) : activeOrgId;
     if (membership != null && resolvedOrg !== record.orgId) {
-      handoffBanner.hidden = false;
+      // A6: above the org picker, so it shows before an org resolves.
+      orgSwitch.hidden = panelMode !== "case";
       const text = document.createElement("span");
-      text.textContent = `A case was handed off in ${orgLabel(membership)}.`;
-      handoffBanner.append(
+      text.textContent = `This case is in ${orgLabel(membership)}.`;
+      orgSwitch.append(
         text,
         bannerButton(`Switch to ${orgLabel(membership)}`, () => {
           void switchOrgForHandoff(record);
@@ -4369,19 +5027,8 @@ function renderHandoffBanner(): void {
     }
   }
 
-  // Applied handoff: a quiet provenance line while the context is live.
-  if (currentHandoffSelectionIsApplied(record)) {
-    handoffBanner.hidden = false;
-    const text = document.createElement("span");
-    text.textContent = "Working from a Minted Panel handoff.";
-    const returnLink = document.createElement("a");
-    returnLink.className = "link banner-action";
-    returnLink.href = caseReturnUrl(API_BASE_URL, record.caseId);
-    returnLink.target = "_blank";
-    returnLink.rel = "noreferrer";
-    returnLink.textContent = "Return to case ↗";
-    handoffBanner.append(text, returnLink);
-  }
+  // An applied handoff shows as "Opened from Minted Panel · Back to case"
+  // on the task card.
 }
 
 // The org-switch path for a cross-org handoff. SET_ACTIVE_ORG clears prior
@@ -4458,7 +5105,7 @@ async function maybeApplyHandoff(record: ActiveCaseRecord): Promise<void> {
     activeCaseStatus = "none";
     rejectedHandoffKey = key;
     handoffNotice =
-      "A case was handed off for an organization this account isn't a member of, so it was discarded. Sign in with the right account, or use search below.";
+      "This case is in an organization your account isn't part of. Sign in with the right account, or search.";
     renderHandoffBanner();
     updateFillReady();
     return;
@@ -4635,6 +5282,23 @@ async function refreshActiveCase(applyHandoff = true): Promise<void> {
   }
 }
 
+// D6 names for a launch, from what the panel has loaded for its ids. Null
+// parts make launchSwapLine fall back to "the new case".
+function launchSwapNames(record: ActiveWorkRecord): { provider: string | null; payer: string | null; state: string | null } {
+  const tuple = record.tuple;
+  const caseId = tuple.ownerKind === "case" ? tuple.ownerId : null;
+  const context = caseId != null && caseContextCaseId === caseId ? caseContextData : null;
+  const caseItem = caseId == null ? undefined : cases.find((c) => c.id === caseId);
+  const listed = providers.find((p) => p.id === tuple.providerId);
+  return {
+    provider: context?.provider?.id === tuple.providerId
+      ? context.provider.name
+      : listed != null ? `${listed.firstName} ${listed.lastName}` : null,
+    payer: context?.payer?.name ?? caseItem?.payerName ?? null,
+    state: context?.state ?? caseItem?.state ?? null,
+  };
+}
+
 async function refreshActiveWork(reloadSelections = true): Promise<void> {
   const previousIdentity = activeWorkStateIdentity(activeWorkState);
   const modeResponse = await sendToBackground({ type: "GET_PANEL_MODE" });
@@ -4644,12 +5308,34 @@ async function refreshActiveWork(reloadSelections = true): Promise<void> {
   }
   const response = await sendToBackground({ type: "GET_ACTIVE_WORK" });
   if (!response.ok) return;
+  // Read the prior launch and assign in one turn, so overlapping refreshes
+  // (push and poll) see a replacement once.
+  const previousLaunchId = activeWorkState.status === "active"
+    ? activeWorkState.record.tuple.launchReceiptId
+    : shownLaunchId;
   activeWorkState = response.data;
+  shownLaunchId = carriedLaunchId(previousLaunchId, activeWorkState);
+  const replacement = isLaunchReplacement(previousLaunchId, activeWorkState) &&
+    activeWorkState.status === "active"
+    ? activeWorkState.record
+    : null;
+  if (launchSwapNotice != null && launchSwapNotice.launchReceiptId !== shownLaunchId) launchSwapNotice = null;
   const changed = activeWorkStateIdentity(activeWorkState) !== previousIdentity;
   if (changed && activeWorkState.status !== "none" && reloadSelections &&
       !views.main.hidden && panelMode !== "train") {
-    await loadOrgs(bumpGeneration());
-    await refreshActiveCase();
+    await whileWorkOpens(async () => {
+      await loadOrgs(bumpGeneration());
+      await refreshActiveCase();
+    });
+  }
+  // Named after the reload so the new case's names are usually known. Set
+  // only if that launch is still the live one.
+  if (replacement != null && activeWorkState.status === "active" &&
+      activeWorkState.record.tuple.launchReceiptId === replacement.tuple.launchReceiptId) {
+    launchSwapNotice = {
+      launchReceiptId: replacement.tuple.launchReceiptId,
+      text: launchSwapLine(launchSwapNames(replacement)),
+    };
   }
   await detectPortal();
   renderHandoffBanner();
@@ -4704,7 +5390,7 @@ function resetTouchForm(): void {
   touchDraftId = null;
   setError(touchError, null);
   touchSaveBtn.disabled = false;
-  touchSaveBtn.textContent = "Log touch";
+  touchSaveBtn.textContent = "Log it";
   touchStatus.hidden = true;
 }
 
@@ -4746,16 +5432,23 @@ touchSaveBtn.addEventListener("click", () => {
     });
     if (!isCurrent(generation)) return;
     if (!response.ok) {
-      // Failed write: values stay in the form, button becomes retry.
+      // Failed write: values stay in the form; the same id is reused, so
+      // Try again can never double-log (F3).
       touchSaveBtn.disabled = false;
-      touchSaveBtn.textContent = "Retry — log touch";
-      setError(touchError, response.error);
+      touchSaveBtn.textContent = "Try again";
+      const transient = response.code == null || response.code >= 500;
+      fillNotice(touchError, "danger", [
+        transient ? "Not saved yet. Your entries are kept. Try again." : `Not saved. ${response.error}`,
+      ], [supportButton(response.code ?? "offline")]);
+      touchError.className = "error";
       return;
     }
     resetTouchForm();
     touchStatus.hidden = false;
-    touchStatus.textContent = "Touch logged to the case.";
-    void refreshNextBestAction(caseId);
+    touchStatus.textContent = "Saved to the case.";
+    // The case's last touch changed.
+    caseContextCaseId = null;
+    void refreshCaseContext();
   })();
 });
 
@@ -4764,15 +5457,14 @@ touchSaveBtn.addEventListener("click", () => {
 async function refreshNextBestAction(loggedCaseId: string): Promise<void> {
   const generation = loadGeneration;
   nbaSection.hidden = false;
-  nbaSection.replaceChildren(searchEmptyLine("Finding the next best action…"));
+  nbaSection.replaceChildren(searchEmptyLine("Finding what's next…"));
   const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
   if (!isCurrent(generation)) return;
   if (!response.ok) {
     // Honest degrade (e.g. a server that predates the endpoint): the loop
     // continues in the webapp.
-    nbaSection.replaceChildren(
-      searchEmptyLine(`Next best action unavailable: ${response.error}`),
-    );
+    nbaSection.hidden = true;
+    nbaSection.replaceChildren();
     return;
   }
   renderNba(response.data, loggedCaseId);
@@ -4803,7 +5495,7 @@ function queueRow(item: NextBestActionItem): HTMLElement {
   main.className = "queue-row-main";
   const title = document.createElement("span");
   title.className = "case-row-title";
-  title.textContent = `${item.providerName} — ${item.payerName} · ${item.state}`;
+  title.textContent = `${item.providerName} · ${item.payerName} · ${item.state}`;
   main.append(title);
   const reason = document.createElement("span");
   reason.className = "queue-row-reason";
@@ -4839,7 +5531,7 @@ function renderQueue(items: NextBestActionItem[]): void {
   if (items.length === 0) {
     const clear = document.createElement("p");
     clear.className = "nba-clear";
-    clear.textContent = "Queue clear — nothing needs action right now.";
+    clear.textContent = "Nothing needs you right now.";
     queueSection.append(clear);
     return;
   }
@@ -4862,12 +5554,12 @@ async function loadQueue(generation: number): Promise<void> {
     return;
   }
   queueSection.hidden = false;
-  queueSection.replaceChildren(searchEmptyLine("Loading your queue…"));
+  queueSection.replaceChildren(searchEmptyLine("Loading your list…"));
   const response = await sendToBackground({ type: "GET_NEXT_BEST_ACTION" });
   if (!isCurrent(generation)) return;
   if (!response.ok) {
     queueSection.replaceChildren(
-      searchEmptyLine(`Queue unavailable: ${response.error}`),
+      searchEmptyLine("Can't load your list right now. Use Search."),
     );
     return;
   }
@@ -4878,19 +5570,21 @@ async function loadQueue(generation: number): Promise<void> {
   renderQueue(items);
 }
 
+// "Up next" under a logged submission (E5, E12): one item, or a plain
+// "nothing else needs you".
 function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   nbaSection.replaceChildren();
   nbaSection.hidden = false;
   const heading = document.createElement("p");
-  heading.className = "section-title";
-  heading.textContent = "Next best action";
+  heading.className = "lbl";
+  heading.textContent = "Up next";
   nbaSection.append(heading);
 
   const item = result.item;
-  if (item == null) {
+  if (item == null || item.caseId === loggedCaseId) {
     const done = document.createElement("p");
     done.className = "nba-clear";
-    done.textContent = "Queue clear — nothing needs action right now.";
+    done.textContent = "Nothing else needs you right now.";
     nbaSection.append(done);
     return;
   }
@@ -4899,21 +5593,12 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   card.className = "nba-card";
   const title = document.createElement("p");
   title.className = "nba-title";
-  title.textContent =
-    item.caseId === loggedCaseId
-      ? "Next up is still this case:"
-      : `Next: ${item.providerName} — ${item.payerName} · ${item.state}`;
+  title.textContent = `${item.providerName} · ${item.payerName} · ${item.state}`;
   card.append(title);
   const action = document.createElement("p");
   action.className = "nba-action";
-  action.textContent = item.action;
+  action.textContent = item.reason || item.action;
   card.append(action);
-  if (item.reason) {
-    const reason = document.createElement("p");
-    reason.className = "nba-reason";
-    reason.textContent = item.reason;
-    card.append(reason);
-  }
   if (item.deadline != null) {
     const deadline = document.createElement("p");
     deadline.className = item.deadline.overdue
@@ -4924,22 +5609,16 @@ function renderNba(result: NextBestActionResult, loggedCaseId: string): void {
   }
   const actions = document.createElement("div");
   actions.className = "nba-actions";
-  if (item.caseId !== loggedCaseId) {
-    const work = document.createElement("button");
-    work.type = "button";
-    work.className = "secondary nba-work";
-    work.textContent = "Work this case";
-    work.addEventListener("click", () => {
-      nbaSection.hidden = true;
-      // State rides along from the queue row; facility resolves from context —
-      // no facilityId on this row.
-      void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
-    });
-    actions.append(work);
-  }
-  actions.append(
-    nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`),
-  );
+  const work = document.createElement("button");
+  work.type = "button";
+  work.className = "secondary nba-work";
+  work.textContent = "Open case";
+  work.addEventListener("click", () => {
+    nbaSection.hidden = true;
+    // State rides along from the queue row; facility resolves from context.
+    void selectCaseInPanel(item.providerId, item.caseId, true, undefined, item.state);
+  });
+  actions.append(work, nbaLink("Open in Minted Panel ↗", `${API_BASE_URL}${item.deepLink}`));
   card.append(actions);
   nbaSection.append(card);
 }
@@ -4970,8 +5649,10 @@ function renderCaqh(): void {
     attestedOnFor(selectedProviderId(), providers),
     localToday(),
   );
+  // B15: one line with the date. The relative age would only repeat it.
   caqhHeadline.textContent = caqhOffer.headline;
-  caqhAttested.textContent = attestationLine(caqhOffer);
+  caqhAttested.textContent = "";
+  caqhAttested.hidden = true;
   // Recently attested profiles use de-emphasized styling rather than nags.
   caqhSection.classList.toggle("de-emphasized", caqhOffer.deEmphasize);
 }
@@ -4983,6 +5664,7 @@ caqhAttest.addEventListener("click", () => {
   const generation = loadGeneration;
   caqhAttest.disabled = true;
   caqhAttest.textContent = "Recording…";
+  caqhStatus.hidden = true;
   void (async () => {
     const response = await sendToBackground({
       type: "RECORD_CAQH_ATTESTATION",
@@ -4993,7 +5675,9 @@ caqhAttest.addEventListener("click", () => {
     caqhAttest.textContent = "Record attestation";
     if (!isCurrent(generation)) return;
     if (!response.ok) {
-      setError(mainError, response.error);
+      // Said on the card, beside the button that failed.
+      caqhStatus.hidden = false;
+      caqhStatus.textContent = attestationFailureText(response);
       return;
     }
     // Write the server-authoritative date back onto the roster row, which is
@@ -5163,6 +5847,12 @@ function isCurrentTrainTargetRequest(target: TrainTargetRequestContext): boolean
 // WORKING, not a stored selection, and it must never survive into a real case
 // (switching provider or case leaves it, below).
 let sandboxActive = false;
+// The test-mode run in flight ("fill" or "clear"), the fields the last test
+// fill wrote (null when no fill result is showing), and a counter that drops
+// a late answer once test mode was left or re-entered.
+let sandboxBusy: "fill" | "clear" | null = null;
+let sandboxFilledFields: number | null = null;
+let sandboxGeneration = 0;
 
 // CAQH exception strip UI is not shipped yet.
 // findCaqhGaps + PULL_CAQH_FIELD remain for a future value-reading path.
@@ -6008,22 +6698,23 @@ function sandboxProvider(): ProviderListItem | null {
   return findSandboxProvider(providers);
 }
 
-/** The pinned Search entry. Rendered from the roster, so an org that has not
- * designated a test provider gets the honest reason instead of a button that
- * fails when pressed. */
+/** G1/G2: the pinned Search entry. Rendered from the roster, so an org that
+ * has not designated a test provider gets the honest reason instead of a
+ * button that fails when pressed. */
 function renderSandboxEntry(): void {
   const provider = sandboxProvider();
   const offer = panelMode === "search" && orgReady;
   sandboxEntry.hidden = !offer || provider == null;
   sandboxUnavailable.hidden = !offer || provider != null;
   if (provider) {
-    sandboxEntryMeta.textContent = `${providerLabel(provider)} · no case needed`;
+    sandboxEntryHeading.textContent = sandboxEntryTitle(provider);
+    sandboxEntryMeta.textContent = SANDBOX_ENTRY_META;
   } else {
     sandboxUnavailable.textContent = SANDBOX_UNAVAILABLE_NOTE;
   }
 }
 
-/** The in-case-work sandbox chrome. Clear portal form lives here and ONLY
+/** G3/G4: the in-case-work test-mode chrome. Clear form lives here and ONLY
  * here: it resets every input on the page, which on a live case would wipe a
  * coordinator's real typing. */
 function renderSandboxBar(): void {
@@ -6038,17 +6729,80 @@ function renderSandboxBar(): void {
   const provider = providers.find((p) => p.id === selectedProviderId()) ?? null;
   const state = sandboxFillState(provider);
   sandboxBarNote.textContent = provider
-    ? `Filling as ${providerLabel(provider)}${state ? ` · ${state}` : ""}. Nothing is logged to a case.`
-    : "Sandbox provider is no longer on this roster.";
-  const ready = provider != null && portal != null && portalTabId != null;
-  sandboxFillBtn.disabled = !ready;
-  sandboxClearBtn.disabled = portalTabId == null;
+    ? `Filling as ${sandboxProfileName(provider)}${state ? ` (${state})` : ""}.`
+    : "The test profile is no longer on this organization's provider list.";
+  // G4: once a test fill wrote fields, Clear form is the next step, so it
+  // takes the primary spot (CSS orders the primary button first).
+  const clearNext = sandboxFilledFields != null && sandboxFilledFields > 0;
+  sandboxFillBtn.className = clearNext ? "secondary" : "primary";
+  sandboxClearBtn.className = clearNext ? "primary" : "secondary";
+  sandboxFillBtn.classList.toggle("filling", sandboxBusy === "fill");
+  sandboxFillBtn.textContent = sandboxBusy === "fill"
+    ? "Filling…"
+    : clearNext ? "Run test fill again" : "Run test fill";
+  sandboxClearBtn.textContent = sandboxBusy === "clear" ? "Clearing…" : "Clear form";
+  // Whether a form is open is checked at the click, not here: this bar is not
+  // re-rendered on every page change, so a disabled state would go stale.
+  sandboxFillBtn.disabled = provider == null || sandboxBusy != null;
+  sandboxClearBtn.disabled = provider == null || sandboxBusy != null;
 }
 
-function setSandboxStatus(message: string | null, isError = false): void {
-  sandboxStatus.hidden = message == null;
-  sandboxStatus.textContent = message ?? "";
-  sandboxStatus.classList.toggle("capture-editor-warn", isError);
+/** Replace what the test-mode result area says. An empty list hides it. */
+function setSandboxResult(parts: readonly HTMLElement[]): void {
+  sandboxResult.replaceChildren(...parts);
+  sandboxResult.hidden = parts.length === 0;
+}
+
+/** A standalone notice box in the 0.1.8 result look. */
+function sandboxNotice(
+  tone: NoticeTone,
+  lines: readonly NoticeLine[],
+  extra: readonly HTMLElement[] = [],
+): HTMLElement {
+  const box = document.createElement("div");
+  fillNotice(box, tone, lines, extra);
+  return box;
+}
+
+/** A test-mode error: the error text and Copy support code, never a bare
+ * string. */
+function showSandboxError(text: string, code: string | number | null): void {
+  setSandboxResult([sandboxNotice("danger", [text], [supportButton(code, null, "danger")])]);
+}
+
+/** Forget any result and drop any answer still on its way. */
+function resetSandboxResult(): void {
+  sandboxGeneration += 1;
+  sandboxBusy = null;
+  sandboxFilledFields = null;
+  setSandboxResult([]);
+}
+
+/** G4: the same result look as a real fill (C3), inside the test-mode bar. */
+function renderSandboxFillResult(summary: SandboxFillSummary): void {
+  const view = sandboxFillView(summary);
+  sandboxFilledFields = view.filled;
+  const parts: HTMLElement[] = [
+    sandboxNotice(
+      view.tone,
+      [{ text: view.lines[0], strong: true }, view.lines[1]],
+      view.tone === "danger"
+        ? [supportButton("test-nothing-filled", summary.fillSessionId, "danger")]
+        : [],
+    ),
+  ];
+  if (view.skipLines.length > 0) parts.push(sandboxNotice("neutral", view.skipLines));
+  // A failed machine log is reported, never swallowed, but it does not make
+  // the fill a failure, because the fill happened.
+  if (view.recordLine != null) {
+    const line = document.createElement("p");
+    line.className = "status-line";
+    const text = document.createElement("span");
+    text.textContent = view.recordLine;
+    line.append(text, supportButton("test-record", summary.fillSessionId));
+    parts.push(line);
+  }
+  setSandboxResult(parts);
 }
 
 /**
@@ -6066,7 +6820,7 @@ function setSandboxStatus(message: string | null, isError = false): void {
 function clearSandboxOnRealSelection(): void {
   if (!sandboxActive) return;
   sandboxActive = false;
-  setSandboxStatus(null);
+  resetSandboxResult();
   renderSandboxBar();
 }
 
@@ -6082,7 +6836,7 @@ function clearSandboxOnRealSelection(): void {
 async function enterSandbox(): Promise<void> {
   const provider = sandboxProvider();
   if (provider == null) return;
-  setSandboxStatus(null);
+  resetSandboxResult();
   hideSearchResults();
   searchInput.value = "";
   await openInCaseWork(selectProviderInPanel(provider));
@@ -6097,66 +6851,83 @@ function leaveSandbox(): void {
 }
 
 async function runSandboxFill(): Promise<void> {
+  if (sandboxBusy != null) return;
   const providerId = selectedProviderId();
+  if (providerId == null) return;
   const activePortal = portal;
-  if (providerId == null || activePortal == null || portalTabId == null) return;
-  const provider = providers.find((p) => p.id === providerId) ?? null;
-  sandboxFillBtn.disabled = true;
-  setSandboxStatus("Filling…");
-  const response = await sendToBackground({
-    type: "SANDBOX_FILL",
-    tabId: portalTabId,
-    providerId,
-    portalKey: activePortal.key,
-    state: sandboxFillState(provider),
-    facilityId: selectedFacilityId(),
-  });
-  sandboxFillBtn.disabled = false;
-  if (!response.ok) {
-    setSandboxStatus(response.error, true);
+  const tabId = portalTabId;
+  if (activePortal == null || tabId == null) {
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice("warn", [SANDBOX_NO_FORM_NOTE])]);
+    renderSandboxBar();
     return;
   }
-  const summary = response.data;
-  const parts = [
-    summary.fieldsAttempted != null
-      ? `Verified ${summary.fieldsVerified ?? 0}; ${summary.fieldsAttempted} setter attempts remain unverified`
-      : `Filled ${summary.filled} of ${summary.pageFields} fields on this page`,
-  ];
-  if (summary.skipped.length > 0)
-    parts.push(`${summary.skipped.length} skipped`);
-  if (summary.manual.length > 0)
-    parts.push(`${summary.manual.length} form-wide planning items (page not checked)`);
-  if (summary.notChecked?.length) parts.push(`${summary.notChecked.length} not checked`);
-  // A failed machine log is reported, never swallowed — but it does not make
-  // the fill a failure, because the fill happened.
-  setSandboxStatus(
-    summary.logError
-      ? `${parts.join(" · ")}. ${summary.logError}`
-      : `${parts.join(" · ")}.`,
-    summary.logError != null,
-  );
+  const provider = providers.find((p) => p.id === providerId) ?? null;
+  const generation = sandboxGeneration;
+  sandboxBusy = "fill";
+  sandboxFilledFields = null;
+  setSandboxResult([]);
+  renderSandboxBar();
+  let response: Awaited<ReturnType<typeof sendToBackground<"SANDBOX_FILL">>>;
+  try {
+    response = await sendToBackground({
+      type: "SANDBOX_FILL",
+      tabId,
+      providerId,
+      portalKey: activePortal.key,
+      state: sandboxFillState(provider),
+      facilityId: selectedFacilityId(),
+    });
+  } catch {
+    response = { ok: false, error: "Minted couldn't run the test fill. Reload the page, then try again." };
+  }
+  // Test mode was left (or re-entered) while this ran: the answer is stale.
+  if (generation !== sandboxGeneration) return;
+  sandboxBusy = null;
+  if (response.ok) {
+    renderSandboxFillResult(response.data);
+  } else {
+    showSandboxError(response.error, response.code ?? "test-fill");
+  }
+  renderSandboxBar();
 }
 
 async function clearPortalFormFromPanel(): Promise<void> {
+  if (sandboxBusy != null) return;
   const providerId = selectedProviderId();
-  if (portalTabId == null || providerId == null) return;
-  sandboxClearBtn.disabled = true;
-  const response = await sendToBackground({
-    type: "CLEAR_PORTAL_FORM",
-    tabId: portalTabId,
-    providerId,
-  });
-  sandboxClearBtn.disabled = false;
-  if (!response.ok) {
-    setSandboxStatus(response.error, true);
+  if (providerId == null) return;
+  const tabId = portalTabId;
+  if (tabId == null) {
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice("warn", [SANDBOX_NO_FORM_NOTE])]);
+    renderSandboxBar();
     return;
   }
-  const { cleared } = response.data;
-  setSandboxStatus(
-    cleared === 0
-      ? "Nothing to clear — the form is already empty."
-      : `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. Ready to re-test.`,
-  );
+  const generation = sandboxGeneration;
+  sandboxBusy = "clear";
+  renderSandboxBar();
+  let response: Awaited<ReturnType<typeof sendToBackground<"CLEAR_PORTAL_FORM">>>;
+  try {
+    response = await sendToBackground({
+      type: "CLEAR_PORTAL_FORM",
+      tabId,
+      providerId,
+    });
+  } catch {
+    response = { ok: false, error: "Minted couldn't clear the form. Reload the page, then try again." };
+  }
+  if (generation !== sandboxGeneration) return;
+  sandboxBusy = null;
+  if (response.ok) {
+    // G5: what the clear actually changed. The fill result is no longer true.
+    const view = sandboxClearView(response.data.cleared);
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice(view.tone, [view.text])]);
+  } else {
+    // The fill result stays true, so Clear form keeps the primary spot.
+    showSandboxError(response.error, response.code ?? "test-clear");
+  }
+  renderSandboxBar();
 }
 
 sandboxEntry.addEventListener("click", () => void enterSandbox());
@@ -6187,6 +6958,8 @@ function renderModeSurfaces(): void {
   orgField.hidden = training;
   searchSection.hidden = !(searching && orgReady);
   caseWork.hidden = training || searching || !orgReady;
+  // The A6 org prompt belongs to Work cases only; re-rendered with the banner.
+  renderHandoffBanner();
 
   if (training) hideSearchResults();
   renderSelectedProvider();

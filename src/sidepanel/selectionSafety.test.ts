@@ -21,6 +21,25 @@ function code(names: string[], listenerTargets: string[] = []) {
   return ts.transpileModule(selected, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 }
 
+const FILL_TAB_MOVED = "The form's tab is no longer the active tab. Switch back to it, then click Fill this page again.";
+
+// 0.1.8: the click handler reports problems on the task card and re-renders
+// it. These are display-only, so the safety oracles stub them.
+function fillUiStubs() {
+  return {
+    showFillProblem: vi.fn(),
+    renderTaskCard: vi.fn(),
+    fillRunning: false,
+    fillSelectionKey: () => "selection",
+    fillLostPageText: () => "Minted lost touch with the page.",
+    FILL_TAB_MOVED,
+    FILL_PAGE_CHANGED: "page changed",
+    FILL_PAGE_MOVED_ON: "page moved on",
+    FILL_SELECTION_CHANGED: "selection changed",
+    FILL_FAILED: "fill failed",
+  };
+}
+
 interface WorkFillHarnessRecord {
   tuple: {
     ownerKind: string;
@@ -41,6 +60,7 @@ function fillClickHarness(options: {
   pageUrl?: string;
   selectedGroupId?: string | null;
   holdGroupWrite?: boolean;
+  aiEnabled?: boolean;
 } = {}) {
   const dom = new JSDOM('<button id="fill"></button><div id="fill-note" hidden></div>');
   const fillBtn = dom.window.document.querySelector<HTMLButtonElement>("#fill")!;
@@ -58,6 +78,7 @@ function fillClickHarness(options: {
   let releaseGroupWrite!: () => void;
   const groupWriteGate = new Promise<void>((resolve) => { releaseGroupWrite = resolve; });
   const queryActiveTab = vi.fn(async () => ({ id: tabId, url: pageUrl }));
+  const canUseNano = vi.fn(async () => true);
   const sendToBackground = vi.fn(async (request: Record<string, unknown>) => {
     requests.push(request);
     if (request.type === "SET_SELECTED_GROUP") {
@@ -81,7 +102,9 @@ function fillClickHarness(options: {
     }
     return { ok: true, data: null };
   });
+  const ui = fillUiStubs();
   const scope: Context = createContext({
+    ...ui,
     fillBtn, fillNote, mainError, setError, requests,
     groupSelectionWrite: Promise.resolve(),
     selectedGroupId,
@@ -102,7 +125,9 @@ function fillClickHarness(options: {
       : null,
     portalRows: [],
     updateFillReady: vi.fn(), refreshCoverage: vi.fn(),
-    canUseNano: async () => true,
+    // AI is off in 0.1.8 (AI_FILL_ENABLED); its code path stays covered here.
+    AI_FILL_ENABLED: options.aiEnabled ?? true,
+    canUseNano,
     NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
     isCurrent: () => true,
     sendToBackground, renderFillSummary: vi.fn(),
@@ -111,7 +136,8 @@ function fillClickHarness(options: {
     "invalidateFillSelection", "syncSelectedGroup", "activeWorkRecordForTab", "matchedActiveWorkPortal",
   ], ["fillBtn"]), scope);
   return {
-    dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted,
+    dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted, canUseNano,
+    showFillProblem: ui.showFillProblem,
     finishGroupWrite: releaseGroupWrite,
     setActiveTab: (nextTabId: number, nextPageUrl: string) => {
       tabId = nextTabId;
@@ -150,7 +176,7 @@ describe("fill selection safety", () => {
       workFormUrlMatchesPage,
       portalRows: [], sharedPortalRows: [],
       portal: null, portalTabId: null,
-      detectedPageUrl: null, detectedPortalIdentity: null,
+      detectedPageUrl: null, detectedPortalIdentity: null, detectedTabId: null, sandboxActive: false,
       invalidateFillSelection: vi.fn(),
       updateFillReady: vi.fn(), renderActiveCases: vi.fn(), renderCapture: vi.fn(),
       renderCaqh: vi.fn(), refreshPortalAccessPrompt: vi.fn(),
@@ -335,10 +361,7 @@ describe("fill selection safety", () => {
     });
 
     harness.fillBtn.click();
-    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalledWith(
-      harness.mainError,
-      "The enrollment form is no longer the active tab - switch back to it and try again.",
-    ));
+    await vi.waitFor(() => expect(harness.showFillProblem).toHaveBeenCalledWith(FILL_TAB_MOVED, "tab"));
 
     expect(harness.requests).toEqual([]);
   });
@@ -357,6 +380,19 @@ describe("fill selection safety", () => {
     expect(harness.requests.find((request) => request.type === "FILL")).toMatchObject({ groupId: "legacy-group" });
   });
 
+  it("skips the AI model check and page scan when AI is off", async () => {
+    const harness = fillClickHarness({ aiEnabled: false });
+
+    harness.fillBtn.click();
+    await vi.waitFor(() => expect(harness.requests.some((request) => request.type === "FILL")).toBe(true));
+
+    expect(harness.canUseNano).not.toHaveBeenCalled();
+    expect(harness.requests.some((request) => request.type === "PREPARE_AI_FILL")).toBe(false);
+    const fill = harness.requests.find((request) => request.type === "FILL")!;
+    expect(fill).not.toHaveProperty("aiStatus");
+    expect(fill).not.toHaveProperty("aiScanId");
+  });
+
   it("re-reads the active tab after delayed legacy group persistence", async () => {
     const harness = fillClickHarness({ selectedGroupId: "legacy-group", holdGroupWrite: true });
 
@@ -364,7 +400,7 @@ describe("fill selection safety", () => {
     await harness.groupWriteStarted;
     harness.setActiveTab(8, "https://other.example/form");
     harness.finishGroupWrite();
-    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalled());
+    await vi.waitFor(() => expect(harness.showFillProblem).toHaveBeenCalled());
 
     expect(harness.queryActiveTab).toHaveBeenCalledTimes(2);
     expect(harness.requests.some((request) => request.type === "PREPARE_AI_FILL")).toBe(false);
@@ -381,6 +417,7 @@ describe("fill selection safety", () => {
     const renderFillSummary = vi.fn();
     const clearFillResults = vi.fn();
     const scope: Context = createContext({
+      ...fillUiStubs(),
       groupSelect, fillBtn, selectedGroupId: "A", loadGeneration: 1, fillSelectionRevision: 0,
       isFillReady: () => true, syncSelectedGroup: async () => {},
       renderQuickCards: vi.fn(), refreshFacilityCards: vi.fn(),
@@ -394,7 +431,7 @@ describe("fill selection safety", () => {
       queryActiveTab: async () => ({ id: 7, url: "https://portal.example/form" }),
       matchPortalByUrl: () => ({ key: "portal" }), portalRows: [],
       updateFillReady: vi.fn(), refreshCoverage: vi.fn(), setError: vi.fn(),
-      mainError: {}, clearFillResults, fillNote: {}, canUseNano: async () => false,
+      mainError: {}, clearFillResults, fillNote: {}, AI_FILL_ENABLED: false, canUseNano: async () => false,
       isCurrent: (generation: number) => generation === scope.loadGeneration,
       sendToBackground, renderFillSummary,
     });
@@ -450,6 +487,7 @@ describe("fill selection safety", () => {
       return { ok: true, data: null };
     });
     const scope: Context = createContext({
+      ...fillUiStubs(),
       fillBtn, selectedGroupId: "group", loadGeneration: 1, fillSelectionRevision: 0,
       isFillReady: () => true, syncSelectedGroup: async () => {}, clearFillResults: vi.fn(),
       portal: null, portalTabId: null, lastFill: null, lastFillTabId: null, lastFillPageUrl: null,
@@ -462,7 +500,7 @@ describe("fill selection safety", () => {
       queryActiveTab: async () => ({ id: 7, url: "https://portal.example/form/step?session=1" }),
       matchPortalByUrl, portalRows,
       updateFillReady: vi.fn(), refreshCoverage: vi.fn(), setError: vi.fn(),
-      mainError: {}, fillNote: {}, canUseNano: async () => true,
+      mainError: {}, fillNote: {}, AI_FILL_ENABLED: true, canUseNano: async () => true,
       NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
       isCurrent: (generation: number) => generation === scope.loadGeneration,
       sendToBackground, renderFillSummary: vi.fn(),
@@ -548,6 +586,9 @@ describe("Work portal host permission prompt", () => {
         permissions: { contains: permissionContains } },
       portalAccess, workPortalAccess, workPortalAccessGrant,
       workPortalAccessCandidate: null, portalAccessPromptRevision: 0,
+      // 0.1.8 copy for the access ask in Fill's spot.
+      workAccessDenied: false, workAccessTitle: {}, workAccessNote: {},
+      payerLabel: () => "Aetna", fillNotice: vi.fn(), renderTaskCard: vi.fn(),
       portalRegistryLoaded: options.registryLoaded ?? true, portalRows: options.rows ?? [],
       portal: { portalId: workRecord.tuple.portalId, key: workRecord.tuple.portalKey },
       portalTabId: 7, panelMode: "case",
@@ -560,7 +601,7 @@ describe("Work portal host permission prompt", () => {
     runInContext(code([
       "activeWorkRecordForTab", "activePageUrlForTab", "workPortalAbsentFromRegistry",
       "workPortalPermissionPattern", "workPortalGrantTargetMatches", "hasOriginPermissions",
-      "refreshPortalAccessPrompt",
+      "refreshPortalAccessPrompt", "updatePortalAccessPrompt",
     ]), scope);
     return { dom, scope, portalAccess, workPortalAccess, permissionContains, sendToBackground };
   }
@@ -645,6 +686,7 @@ describe("Work portal host permission prompt", () => {
       chrome: { permissions: { request, remove } },
       workPortalAccess, workPortalAccessGrant: grantButton,
       workPortalAccessCandidate: { ...target, pattern: "https://payer.test/*" },
+      workAccessDenied: false,
       activeWorkState: { status: "active", record: workRecord },
       portalTabId: 7, portalRows: [], portalRegistryLoaded: false, panelMode: "case",
       sendToBackground, refreshActiveWork, refreshPortalAccessPrompt,

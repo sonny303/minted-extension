@@ -320,7 +320,9 @@ export type BgRequest =
       caseId: string;
       portalKey: string;
       fillSessionId: string | null;
-      /** UI marker only; the worker still requires the matching saved report. */
+      /** The case came from a Work launch. The worker takes the exact case,
+       * task and step from the saved fill report, or from the live launch
+       * record when there was no fill; never from the panel's selection. */
       isWorkFill?: boolean;
       payerReferenceId?: string | null;
       wipNote?: string | null;

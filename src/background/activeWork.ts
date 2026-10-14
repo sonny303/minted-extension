@@ -12,6 +12,7 @@ import {
   parseSetActiveWork,
   parseWorkContextValidationResponse,
   resolveActiveWorkState,
+  type ActiveWorkEndReason,
   type ActiveWorkRecord,
   type ActiveWorkState,
   type CanonicalWorkContextTuple,
@@ -28,6 +29,9 @@ import {
 
 export const ACTIVE_WORK_KEY = "minted.activeWork.v2";
 export const ACTIVE_WORK_BLOCK_KEY = "minted.activeWork.v2.blocked";
+/** What Minted Panel last said about the launched case at the launch's own
+ * context version: identifiers and the status word only, never a value. */
+export const ACTIVE_WORK_CASE_OBSERVATION_KEY = "minted.activeWork.v2.caseObservation";
 export const ACTIVE_WORK_UPDATED = { type: "ACTIVE_WORK_UPDATED" } as const;
 export const EXACT_WORK_TAB_CAPABILITY = "exact-work-tab-v2" as const;
 const CREATED_TAB_COMMIT_TIMEOUT_MS = 10_000;
@@ -87,14 +91,70 @@ function currentRecordMatches(value: unknown, expected: ActiveWorkRecord): value
     activeWorkTupleKey(value.tuple) === activeWorkTupleKey(expected.tuple);
 }
 
+/** Written when a Work link ends. Identifiers and a value-free reason only;
+ * the panel uses them to say why and to link back to the case. */
 interface ActiveWorkBlock {
   orgId: string | null;
+  reason?: ActiveWorkEndReason;
+  ownerKind?: "case" | "contract";
+  ownerId?: string;
 }
 
+const END_REASONS: readonly unknown[] = ["tab_closed", "left_site", "expired", "ended"] satisfies ActiveWorkEndReason[];
+const BLOCK_KEYS = new Set(["orgId", "reason", "ownerKind", "ownerId"]);
+const OWNER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Strict, like the rest of the Work state: known keys only, the owner pair
+// together or not at all. A block written before reason/owner existed holds
+// orgId alone and still parses.
 function isActiveWorkBlock(value: unknown): value is ActiveWorkBlock {
-  return value != null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).length === 1 && Object.hasOwn(value, "orgId") &&
-    (typeof (value as { orgId?: unknown }).orgId === "string" || (value as { orgId?: unknown }).orgId === null);
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
+  const block = value as Record<string, unknown>;
+  if (!Object.keys(block).every((key) => BLOCK_KEYS.has(key))) return false;
+  if (!Object.hasOwn(block, "orgId") || (typeof block.orgId !== "string" && block.orgId !== null)) return false;
+  if (Object.hasOwn(block, "reason") && !END_REASONS.includes(block.reason)) return false;
+  const hasKind = Object.hasOwn(block, "ownerKind");
+  if (hasKind !== Object.hasOwn(block, "ownerId")) return false;
+  return !hasKind ||
+    ((block.ownerKind === "case" || block.ownerKind === "contract") &&
+      typeof block.ownerId === "string" && OWNER_ID_RE.test(block.ownerId));
+}
+
+export interface ActiveWorkCaseObservation {
+  launchReceiptId: string;
+  contextVersion: number;
+  /** Panel's canonical case status, e.g. "not_started". */
+  caseStatus: string;
+}
+
+// Panel `CaseStatus` values (src/lib/caseStatus.ts). Only these two are read.
+const CASE_STATUS_NOT_STARTED = "not_started";
+const CASE_STATUS_IN_PROGRESS = "in_progress";
+const CASE_STATUS_RE = /^[a-z][a-z_]{0,39}$/;
+const OBSERVATION_KEYS = ["caseStatus", "contextVersion", "launchReceiptId"];
+
+function isCaseObservation(value: unknown): value is ActiveWorkCaseObservation {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
+  const observation = value as Record<string, unknown>;
+  return Object.keys(observation).sort().join(",") === OBSERVATION_KEYS.join(",") &&
+    typeof observation.launchReceiptId === "string" && OWNER_ID_RE.test(observation.launchReceiptId) &&
+    Number.isSafeInteger(observation.contextVersion) && typeof observation.contextVersion === "number" &&
+    observation.contextVersion > 0 &&
+    typeof observation.caseStatus === "string" && CASE_STATUS_RE.test(observation.caseStatus);
+}
+
+function endedBlock(record: ActiveWorkRecord, reason: ActiveWorkEndReason): ActiveWorkBlock {
+  return {
+    orgId: record.tuple.orgId,
+    reason,
+    ownerKind: record.tuple.ownerKind,
+    ownerId: record.tuple.ownerId,
+  };
+}
+
+// A page URL Chrome would not report is no evidence the tab left the site.
+function leftSiteReason(pageUrl: string | undefined): ActiveWorkEndReason {
+  return pageUrl == null ? "ended" : "left_site";
 }
 
 let activeWorkEpoch = 0;
@@ -162,7 +222,11 @@ async function removeRecordIfCurrent(receiptId?: string): Promise<boolean> {
   });
 }
 
-export async function clearActiveWork(options: { allowLegacyFallback?: boolean } = {}): Promise<void> {
+/** `reason` says why a live link ended (default "ended"). With no live record,
+ * an existing block keeps the reason it already has. */
+export async function clearActiveWork(
+  options: { allowLegacyFallback?: boolean; reason?: ActiveWorkEndReason } = {},
+): Promise<void> {
   const epoch = invalidatePendingWork();
   const changed = await serializeActiveWorkMutation(async () => {
     if (epoch !== activeWorkEpoch) return false;
@@ -171,9 +235,10 @@ export async function clearActiveWork(options: { allowLegacyFallback?: boolean }
     if (options.allowLegacyFallback === true) {
       await chrome.storage.session.remove(ACTIVE_WORK_BLOCK_KEY);
     } else {
-      await writeWorkBlock({ orgId: record?.tuple.orgId ?? block?.orgId ?? null });
+      const reason = options.reason ?? "ended";
+      await writeWorkBlock(record != null ? endedBlock(record, reason) : block ?? { orgId: null, reason });
     }
-    if (record != null) await chrome.storage.session.remove(ACTIVE_WORK_KEY);
+    if (record != null) await chrome.storage.session.remove([ACTIVE_WORK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY]);
     return record != null ||
       (options.allowLegacyFallback === true ? block != null : block == null);
   });
@@ -190,7 +255,16 @@ export async function revokeActiveWorkForLegacyLaunch(): Promise<void> {
 export async function getActiveWorkState(): Promise<ActiveWorkState> {
   const record = await readActiveWorkRecord();
   const blocked = await readWorkBlock();
-  if (blocked != null) return { status: "blocked", orgId: blocked.orgId };
+  if (blocked != null) {
+    return {
+      status: "blocked",
+      orgId: blocked.orgId,
+      ...(blocked.reason != null ? { reason: blocked.reason } : {}),
+      ...(blocked.ownerKind != null && blocked.ownerId != null
+        ? { ownerKind: blocked.ownerKind, ownerId: blocked.ownerId }
+        : {}),
+    };
+  }
   return resolveActiveWorkState(record, Date.now());
 }
 
@@ -413,9 +487,11 @@ export async function handleExternalSetActiveWork(
   try {
     const revoked = await serializeActiveWorkMutation(async () => {
       if (epoch !== activeWorkEpoch) return false;
-      await writeWorkBlock({ orgId: requestedTuple.orgId });
+      // Names the new launch's org only. The panel explains a replacement
+      // once the new launch lands (D6); a failed one reads as "ended".
+      await writeWorkBlock({ orgId: requestedTuple.orgId, reason: "ended" });
       const prior = await readStoredRecord();
-      if (prior != null) await chrome.storage.session.remove(ACTIVE_WORK_KEY);
+      if (prior != null) await chrome.storage.session.remove([ACTIVE_WORK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY]);
       return true;
     });
     if (!revoked) return { ok: false, code: "SUPERSEDED" };
@@ -546,22 +622,27 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
   const record = await readActiveWorkRecord();
   if (record == null) return null;
   if (isActiveWorkExpired(record, Date.now())) {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "expired" });
     throw new Error("This Work context expired. Reopen the task from Minted Panel.");
   }
   if (record.boundTabId !== tabId) {
-    await clearActiveWork();
-    throw new Error("This Work context is bound to a different portal tab.");
+    // The link survives a tab switch (PM, Oct 14, Q3); Fill still runs only
+    // on the launched tab.
+    throw new Error("Switch to the form's tab, then click Fill this page again.");
   }
   try {
     await chrome.tabs.get(record.boundTabId);
   } catch {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "tab_closed" });
     throw new Error("The bound Work tab closed. Reopen the task from Minted Panel.");
   }
-  if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) {
-    await clearActiveWork();
-    throw new Error("The bound Work tab changed pages. Reopen the task from Minted Panel.");
+  const pageUrl = await getMainFrameUrl(record.boundTabId);
+  if (!workFormUrlMatchesPage(pageUrl, record.formOrigin, record.formPath)) {
+    if (!sameOrigin(pageUrl, record.formOrigin)) {
+      await clearActiveWork({ reason: leftSiteReason(pageUrl) });
+      throw new Error("The bound Work tab left the payer's site. Reopen the task from Minted Panel.");
+    }
+    throw new Error("This page isn't part of the form you opened. Go back to the form to fill it.");
   }
   await touchActiveWork(tabId);
   return record;
@@ -598,10 +679,15 @@ export async function getWorkPortalPermissionTarget(): Promise<WorkPortalPermiss
 }
 
 /** Revalidate at start and immediately before DOM writes. The return maps are
- * for this worker operation only and never enter chrome.storage.session. */
+ * for this worker operation only and never enter chrome.storage.session.
+ * A read that writes nothing to the page (the profile read behind the picker
+ * and quick cards) passes `requireBoundFormPage: false`: the launch stays
+ * linked while the coordinator is on another tab or on a payer page outside
+ * the form, and only the tuple itself needs Panel's confirmation. */
 export async function revalidateActiveWork(
   expected: ActiveWorkRecord,
   epoch: number,
+  options: { requireBoundFormPage?: boolean } = {},
 ): Promise<WorkContextValidationResponse> {
   const current = await readActiveWorkRecord();
   if (!contextStillCurrent(epoch, expected, current)) {
@@ -617,6 +703,7 @@ export async function revalidateActiveWork(
       new URL(validation.formUrl).pathname !== expected.formPath) {
     throw new Error("The Work context changed during validation. Reopen the task from Minted Panel.");
   }
+  if (options.requireBoundFormPage === false) return validation;
   await chrome.tabs.get(expected.boundTabId);
   if (!workFormUrlMatchesPage(await getMainFrameUrl(expected.boundTabId), expected.formOrigin, expected.formPath)) {
     throw new Error("The bound Work tab changed pages. Reopen the task from Minted Panel.");
@@ -666,34 +753,150 @@ export async function touchActiveWork(tabId: number): Promise<void> {
   });
 }
 
+// --- The one context-version bump a Work fill causes -----------------------
+//
+// Panel stamps every case with a context version that moves on any status
+// change, and its fill guard refuses a typed fill whose tuple version is not
+// the case's current one. The FIRST recorded typed fill on a Not Started case
+// auto-starts it (did_auto_start_case): one update moves it to In Progress,
+// so the version goes N -> N+1 and the launch tuple, still at N, would fail
+// the next page's fill and a log without a fill. The worker infers that bump
+// only from two facts Panel itself reported, never from a guess:
+//   1. GET /api/cases/:id/context said the launched case was "not_started"
+//      at exactly the launch's version N (status cannot change without the
+//      version moving, so this pair is fixed for version N), and
+//   2. a typed fill for this launch was RECORDED at version N (the guard
+//      only records it while the case is still at N).
+// Together they mean that fill auto-started the case. Nothing else moves the
+// stored tuple's version.
+
+async function readCaseObservation(): Promise<ActiveWorkCaseObservation | null> {
+  const entry = await chrome.storage.session.get(ACTIVE_WORK_CASE_OBSERVATION_KEY);
+  const value = entry[ACTIVE_WORK_CASE_OBSERVATION_KEY];
+  return isCaseObservation(value) ? value : null;
+}
+
+export async function readActiveWorkCaseObservation(): Promise<ActiveWorkCaseObservation | null> {
+  await activeWorkMutationTail;
+  return readCaseObservation();
+}
+
+/** Keep what a case-context read said about the launched case, but only when
+ * it describes the launch's own case at the launch's own version. Returns the
+ * stored observation, or null when the read was about something else. */
+export async function recordActiveWorkCaseObservation(
+  caseId: string,
+  observed: { contextVersion?: unknown; caseStatus?: unknown },
+): Promise<ActiveWorkCaseObservation | null> {
+  return serializeActiveWorkMutation(async () => {
+    const record = await readStoredRecord();
+    if (record == null || record.tuple.ownerKind !== "case" || record.tuple.ownerId !== caseId ||
+        isActiveWorkExpired(record, Date.now())) return null;
+    if (observed.contextVersion !== record.tuple.contextVersion ||
+        typeof observed.caseStatus !== "string" || !CASE_STATUS_RE.test(observed.caseStatus)) return null;
+    const observation: ActiveWorkCaseObservation = {
+      launchReceiptId: record.tuple.launchReceiptId,
+      contextVersion: record.tuple.contextVersion,
+      caseStatus: observed.caseStatus,
+    };
+    await chrome.storage.session.set({ [ACTIVE_WORK_CASE_OBSERVATION_KEY]: observation });
+    return observation;
+  });
+}
+
+// Compare-and-set body; callers hold the mutation lock.
+async function advanceStoredContextVersion(launchReceiptId: string, fromVersion: number): Promise<boolean> {
+  const record = await readStoredRecord();
+  if (record == null || record.tuple.ownerKind !== "case" ||
+      record.tuple.launchReceiptId !== launchReceiptId || record.tuple.contextVersion !== fromVersion ||
+      isActiveWorkExpired(record, Date.now()) || await readWorkBlock() != null) {
+    return false;
+  }
+  const next: ActiveWorkRecord = {
+    ...record,
+    tuple: { ...record.tuple, contextVersion: fromVersion + 1 },
+  };
+  const observation: ActiveWorkCaseObservation = {
+    launchReceiptId,
+    contextVersion: fromVersion + 1,
+    caseStatus: CASE_STATUS_IN_PROGRESS,
+  };
+  await chrome.storage.session.set({
+    [ACTIVE_WORK_KEY]: next,
+    [ACTIVE_WORK_CASE_OBSERVATION_KEY]: observation,
+  });
+  return true;
+}
+
+/** Move the live launch's tuple from `fromVersion` to `fromVersion + 1`.
+ * Writes only while the stored launch is still that receipt at that version,
+ * so a stale receipt, a repeat call, or a replaced launch changes nothing.
+ * The launch identity (receipt and bound tab) is untouched. */
+export async function advanceActiveWorkContextVersion(input: {
+  launchReceiptId: string;
+  fromVersion: number;
+}): Promise<boolean> {
+  const changed = await serializeActiveWorkMutation(() =>
+    advanceStoredContextVersion(input.launchReceiptId, input.fromVersion));
+  if (changed) notifyPanel();
+  return changed;
+}
+
+/** A typed fill for this launch was recorded at `contextVersion`. When the
+ * case was observed Not Started at that same version, that fill auto-started
+ * it, so advance the launch tuple by exactly one. Otherwise nothing changes. */
+export async function noteRecordedWorkFill(fill: {
+  launchReceiptId: string;
+  contextVersion: number;
+}): Promise<boolean> {
+  const changed = await serializeActiveWorkMutation(async () => {
+    const observation = await readCaseObservation();
+    if (observation == null || observation.launchReceiptId !== fill.launchReceiptId ||
+        observation.contextVersion !== fill.contextVersion ||
+        observation.caseStatus !== CASE_STATUS_NOT_STARTED) {
+      return false;
+    }
+    return advanceStoredContextVersion(fill.launchReceiptId, fill.contextVersion);
+  });
+  if (changed) notifyPanel();
+  return changed;
+}
+
+// The Work link stays through a tab switch and through pages on the same
+// payer site in the launched tab (PM, Oct 14: Q3 answer B), so a coordinator
+// can check Minted Panel, come back, and log the submission from the
+// payer's confirmation page. Fill stays bound to the form's own pages on the
+// launched tab. Closing the tab, leaving the payer's site, or 60 minutes idle
+// still end it.
 export async function onActiveWorkTabActivated(tabId: number): Promise<void> {
   const record = await readActiveWorkRecord();
-  if (record == null) return;
-  if (record.boundTabId !== tabId) {
-    await clearActiveWork();
-    return;
-  }
+  if (record == null || record.boundTabId !== tabId) return;
   await touchActiveWork(tabId);
 }
 
 export async function onActiveWorkTabUpdated(tabId: number, url: string | undefined): Promise<void> {
   const record = await readActiveWorkRecord();
   if (record == null || record.boundTabId !== tabId || !url) return;
-  try {
-    if (!workFormUrlMatchesPage(url, record.formOrigin, record.formPath)) {
-      await clearActiveWork();
-      return;
-    }
-  } catch {
-    await clearActiveWork();
+  if (!sameOrigin(url, record.formOrigin)) {
+    await clearActiveWork({ reason: "left_site" });
     return;
   }
   await touchActiveWork(tabId);
 }
 
+function sameOrigin(url: string | null | undefined, origin: string): boolean {
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 export async function onActiveWorkTabRemoved(tabId: number): Promise<void> {
   const record = await readActiveWorkRecord();
-  if (record?.boundTabId === tabId) await clearActiveWork();
+  if (record?.boundTabId === tabId) await clearActiveWork({ reason: "tab_closed" });
 }
 
 /** The tab id is persisted, so worker restart revalidates that precise tab;
@@ -707,15 +910,23 @@ export async function reconcileActiveWorkTab(): Promise<void> {
   const record = await readActiveWorkRecord();
   if (record == null) return;
   if (isActiveWorkExpired(record, Date.now())) {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "expired" });
     return;
   }
   try {
     await chrome.tabs.get(record.boundTabId);
-    if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) await clearActiveWork();
+  } catch {
+    await clearActiveWork({ reason: "tab_closed" });
+    return;
+  }
+  let pageUrl: string | undefined;
+  try {
+    pageUrl = await getMainFrameUrl(record.boundTabId);
   } catch {
     await clearActiveWork();
+    return;
   }
+  if (!sameOrigin(pageUrl, record.formOrigin)) await clearActiveWork({ reason: leftSiteReason(pageUrl) });
 }
 
 function ignoreTabFailure(operation: Promise<unknown>): void {

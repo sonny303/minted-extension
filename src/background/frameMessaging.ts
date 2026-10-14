@@ -885,7 +885,7 @@ export async function scanFieldsAcrossFrames(tabId: number): Promise<CapturedFie
   const fields = aggregateScannedFields(responses);
   // If every frame was silent, surface the same error the single-frame path did.
   if (responses.every((r) => !r.ok) && fields.length === 0) {
-    throw new Error("Could not read this form — reload the page and retry.");
+    throw new Error("Could not read this form. Reload the page and try again.");
   }
   return fields;
 }
@@ -899,7 +899,7 @@ export async function clearFormAcrossFrames(tabId: number): Promise<number> {
     any = true;
     if (typeof response.data === "number") cleared += response.data;
   }
-  if (!any) throw new Error("Could not clear this form — reload the page and retry.");
+  if (!any) throw new Error("Could not clear this form. Reload the page and try again.");
   return cleared;
 }
 
