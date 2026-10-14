@@ -4787,11 +4787,14 @@ function renderHandoffBanner(): void {
   orgSwitch.hidden = true;
 
   if (handoffNotice != null) {
-    handoffBanner.hidden = false;
-    handoffBanner.classList.add("banner-warn");
+    // Before an org resolves #case-work is hidden, so a launch notice (A7)
+    // shows above the org picker instead, like the A6 prompt.
+    const box = orgReady ? handoffBanner : orgSwitch;
+    box.hidden = false;
+    box.classList.add("banner-warn");
     const text = document.createElement("span");
     text.textContent = handoffNotice;
-    handoffBanner.append(
+    box.append(
       text,
       bannerButton("Dismiss", () => {
         handoffNotice = null;
