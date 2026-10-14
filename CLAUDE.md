@@ -15,7 +15,7 @@ provider data in one click, then logs the fill and the human's submission back
 to the case. Credentialing coordinators otherwise retype the same provider
 details into dozens of portals per provider; this removes that.
 
-**Current release: v0.1.3** (September 28, 2026), packaged and published to the Chrome Web Store as an unlisted extension (Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`) and loaded unpacked for local development. Capture and fill reach **any DB-registered portal** — the panel
+**Current release: v0.1.8** (October 14, 2026), built from `74b4d29` and uploaded to the Chrome Web Store as an unlisted extension (Extension ID `dppfnbikpojpgdiobckgcknmkjlfoinh`; the panel's `vercel.json` pins `VITE_MINTED_EXTENSION_ID` to it, so Work in portal launches only reach the Store install). The previous Store version was v0.1.3. Capture and fill reach **any DB-registered portal** — the panel
 requests the registry's origins on demand and the worker injects `content.js`
 where there's no static match.
 
