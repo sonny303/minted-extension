@@ -10,6 +10,9 @@ export const ACTIVE_WORK_IDLE_MS = 60 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PORTAL_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,99}$/;
 const FINGERPRINT_RE = /^sha256:[a-f0-9]{64}$/;
+// Mirrors the panel's STEP_ID_RE (src/lib/workContext.ts). SOP-resolved
+// steps carry sequential ids like "step-0", not UUIDs.
+const STEP_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export interface WorkContextCommonTuple {
   protocolVersion: typeof SET_ACTIVE_WORK_PROTOCOL_VERSION;
@@ -98,6 +101,10 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
+function isStepId(value: unknown): value is string {
+  return typeof value === "string" && STEP_ID_RE.test(value);
+}
+
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && typeof value === "number" && value > 0;
 }
@@ -131,7 +138,7 @@ function parseTuple(value: unknown, withType: boolean): WorkContextTuple | null 
   if (tuple.ownerKind === "case") {
     if (
       !hasExactKeys(tuple, [...commonKeys, "taskId", "stepId", "stepIdentity"]) ||
-      !isUuid(tuple.taskId) || !isUuid(tuple.stepId) || !isBoundedText(tuple.stepIdentity, 512)
+      !isUuid(tuple.taskId) || !isStepId(tuple.stepId) || !isBoundedText(tuple.stepIdentity, 512)
     ) return null;
     return {
       protocolVersion: SET_ACTIVE_WORK_PROTOCOL_VERSION,
