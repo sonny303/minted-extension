@@ -195,7 +195,7 @@
              ABOVE the org picker, never inside #case-work, which stays hidden
              until an org resolves (the prompt used to be unreachable there). -->
         <div id="org-switch" class="handoff-banner banner-warn" hidden></div>
-        <div id="org-field" class="field">
+        <div id="org-field" class="field launch-chrome">
           <label for="org-select">Organization</label>
           <select id="org-select"></select>
         </div>
@@ -248,19 +248,19 @@
           <div id="queue-section" class="queue" hidden></div>
           <!-- With the dropdown retired, Search IS the provider switcher, so
                Work cases states who is loaded and offers one button back. -->
-          <div id="provider-bar" class="provider-bar" hidden>
+          <div id="provider-bar" class="provider-bar launch-chrome" hidden>
             <span id="provider-bar-name" class="provider-bar-name"></span>
             <button id="provider-bar-switch" class="link" type="button">
               Change
             </button>
           </div>
-          <div id="active-cases" class="active-cases" hidden>
+          <div id="active-cases" class="active-cases launch-chrome" hidden>
             <p class="section-title active-cases-heading">Open cases</p>
             <div id="active-cases-list"></div>
           </div>
 
           <div id="fill-section" hidden>
-            <div id="group-field" class="field" hidden>
+            <div id="group-field" class="field launch-chrome" hidden>
               <label for="group-select">Group</label>
               <select id="group-select"></select>
             </div>
@@ -310,7 +310,7 @@
             <!-- Everything case-scoped. Hidden wholesale in test mode, which
                  has no case by design. -->
             <div id="case-fill">
-            <div class="field">
+            <div id="case-field" class="field launch-chrome">
               <div class="label-row">
                 <label for="case-select" id="case-label">Case</label>
                 <span id="case-status" class="pill" hidden></span>

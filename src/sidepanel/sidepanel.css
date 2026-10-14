@@ -2626,3 +2626,12 @@ a.link:focus-visible {
 .sandbox-actions .link {
   align-self: flex-start;
 }
+
+/* 0.1.8: a launched case pins org, provider, group and case. Their pickers and
+   the open-cases list step aside until the link ends. renderLaunchChrome
+   toggles is-launched on #case-work and on #org-field (which sits above it).
+   The Location picker stays: it is the one fill-target control (E1.5). */
+.is-launched .launch-chrome,
+.is-launched.launch-chrome {
+  display: none;
+}

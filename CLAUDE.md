@@ -314,6 +314,18 @@ its own when the coordinator needs to act or read a result
 - The A6 org-switch prompt renders into `#org-switch` above the org picker,
   never inside `#case-work`; so does a launch notice (A7) while no org has
   resolved.
+- **A launched case shows no pickers above the task card.** `renderLaunchChrome`
+  (called by `renderTaskCard` and `renderModeSurfaces`) toggles `is-launched`
+  on `#case-work` and `#org-field`; the org, provider, group and case pickers
+  and the Open cases list carry `launch-chrome` and hide under it. The
+  Location picker stays (the one fill-target control). Work cases mode only;
+  the rows return when the link ends. Pinned by `panelMarkup.test.ts`.
+- **A v2 launch opens the side panel itself** (`openSidePanelBestEffort`,
+  `src/background/activeWork.ts`), in the window that holds the new portal
+  tab, as soon as the tab exists and while the click's gesture is fresh. It
+  is best effort: with no gesture or no `sidePanel` API it does nothing and
+  the toolbar icon still opens the panel. The legacy `SET_ACTIVE_CASE` path
+  has always done this.
 - **Why a link ended (D5).** The worker's block record carries a value-free
   `reason` (`tab_closed` | `left_site` | `expired` | `ended`) plus the ended
   launch's `ownerKind`/`ownerId`, surfaced on the `blocked` variant of

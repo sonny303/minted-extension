@@ -463,6 +463,21 @@ async function closeCreatedTabIfStillUnboundAtCanonicalUrl(
 /** Process a typed external Work launch. A valid request immediately revokes
  * the prior Work receipt, online-validates the exact tuple, asks Chrome to
  * create the target tab, and binds only the returned tab id. */
+/** Best-effort: open the side panel in the window that holds the new portal
+ * tab, so the launch lands in front of the coordinator instead of a blank
+ * tab (the legacy SET_ACTIVE_CASE path has always done this). Needs a user
+ * gesture, which the web app's click usually still carries here, and quietly
+ * does nothing otherwise: the toolbar icon still opens the panel. */
+function openSidePanelBestEffort(windowId: number | null): void {
+  if (windowId == null) return;
+  try {
+    const opening = chrome.sidePanel?.open({ windowId });
+    if (opening != null) void opening.catch(() => {});
+  } catch {
+    // no gesture or no sidePanel API: nothing to do
+  }
+}
+
 export async function handleExternalSetActiveWork(
   message: unknown,
   senderOrigin: string | undefined,
@@ -530,6 +545,8 @@ export async function handleExternalSetActiveWork(
     if (!Number.isSafeInteger(createdWindowId) || createdWindowId == null || tab.windowId !== createdWindowId) {
       throw new WorkTabBindingError("Chrome created the portal tab in a different window.");
     }
+    // As early as the tab exists, while the launch click's gesture is fresh.
+    openSidePanelBestEffort(createdWindowId);
     await waitForCreatedTabCommit(tab.id, createdWindowId, canonicalHref, navigation, epoch);
     if (epoch !== activeWorkEpoch) return { ok: false, code: "SUPERSEDED" };
     const now = new Date().toISOString();

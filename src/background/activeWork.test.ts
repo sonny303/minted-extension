@@ -134,6 +134,35 @@ describe("SET_ACTIVE_WORK exact tab binding", () => {
     });
   });
 
+  it("opens the side panel in the launch window once the portal tab exists (best effort)", async () => {
+    const open = vi.fn(async () => undefined);
+    const chromeLike = chrome as unknown as { sidePanel?: { open: typeof open } };
+    chromeLike.sidePanel = { open };
+    try {
+      const ack = await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+      expect(ack.ok).toBe(true);
+      expect(open).toHaveBeenCalledWith({ windowId: 1 });
+    } finally {
+      chromeLike.sidePanel = undefined;
+    }
+  });
+
+  it("still ACKs the launch when the side panel refuses to open (no gesture)", async () => {
+    const open = vi.fn(async () => {
+      throw new Error("`sidePanel.open()` may only be called in response to a user gesture.");
+    });
+    const chromeLike = chrome as unknown as { sidePanel?: { open: typeof open } };
+    chromeLike.sidePanel = { open };
+    try {
+      const ack = await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+      expect(ack.ok).toBe(true);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 700 });
+    } finally {
+      chromeLike.sidePanel = undefined;
+    }
+  });
+
   it("creates and binds a new exact tab even when older tabs have the same URL", async () => {
     stub.setQueryTabs([
       { id: 10, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab,

@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 const HTML = readFileSync(new URL("../../sidepanel.html", import.meta.url), "utf8");
 const MAIN = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+const CSS = readFileSync(new URL("./sidepanel.css", import.meta.url), "utf8");
 
 const doc = new JSDOM(HTML).window.document;
 
@@ -298,11 +299,18 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(readiness).toContain("renderHandoffBanner()");
 
     // 0.1.8: provenance is the task card's "Opened from Minted Panel" line,
-    // still gated on the exact applied selection.
+    // still gated on the exact applied selection. The launched test lives in
+    // selectedCaseIsLaunched, shared with the launch-chrome rule.
+    const launchedRule = codeOf(
+      MAIN.slice(MAIN.indexOf("function selectedCaseIsLaunched("), MAIN.indexOf("function renderLaunchChrome(")),
+    );
+    expect(launchedRule).toContain("currentHandoffSelectionIsApplied()");
+    expect(launchedRule).toContain("workRecordForSelectedCase() != null");
     const card = codeOf(
       MAIN.slice(MAIN.indexOf("function renderTaskCard("), MAIN.indexOf("// Back to \"nothing logged yet\"")),
     );
-    expect(card).toContain("currentHandoffSelectionIsApplied()");
+    expect(card).toContain("const launched = selectedCaseIsLaunched()");
+    expect(card).toContain("renderLaunchChrome()");
     expect(card).toContain("taskOrigin.hidden = !launched");
 
     const apply = codeOf(
@@ -344,6 +352,21 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     const orgField = doc.getElementById("org-field")!;
     expect(doc.getElementById("case-work")!.contains(prompt)).toBe(false);
     expect(prompt.compareDocumentPosition(orgField) & 4).toBe(4);
+  });
+
+  it("steps the org, provider, group, case pickers and open cases aside on a launch, keeps Location", () => {
+    // 0.1.8: a launched case pins these; renderLaunchChrome hides the rows
+    // through one class so no picker sits above the task card.
+    for (const id of ["org-field", "provider-bar", "active-cases", "group-field", "case-field"]) {
+      expect(doc.getElementById(id)?.classList.contains("launch-chrome"), id).toBe(true);
+    }
+    const facilityField = doc.getElementById("facility-select")?.closest(".field");
+    expect(facilityField?.classList.contains("launch-chrome")).toBe(false);
+    expect(doc.getElementById("portal-status")?.classList.contains("launch-chrome")).toBe(false);
+    expect(doc.getElementById("task-card")?.classList.contains("launch-chrome")).toBe(false);
+    expect(codeOf(MAIN)).toMatch(/caseWork\.classList\.toggle\("is-launched"/);
+    expect(codeOf(MAIN)).toMatch(/orgField\.classList\.toggle\("is-launched"/);
+    expect(CSS).toMatch(/\.is-launched \.launch-chrome/);
   });
 
   it("has retired the Browse-providers dropdown", () => {

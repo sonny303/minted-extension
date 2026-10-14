@@ -1618,6 +1618,25 @@ function workRecordForSelectedCase(): ActiveWorkRecord | null {
     : null;
 }
 
+// The selected case arrived from Minted Panel and is still linked: a live
+// Work launch, or an applied legacy handoff for this case.
+function selectedCaseIsLaunched(): boolean {
+  const caseId = selectedCaseId();
+  return caseId != null && (workRecordForSelectedCase() != null ||
+    (activeCase?.source === "handoff" && activeCase.caseId === caseId && currentHandoffSelectionIsApplied()));
+}
+
+// 0.1.8: a launched case pins the org, provider, group and case, so their
+// pickers and the open-cases list step aside (`.launch-chrome` rows, hidden
+// by CSS under `.is-launched`) until the link ends. The Location picker
+// stays: it is the one fill-target control (E1.5). Work cases only; Search
+// and Train forms keep their own chrome.
+function renderLaunchChrome(): void {
+  const launched = panelMode === "case" && selectedCaseIsLaunched();
+  caseWork.classList.toggle("is-launched", launched);
+  orgField.classList.toggle("is-launched", launched);
+}
+
 // The exact Work step this case is bound to: the live launch, or the saved
 // fill report's tuple when the launch has since moved on.
 function workTupleForSelectedCase(): CanonicalWorkContextTuple | null {
@@ -1907,6 +1926,8 @@ function openProviderDetailsOnce(attention: string | null): void {
 function renderTaskCard(): void {
   const caseId = selectedCaseId();
   const adHoc = caseSelect.value === AD_HOC_CASE_SELECTION;
+  const launched = selectedCaseIsLaunched();
+  renderLaunchChrome();
   taskCard.hidden = caseId == null && !adHoc;
   if (taskCard.hidden) {
     portalStatus.hidden = false;
@@ -1942,8 +1963,6 @@ function renderTaskCard(): void {
   taskSub.textContent = sub.join(" · ");
   taskSub.hidden = sub.length === 0;
 
-  const launched = caseId != null && (workRecordForSelectedCase() != null ||
-    (activeCase?.source === "handoff" && activeCase.caseId === caseId && currentHandoffSelectionIsApplied()));
   taskOrigin.hidden = !launched;
   if (launched && caseId != null) taskBack.href = caseUrl(caseId);
 
@@ -6956,6 +6975,7 @@ function renderModeSurfaces(): void {
   // The org picker belongs to both org-scoped jobs and to neither of
   // training's concerns.
   orgField.hidden = training;
+  renderLaunchChrome();
   searchSection.hidden = !(searching && orgReady);
   caseWork.hidden = training || searching || !orgReady;
   // The A6 org prompt belongs to Work cases only; re-rendered with the banner.
