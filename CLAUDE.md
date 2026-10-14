@@ -208,7 +208,24 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
   elsewhere without ending the link); closing the tab, leaving the payer's
   origin, or 60 minutes idle end it (`onActiveWorkTabUpdated`,
   `reconcileActiveWorkTab`). This is what lets the payer's confirmation page
-  log the submission.
+  log the submission. Reads that write nothing to a page (the profile behind
+  the picker and Provider details, `GET_PROVIDER_FACILITIES`) follow the live
+  record from any tab (`revalidateActiveWork(..., { requireBoundFormPage:
+  false })`).
+- **A launch follows its own auto-start bump, by inference from two panel
+  facts.** The panel's first recorded typed fill on a Not Started case moves
+  it to In Progress, which bumps `context_version` N to N+1, and the panel
+  refuses a later fill or no-fill log still stamped N. The worker records
+  `{ launchReceiptId, contextVersion, caseStatus }` from a case-context read of
+  the launched case at the tuple's own version
+  (`minted.activeWork.v2.caseObservation`; ids and the status word only).
+  Before a Work fill it reads the case once itself if nothing was observed at
+  that version (`ensureLaunchedCaseObserved`), since the panel caches context
+  per case and may never re-read it under a new launch. When a fill is
+  recorded at N and the observation says `not_started` at N, the tuple moves
+  to N+1 by compare-and-set (`advanceActiveWorkContextVersion`); launch
+  identity (receipt, bound tab) is unchanged, so the panel doesn't reload.
+  `CaseContext.caseStatus` / `contextVersion` are optional in `apiTypes.ts`.
 - **Tokens never touch page context.** Field values never persist in
   `chrome.storage` (fill reports store labels/counts/reasons only; the
   active-case record stores identifiers + URL only). Quick-card values (incl.
@@ -263,14 +280,31 @@ its own when the coordinator needs to act or read a result
   case, task and step from the saved fill report, or from the live launch
   record when there was no fill; the worker names a fill only when Minted
   Panel holds its record (`summary.eventRecorded`), because the panel 404s an
-  unknown fill id. A no-fill log releases its idempotency id after success.
+  unknown fill id. When the panel sends no fill id (it lets go of its fill
+  result on a page change), the worker recovers this launch's recorded,
+  unlogged fill from its own report (`recoverLaunchFillSessionId`) before
+  falling back to the launch record. Idempotency ids are keyed by fill, or by
+  launch (`launch.<receipt>`) for a Work log with no fill, so a relaunch is a
+  fresh attempt. A no-fill log releases its id after success, and any log
+  releases it on a definite 4xx refusal (not 408/429); network errors and 5xx
+  keep it so a retry replays the same id.
+- **The log belongs to the case plus its launch** (`logScopeKey`,
+  `${caseId}|${launchReceiptId ?? "manual"}`). A page change or tab switch
+  inside that scope keeps the open form, its entries, a failed log and the
+  done card; a different case or a new launch starts fresh. On another tab
+  the whole form is held and the notice says to switch tabs to log it.
 - **No Checklist task picker.** The plan line above Log submission states
   what logging will do (`submissionPlanLine`); a manual log closes a task
   only when it is the one task on this form and nothing else on it is open
   (`manualTaskToClose`).
 - **Errors** carry Copy support code (`supportCode`: version, short case and
   fill ids, time, code; no names, no values). A failed log offers Try again
-  only when the request never landed (`logFailureView`).
+  only when the request never landed: a 5xx, or no code with an empty or
+  network-looking message (`logFailureView`). The worker's own 409s ("may
+  already be recorded", "launch ended") show their own text. After any other
+  refusal, Work offers no re-log (the same launch repeats the same answer,
+  PM E10); manual mode offers "Log it again" after the result, with the
+  entries kept, because a manual log picks its task again.
 - **Admin Details** (fields written, fill record, form key and mapping, work
   context, every skip, Fix mapping) shows for admins of the CURRENT org only
   (`isCurrentOrgAdmin`), not `canTrainForms` (admin in any org). The
