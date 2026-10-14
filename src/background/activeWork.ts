@@ -12,6 +12,7 @@ import {
   parseSetActiveWork,
   parseWorkContextValidationResponse,
   resolveActiveWorkState,
+  type ActiveWorkEndReason,
   type ActiveWorkRecord,
   type ActiveWorkState,
   type CanonicalWorkContextTuple,
@@ -87,14 +88,47 @@ function currentRecordMatches(value: unknown, expected: ActiveWorkRecord): value
     activeWorkTupleKey(value.tuple) === activeWorkTupleKey(expected.tuple);
 }
 
+/** Written when a Work link ends. Identifiers and a value-free reason only;
+ * the panel uses them to say why and to link back to the case. */
 interface ActiveWorkBlock {
   orgId: string | null;
+  reason?: ActiveWorkEndReason;
+  ownerKind?: "case" | "contract";
+  ownerId?: string;
 }
 
+const END_REASONS: readonly unknown[] = ["tab_closed", "left_site", "expired", "ended"] satisfies ActiveWorkEndReason[];
+const BLOCK_KEYS = new Set(["orgId", "reason", "ownerKind", "ownerId"]);
+const OWNER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Strict, like the rest of the Work state: known keys only, the owner pair
+// together or not at all. A block written before reason/owner existed holds
+// orgId alone and still parses.
 function isActiveWorkBlock(value: unknown): value is ActiveWorkBlock {
-  return value != null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).length === 1 && Object.hasOwn(value, "orgId") &&
-    (typeof (value as { orgId?: unknown }).orgId === "string" || (value as { orgId?: unknown }).orgId === null);
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
+  const block = value as Record<string, unknown>;
+  if (!Object.keys(block).every((key) => BLOCK_KEYS.has(key))) return false;
+  if (!Object.hasOwn(block, "orgId") || (typeof block.orgId !== "string" && block.orgId !== null)) return false;
+  if (Object.hasOwn(block, "reason") && !END_REASONS.includes(block.reason)) return false;
+  const hasKind = Object.hasOwn(block, "ownerKind");
+  if (hasKind !== Object.hasOwn(block, "ownerId")) return false;
+  return !hasKind ||
+    ((block.ownerKind === "case" || block.ownerKind === "contract") &&
+      typeof block.ownerId === "string" && OWNER_ID_RE.test(block.ownerId));
+}
+
+function endedBlock(record: ActiveWorkRecord, reason: ActiveWorkEndReason): ActiveWorkBlock {
+  return {
+    orgId: record.tuple.orgId,
+    reason,
+    ownerKind: record.tuple.ownerKind,
+    ownerId: record.tuple.ownerId,
+  };
+}
+
+// A page URL Chrome would not report is no evidence the tab left the site.
+function leftSiteReason(pageUrl: string | undefined): ActiveWorkEndReason {
+  return pageUrl == null ? "ended" : "left_site";
 }
 
 let activeWorkEpoch = 0;
@@ -162,7 +196,11 @@ async function removeRecordIfCurrent(receiptId?: string): Promise<boolean> {
   });
 }
 
-export async function clearActiveWork(options: { allowLegacyFallback?: boolean } = {}): Promise<void> {
+/** `reason` says why a live link ended (default "ended"). With no live record,
+ * an existing block keeps the reason it already has. */
+export async function clearActiveWork(
+  options: { allowLegacyFallback?: boolean; reason?: ActiveWorkEndReason } = {},
+): Promise<void> {
   const epoch = invalidatePendingWork();
   const changed = await serializeActiveWorkMutation(async () => {
     if (epoch !== activeWorkEpoch) return false;
@@ -171,7 +209,8 @@ export async function clearActiveWork(options: { allowLegacyFallback?: boolean }
     if (options.allowLegacyFallback === true) {
       await chrome.storage.session.remove(ACTIVE_WORK_BLOCK_KEY);
     } else {
-      await writeWorkBlock({ orgId: record?.tuple.orgId ?? block?.orgId ?? null });
+      const reason = options.reason ?? "ended";
+      await writeWorkBlock(record != null ? endedBlock(record, reason) : block ?? { orgId: null, reason });
     }
     if (record != null) await chrome.storage.session.remove(ACTIVE_WORK_KEY);
     return record != null ||
@@ -190,7 +229,16 @@ export async function revokeActiveWorkForLegacyLaunch(): Promise<void> {
 export async function getActiveWorkState(): Promise<ActiveWorkState> {
   const record = await readActiveWorkRecord();
   const blocked = await readWorkBlock();
-  if (blocked != null) return { status: "blocked", orgId: blocked.orgId };
+  if (blocked != null) {
+    return {
+      status: "blocked",
+      orgId: blocked.orgId,
+      ...(blocked.reason != null ? { reason: blocked.reason } : {}),
+      ...(blocked.ownerKind != null && blocked.ownerId != null
+        ? { ownerKind: blocked.ownerKind, ownerId: blocked.ownerId }
+        : {}),
+    };
+  }
   return resolveActiveWorkState(record, Date.now());
 }
 
@@ -413,7 +461,9 @@ export async function handleExternalSetActiveWork(
   try {
     const revoked = await serializeActiveWorkMutation(async () => {
       if (epoch !== activeWorkEpoch) return false;
-      await writeWorkBlock({ orgId: requestedTuple.orgId });
+      // Names the new launch's org only. The panel explains a replacement
+      // once the new launch lands (D6); a failed one reads as "ended".
+      await writeWorkBlock({ orgId: requestedTuple.orgId, reason: "ended" });
       const prior = await readStoredRecord();
       if (prior != null) await chrome.storage.session.remove(ACTIVE_WORK_KEY);
       return true;
@@ -546,7 +596,7 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
   const record = await readActiveWorkRecord();
   if (record == null) return null;
   if (isActiveWorkExpired(record, Date.now())) {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "expired" });
     throw new Error("This Work context expired. Reopen the task from Minted Panel.");
   }
   if (record.boundTabId !== tabId) {
@@ -557,13 +607,13 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
   try {
     await chrome.tabs.get(record.boundTabId);
   } catch {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "tab_closed" });
     throw new Error("The bound Work tab closed. Reopen the task from Minted Panel.");
   }
   const pageUrl = await getMainFrameUrl(record.boundTabId);
   if (!workFormUrlMatchesPage(pageUrl, record.formOrigin, record.formPath)) {
     if (!sameOrigin(pageUrl, record.formOrigin)) {
-      await clearActiveWork();
+      await clearActiveWork({ reason: leftSiteReason(pageUrl) });
       throw new Error("The bound Work tab left the payer's site. Reopen the task from Minted Panel.");
     }
     throw new Error("This page isn't part of the form you opened. Go back to the form to fill it.");
@@ -687,7 +737,7 @@ export async function onActiveWorkTabUpdated(tabId: number, url: string | undefi
   const record = await readActiveWorkRecord();
   if (record == null || record.boundTabId !== tabId || !url) return;
   if (!sameOrigin(url, record.formOrigin)) {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "left_site" });
     return;
   }
   await touchActiveWork(tabId);
@@ -705,7 +755,7 @@ function sameOrigin(url: string | null | undefined, origin: string): boolean {
 
 export async function onActiveWorkTabRemoved(tabId: number): Promise<void> {
   const record = await readActiveWorkRecord();
-  if (record?.boundTabId === tabId) await clearActiveWork();
+  if (record?.boundTabId === tabId) await clearActiveWork({ reason: "tab_closed" });
 }
 
 /** The tab id is persisted, so worker restart revalidates that precise tab;
@@ -719,15 +769,23 @@ export async function reconcileActiveWorkTab(): Promise<void> {
   const record = await readActiveWorkRecord();
   if (record == null) return;
   if (isActiveWorkExpired(record, Date.now())) {
-    await clearActiveWork();
+    await clearActiveWork({ reason: "expired" });
     return;
   }
   try {
     await chrome.tabs.get(record.boundTabId);
-    if (!sameOrigin(await getMainFrameUrl(record.boundTabId), record.formOrigin)) await clearActiveWork();
+  } catch {
+    await clearActiveWork({ reason: "tab_closed" });
+    return;
+  }
+  let pageUrl: string | undefined;
+  try {
+    pageUrl = await getMainFrameUrl(record.boundTabId);
   } catch {
     await clearActiveWork();
+    return;
   }
+  if (!sameOrigin(pageUrl, record.formOrigin)) await clearActiveWork({ reason: leftSiteReason(pageUrl) });
 }
 
 function ignoreTabFailure(operation: Promise<unknown>): void {

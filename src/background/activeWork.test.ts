@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
-import { ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
+import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabRemoved, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
@@ -568,5 +568,127 @@ describe("exact tab lifecycle", () => {
     })).rejects.toThrow(/Could not reach the enrollment form/);
     expect(navigationHarness.getFrame).toHaveBeenCalledWith({ tabId, frameId: 0 });
     expect(navigationHarness.getFrame.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("why a Work link ended (D5)", () => {
+  const ORIGIN = "https://portal.example.com";
+  const ended = (reason: string) => ({
+    status: "blocked",
+    orgId: message.orgId,
+    reason,
+    ownerKind: "case",
+    ownerId: message.ownerId,
+  });
+
+  function seedLink(tabId: number, lastActivityAt = new Date().toISOString()) {
+    stub.setQueryTabs([{ id: tabId, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab]);
+    navigationHarness.frames.set(tabId, message.portalUrl);
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      tuple: tupleFromSetActiveWorkMessage(message),
+      boundTabId: tabId,
+      formOrigin: ORIGIN,
+      formPath: "/enroll",
+      caseType: "enrollment",
+      createdAt: lastActivityAt,
+      lastActivityAt,
+    });
+  }
+
+  it("records tab_closed and the ended launch's owner ids when the bound tab closes", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    expect((await getActiveWorkState()).status).toBe("active");
+
+    await onActiveWorkTabRemoved(700);
+
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+    // Identifiers and a reason only: nothing else reaches storage.
+    expect(stub.sessionStore.get(ACTIVE_WORK_BLOCK_KEY)).toEqual({
+      orgId: message.orgId,
+      reason: "tab_closed",
+      ownerKind: "case",
+      ownerId: message.ownerId,
+    });
+  });
+
+  it("records left_site when the bound tab navigates to another origin", async () => {
+    seedLink(53);
+    await onActiveWorkTabUpdated(53, "https://elsewhere.example.net/page");
+    expect(await getActiveWorkState()).toEqual(ended("left_site"));
+  });
+
+  it("records expired when a fill finds the link idle past 60 minutes", async () => {
+    seedLink(53, new Date(Date.now() - 61 * 60 * 1000).toISOString());
+    expect((await getActiveWorkState()).status).toBe("expired");
+
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/expired/);
+
+    expect(await getActiveWorkState()).toEqual(ended("expired"));
+  });
+
+  it("names the reason when a worker restart finds the link over", async () => {
+    seedLink(53, new Date(Date.now() - 61 * 60 * 1000).toISOString());
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("expired"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(54);
+    stub.setQueryTabs([]);
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(55);
+    navigationHarness.frames.set(55, "https://elsewhere.example.net/page");
+    await reconcileActiveWorkTab();
+    expect(await getActiveWorkState()).toEqual(ended("left_site"));
+  });
+
+  it("calls anything else ended, and a second clear keeps the first reason", async () => {
+    seedLink(53);
+    await clearActiveWork();
+    expect(await getActiveWorkState()).toEqual(ended("ended"));
+
+    stub.sessionStore.delete(ACTIVE_WORK_BLOCK_KEY);
+    seedLink(53);
+    await onActiveWorkTabRemoved(53);
+    await clearActiveWork();
+    expect(await getActiveWorkState()).toEqual(ended("tab_closed"));
+  });
+
+  it("a failed replacing launch reads as ended under the new org, with no owner", async () => {
+    await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+    vi.mocked(validateWorkContext).mockRejectedValueOnce(new Error("network down"));
+    const otherOrg = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    const ack = await handleExternalSetActiveWork({
+      ...message,
+      launchReceiptId: "88888888-8888-4888-8888-888888888888",
+      orgId: otherOrg,
+    }, APP_ORIGIN, 1);
+
+    expect(ack).toEqual({ ok: false, code: "VALIDATION_FAILED" });
+    expect(await getActiveWorkState()).toEqual({ status: "blocked", orgId: otherOrg, reason: "ended" });
+  });
+
+  it("an old block record with no reason still parses as blocked", async () => {
+    seedLink(53);
+    stub.sessionStore.delete(ACTIVE_WORK_KEY);
+    stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, { orgId: message.orgId });
+
+    expect(await getActiveWorkState()).toEqual({ status: "blocked", orgId: message.orgId });
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/prior exact Work context ended/);
+  });
+
+  it("refuses a block record carrying anything beyond identifiers and a known reason", async () => {
+    for (const block of [
+      { orgId: message.orgId, reason: "tab_closed", providerName: "Taylor Example" },
+      { orgId: message.orgId, reason: "closed_by_payer" },
+      { orgId: message.orgId, reason: "tab_closed", ownerKind: "case" },
+      { orgId: message.orgId, reason: "tab_closed", ownerKind: "case", ownerId: "not-an-id" },
+    ]) {
+      stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, block);
+      expect((await getActiveWorkState()).status).toBe("none");
+    }
   });
 });

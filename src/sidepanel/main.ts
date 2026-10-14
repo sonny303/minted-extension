@@ -72,6 +72,13 @@ import {
   type WorkPortalPermissionTarget,
 } from "../shared/workContext";
 import {
+  carriedLaunchId,
+  isLaunchReplacement,
+  launchSwapLine,
+  workEndedCaseId,
+  workEndedLine,
+} from "../shared/workLinkNotice";
+import {
   caseReturnUrl,
   evaluateHandoffApplication,
   evaluateHandoffOrg,
@@ -4613,6 +4620,10 @@ searchInput.addEventListener("input", () => {
 // non-member context is discarded, the record is gone but the user must see
 // why).
 let handoffNotice: string | null = null;
+// D6: the launch the panel last showed live (see carriedLaunchId), and the
+// one-time neutral notice naming the launch that replaced it.
+let shownLaunchId: string | null = null;
+let launchSwapNotice: { launchReceiptId: string; text: string } | null = null;
 
 function handoffKey(record: ActiveCaseRecord): string {
   return activeCaseReceiptKey(record);
@@ -4649,15 +4660,41 @@ function renderHandoffBanner(): void {
     return;
   }
 
+  // D6: another launch replaced the one on screen. Neutral, shown once, and
+  // only while the launch it names is still the live one.
+  if (launchSwapNotice != null && activeWorkState.status === "active" &&
+      activeWorkState.record.tuple.launchReceiptId === launchSwapNotice.launchReceiptId) {
+    handoffBanner.hidden = false;
+    const text = document.createElement("span");
+    text.textContent = launchSwapNotice.text;
+    handoffBanner.append(
+      text,
+      bannerButton("Dismiss", () => {
+        launchSwapNotice = null;
+        renderHandoffBanner();
+      }),
+    );
+    return;
+  }
+
   // A timed-out link is explained on the task card (D4). The live link's
   // technical line (owner, form key, mapping) is in admin Details now.
   if (activeWorkState.status === "expired" || activeWorkState.status === "active") return;
   if (activeWorkState.status === "blocked") {
+    // D5: say why the link ended. The payer is named only when the selected
+    // case is the one whose link ended.
+    const ended = activeWorkState;
+    const caseId = selectedCaseId();
+    const payer = caseId != null && (ended.ownerId == null || ended.ownerId === caseId) ? payerLabel() : null;
+    const endedCaseId = workEndedCaseId(ended);
     handoffBanner.hidden = false;
     handoffBanner.classList.add("banner-warn");
     const text = document.createElement("span");
-    text.textContent = "The link to the case ended (the payer tab closed or left the payer's site). Open the case in Minted Panel and click Work in portal again, or pick a case here.";
+    text.textContent = workEndedLine(ended.reason, payer);
     handoffBanner.append(text);
+    if (endedCaseId != null) {
+      handoffBanner.append(externalLink("Back to case ↗", caseUrl(endedCaseId), "link banner-action"));
+    }
     return;
   }
 
@@ -4967,6 +5004,23 @@ async function refreshActiveCase(applyHandoff = true): Promise<void> {
   }
 }
 
+// D6 names for a launch, from what the panel has loaded for its ids. Null
+// parts make launchSwapLine fall back to "the new case".
+function launchSwapNames(record: ActiveWorkRecord): { provider: string | null; payer: string | null; state: string | null } {
+  const tuple = record.tuple;
+  const caseId = tuple.ownerKind === "case" ? tuple.ownerId : null;
+  const context = caseId != null && caseContextCaseId === caseId ? caseContextData : null;
+  const caseItem = caseId == null ? undefined : cases.find((c) => c.id === caseId);
+  const listed = providers.find((p) => p.id === tuple.providerId);
+  return {
+    provider: context?.provider?.id === tuple.providerId
+      ? context.provider.name
+      : listed != null ? `${listed.firstName} ${listed.lastName}` : null,
+    payer: context?.payer?.name ?? caseItem?.payerName ?? null,
+    state: context?.state ?? caseItem?.state ?? null,
+  };
+}
+
 async function refreshActiveWork(reloadSelections = true): Promise<void> {
   const previousIdentity = activeWorkStateIdentity(activeWorkState);
   const modeResponse = await sendToBackground({ type: "GET_PANEL_MODE" });
@@ -4976,12 +5030,32 @@ async function refreshActiveWork(reloadSelections = true): Promise<void> {
   }
   const response = await sendToBackground({ type: "GET_ACTIVE_WORK" });
   if (!response.ok) return;
+  // Read the prior launch and assign in one turn, so overlapping refreshes
+  // (push and poll) see a replacement once.
+  const previousLaunchId = activeWorkState.status === "active"
+    ? activeWorkState.record.tuple.launchReceiptId
+    : shownLaunchId;
   activeWorkState = response.data;
+  shownLaunchId = carriedLaunchId(previousLaunchId, activeWorkState);
+  const replacement = isLaunchReplacement(previousLaunchId, activeWorkState) &&
+    activeWorkState.status === "active"
+    ? activeWorkState.record
+    : null;
+  if (launchSwapNotice != null && launchSwapNotice.launchReceiptId !== shownLaunchId) launchSwapNotice = null;
   const changed = activeWorkStateIdentity(activeWorkState) !== previousIdentity;
   if (changed && activeWorkState.status !== "none" && reloadSelections &&
       !views.main.hidden && panelMode !== "train") {
     await loadOrgs(bumpGeneration());
     await refreshActiveCase();
+  }
+  // Named after the reload so the new case's names are usually known. Set
+  // only if that launch is still the live one.
+  if (replacement != null && activeWorkState.status === "active" &&
+      activeWorkState.record.tuple.launchReceiptId === replacement.tuple.launchReceiptId) {
+    launchSwapNotice = {
+      launchReceiptId: replacement.tuple.launchReceiptId,
+      text: launchSwapLine(launchSwapNames(replacement)),
+    };
   }
   await detectPortal();
   renderHandoffBanner();
