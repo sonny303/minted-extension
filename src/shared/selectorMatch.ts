@@ -69,13 +69,13 @@ export function selectorVerdict(
   if (!report.valid) {
     return {
       ok: false,
-      text: "That is not valid CSS, so it was never tried — check the syntax in the box.",
+      text: "That is not valid CSS, so it was never tried. Check the syntax in the box.",
     };
   }
   if (report.matches === 0) {
     return {
       ok: false,
-      text: "Matches nothing on this page — it will never fill. Re-capture, or add the field by hand while it is visible.",
+      text: "Matches nothing on this page, so it will never fill. Re-capture, or add the field by hand while it is visible.",
     };
   }
   if (report.fillable === 0) {
@@ -83,14 +83,14 @@ export function selectorVerdict(
       report.matches === 1 ? "one element" : `${report.matches} elements`;
     return {
       ok: false,
-      text: `Matches ${what}, but nothing that can be typed into — the fill engine writes to inputs, dropdowns and text areas only. Point at the field itself rather than the box around it.`,
+      text: `Matches ${what}, but nothing that can be typed into. The fill engine writes to inputs, dropdowns and text areas only. Point at the field itself rather than the box around it.`,
     };
   }
   if (report.radioGroup) {
     return fieldType === "radio"
       ? {
           ok: true,
-          text: `Matches the ${report.matches} options of one radio group — that is what a radio field looks like.`,
+          text: `Matches the ${report.matches} options of one radio group. That is what a radio field looks like.`,
         }
       : {
           ok: false,
@@ -102,6 +102,6 @@ export function selectorVerdict(
   }
   return {
     ok: false,
-    text: `Matches ${report.fillable} fields — ambiguous, and may fill the wrong one.`,
+    text: `Matches ${report.fillable} fields. That is ambiguous, and it may fill the wrong one.`,
   };
 }
