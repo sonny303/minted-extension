@@ -33,7 +33,12 @@ const STEP_TWO_ID = "step-1";
 const PORTAL_KEY = "same.enrollment.portal";
 const BOUND_TAB = 21;
 
-const workTuple = (stepId: string, ownerKind: "case" | "contract" = "case") => ({
+const OTHER_CASE_ID = "33333333-3333-4333-8333-333333333333";
+const LAUNCH_A = "launch-a";
+const LAUNCH_B = "launch-b";
+
+const workTuple = (stepId: string, ownerKind: "case" | "contract" = "case", launchReceiptId = LAUNCH_A) => ({
+  launchReceiptId,
   ownerKind,
   ownerId: CASE_ID,
   taskId: TASK_ID,
@@ -61,13 +66,40 @@ const enrollmentTask = {
 const IDS = [
   "log-link", "submit-details", "submit-title", "payer-ref-label", "mark-submitted", "dup-warn",
   "dup-cancel", "submit-back", "task-link", "task-link-single", "submit-moves", "submit-status", "submit-next",
+  "nba-section", "task-notice",
 ] as const;
+type Id = (typeof IDS)[number] | "payer-ref-input" | "wip-note-input";
 
-function buildScope(state: Record<string, unknown>): { scope: Context; el: (id: (typeof IDS)[number]) => HTMLElement } {
-  const dom = new JSDOM(IDS.map((id) => `<div id="${id}" hidden></div>`).join(""));
+function buildScope(state: Record<string, unknown>): {
+  scope: Context;
+  el: (id: Id) => HTMLElement;
+  input: (id: "payer-ref-input" | "wip-note-input") => HTMLInputElement;
+  run: (source: string) => unknown;
+} {
+  const dom = new JSDOM(IDS.map((id) => `<div id="${id}" hidden></div>`).join("") +
+    '<input id="payer-ref-input"><textarea id="wip-note-input"></textarea>');
   const doc = dom.window.document;
-  const el = (id: (typeof IDS)[number]) => doc.getElementById(id) as HTMLElement;
+  const el = (id: Id) => doc.getElementById(id) as HTMLElement;
+  const input = (id: "payer-ref-input" | "wip-note-input") => doc.getElementById(id) as HTMLInputElement;
   const scope = createContext({
+    document: doc,
+    payerRefInput: el("payer-ref-input"),
+    wipNoteInput: el("wip-note-input"),
+    nbaSection: el("nba-section"),
+    taskNotice: el("task-notice"),
+    logScope: null,
+    lastLogMoved: false,
+    providerAttentionKey: null,
+    taskNoticeKey: null,
+    setSectionOpen: vi.fn(),
+    externalLink: (label: string, href: string) => {
+      const link = doc.createElement("a");
+      link.textContent = label;
+      link.href = href;
+      return link;
+    },
+    taskUrl: (id: string) => `https://panel.test/tasks/${id}`,
+    caseUrl: (id: string) => `https://panel.test/cases/${id}`,
     logLink: el("log-link"),
     submitDetails: el("submit-details"),
     submitTitle: el("submit-title"),
@@ -101,13 +133,22 @@ function buildScope(state: Record<string, unknown>): { scope: Context; el: (id: 
   runInContext(code([
     "caseStatusNow", "workRecordForSelectedCase", "workTupleForSelectedCase", "workIsLoggable",
     "payerLabel", "formTasks", "currentPlan", "workTabElsewhere", "canLogSubmission", "renderLogControls",
+    "launchIdForSelectedCase", "logScopeKey", "dropLogStateOutsideScope", "resetLogState", "resetSubmitInputs",
+    "renderSubmissionActions", "fillNotice", "setLiveRole", "openProviderDetailsOnce",
+    "noticeButton", "focusTab", "showTaskNotice", "workOffForm", "renderTaskNotice",
   ]), scope);
-  return { scope, el };
+  return { scope, el, input, run: (source: string) => runInContext(source, scope) };
 }
 
-const launch = (stepId: string, caseType: string | null = "enrollment", ownerKind: "case" | "contract" = "case") => ({
-  status: "active",
-  record: { tuple: workTuple(stepId, ownerKind), boundTabId: BOUND_TAB, caseType },
+const launch = (
+  stepId: string,
+  caseType: string | null = "enrollment",
+  ownerKind: "case" | "contract" = "case",
+  launchReceiptId = LAUNCH_A,
+  status: "active" | "expired" = "active",
+) => ({
+  status,
+  record: { tuple: workTuple(stepId, ownerKind, launchReceiptId), boundTabId: BOUND_TAB, caseType },
 });
 
 describe("0.1.8 close-out controls", () => {
@@ -140,6 +181,8 @@ describe("0.1.8 close-out controls", () => {
   it.each([
     ["recredentialing Work", launch(STEP_ONE_ID, "recredentialing")],
     ["contract Work", launch(STEP_ONE_ID, "contract", "contract")],
+    // The worker logs enrollment only, so an unknown case type is not loggable.
+    ["Work with no case type", launch(STEP_ONE_ID, null)],
   ])("keeps %s out of Log it", (_label, activeWorkState) => {
     const { scope, el } = buildScope({ activeWorkState });
     expect(runInContext("canLogSubmission()", scope)).toBe(false);
@@ -195,5 +238,253 @@ describe("0.1.8 close-out controls", () => {
     runInContext('renderLogControls({ kind: "logFailed" })', changed.scope);
     expect(changed.el("submit-details").hidden).toBe(true);
     expect(changed.el("mark-submitted").hidden).toBe(true);
+    // The refusal stays readable, and Log it is a way back once she checked.
+    expect(changed.el("submit-status").hidden).toBe(false);
+    expect(changed.el("log-link").hidden).toBe(false);
+  });
+
+  it("hides the whole log form on another tab, and brings it back with the entries", () => {
+    const { el, input, run } = buildScope({
+      activeWorkState: launch(STEP_ONE_ID), detectedTabId: 99, submitPhase: "form", dupConfirmPending: false,
+    });
+    input("payer-ref-input").value = "RFP-204871";
+    run('renderLogControls({ kind: "wrongTab" })');
+    for (const id of ["submit-details", "mark-submitted", "submit-back", "dup-warn", "dup-cancel", "log-link"] as const) {
+      expect(el(id).hidden, id).toBe(true);
+    }
+
+    run(`detectedTabId = ${BOUND_TAB}`);
+    run('renderLogControls({ kind: "log" })');
+    expect(el("submit-details").hidden).toBe(false);
+    expect(el("mark-submitted").hidden).toBe(false);
+    expect(el("mark-submitted").textContent).toBe("Log submission");
+    expect(input("payer-ref-input").value).toBe("RFP-204871");
+  });
+
+  it("holds a failure Try again can fix, with its message, until she is back on the tab", () => {
+    const { el, run } = buildScope({
+      activeWorkState: launch(STEP_ONE_ID), detectedTabId: 99, submitPhase: "failed", lastLogFailure: { retry: true },
+    });
+    el("submit-status").textContent = "Not logged yet. Your entries are kept. Try again.";
+    run('renderLogControls({ kind: "wrongTab" })');
+    expect(el("submit-details").hidden).toBe(true);
+    expect(el("mark-submitted").hidden).toBe(true);
+    expect(el("submit-status").hidden).toBe(true);
+
+    run(`detectedTabId = ${BOUND_TAB}`);
+    run('renderLogControls({ kind: "logFailed" })');
+    expect(el("submit-status").hidden).toBe(false);
+    expect(el("mark-submitted").textContent).toBe("Try again");
+  });
+
+  it("names logging in the wrong-tab notice while a log form waits, and focuses the tab's window", async () => {
+    const tabsUpdate = vi.fn(async () => ({ id: BOUND_TAB, windowId: 5 }));
+    const windowsUpdate = vi.fn(async () => ({}));
+    const { el, run } = buildScope({
+      activeWorkState: launch(STEP_ONE_ID), detectedTabId: 99, submitPhase: "form",
+      chrome: { tabs: { update: tabsUpdate, get: vi.fn() }, windows: { update: windowsUpdate } },
+    });
+    run('renderTaskNotice({ kind: "wrongTab" }, null)');
+    expect(el("task-notice").textContent).toContain("You're on a different tab. Switch to the Aetna tab to log it.");
+    const first = el("task-notice").firstChild;
+    // The same notice again leaves the live region alone (no repeat read).
+    run('renderTaskNotice({ kind: "wrongTab" }, null)');
+    expect(el("task-notice").firstChild).toBe(first);
+
+    el("task-notice").querySelector("button")!.click();
+    await vi.waitFor(() => expect(windowsUpdate).toHaveBeenCalledWith(5, { focused: true }));
+    expect(tabsUpdate).toHaveBeenCalledWith(BOUND_TAB, { active: true });
+
+    run('submitPhase = "idle"');
+    run('renderTaskNotice({ kind: "wrongTab" }, null)');
+    expect(el("task-notice").textContent).toContain("Switch to the Aetna tab to fill.");
+  });
+
+  it("reads the window from the tab when the update returns none, and survives a closed tab", async () => {
+    const windowsUpdate = vi.fn(async () => ({}));
+    const get = vi.fn(async () => ({ id: BOUND_TAB, windowId: 9 }));
+    const { run } = buildScope({
+      chrome: { tabs: { update: vi.fn(async () => undefined), get }, windows: { update: windowsUpdate } },
+    });
+    await run(`focusTab(${BOUND_TAB})`);
+    expect(get).toHaveBeenCalledWith(BOUND_TAB);
+    expect(windowsUpdate).toHaveBeenCalledWith(9, { focused: true });
+
+    const closed = buildScope({
+      chrome: { tabs: { update: vi.fn(async () => { throw new Error("No tab"); }), get }, windows: { update: windowsUpdate } },
+    });
+    await expect(closed.run(`focusTab(${BOUND_TAB})`)).resolves.toBeUndefined();
+  });
+});
+
+describe("log scope: one case and one Work launch", () => {
+  const casesWithRef = [{ id: CASE_ID, payerName: "Aetna", status: "In Progress", portalTasks: [], payerReferenceId: "CASE-REF" }];
+
+  it("keeps the open form and its entries through a page change in the same case and launch", () => {
+    for (const activeWorkState of [launch(STEP_ONE_ID), { status: "none" }]) {
+      const { input, run } = buildScope({ activeWorkState, cases: casesWithRef });
+      run('submitPhase = "form"; logScope = logScopeKey()');
+      input("payer-ref-input").value = "RFP-204871";
+      input("wip-note-input").value = "Called the payer";
+      // What clearFillResults runs when the page changes.
+      run("dropLogStateOutsideScope()");
+      expect(run("submitPhase")).toBe("form");
+      expect(input("payer-ref-input").value).toBe("RFP-204871");
+      expect(input("wip-note-input").value).toBe("Called the payer");
+    }
+  });
+
+  it("keeps a failed log and a logged result through a page change", () => {
+    for (const phase of ["failed", "done"]) {
+      const { run } = buildScope({ activeWorkState: launch(STEP_ONE_ID), lastLogFailure: { retry: true } });
+      run(`submitPhase = "${phase}"; logScope = logScopeKey()`);
+      run("dropLogStateOutsideScope()");
+      expect(run("submitPhase")).toBe(phase);
+    }
+  });
+
+  it("keeps the scope when the launch times out, so a logged result stays readable", () => {
+    const { run } = buildScope({ activeWorkState: launch(STEP_ONE_ID), submitPhase: "done" });
+    run("logScope = logScopeKey()");
+    expect(run("logScope")).toBe(`${CASE_ID}|${LAUNCH_A}`);
+    run(`activeWorkState = ${JSON.stringify(launch(STEP_ONE_ID, "enrollment", "case", LAUNCH_A, "expired"))}`);
+    run("dropLogStateOutsideScope()");
+    expect(run("submitPhase")).toBe("done");
+  });
+
+  it("starts fresh when she relaunches the same case", () => {
+    const { el, input, run } = buildScope({ activeWorkState: launch(STEP_ONE_ID), cases: casesWithRef });
+    run('submitPhase = "done"; logScope = logScopeKey()');
+    el("submit-status").hidden = false;
+    el("submit-next").append(el("submit-next").ownerDocument.createElement("a"));
+    input("payer-ref-input").value = "RFP-204871";
+    input("wip-note-input").value = "Called the payer";
+
+    run(`activeWorkState = ${JSON.stringify(launch(STEP_ONE_ID, "enrollment", "case", LAUNCH_B))}`);
+    run("dropLogStateOutsideScope()");
+    expect(run("submitPhase")).toBe("idle");
+    expect(run("logScope")).toBeNull();
+    expect(input("payer-ref-input").value).toBe("CASE-REF");
+    expect(input("wip-note-input").value).toBe("");
+    run('renderLogControls({ kind: "ready" })');
+    expect(el("submit-status").hidden).toBe(true);
+    expect(el("submit-next").hidden).toBe(true);
+    expect(el("log-link").hidden).toBe(false);
+  });
+
+  it("starts fresh on a different case, and when a manual log meets a new launch", () => {
+    let current = CASE_ID;
+    const { run } = buildScope({ selectedCaseId: () => current });
+    run('submitPhase = "form"; logScope = logScopeKey()');
+    expect(run("logScope")).toBe(`${CASE_ID}|manual`);
+    current = OTHER_CASE_ID;
+    run("dropLogStateOutsideScope()");
+    expect(run("submitPhase")).toBe("idle");
+
+    current = CASE_ID;
+    run('submitPhase = "done"; logScope = logScopeKey()');
+    run(`activeWorkState = ${JSON.stringify(launch(STEP_ONE_ID))}`);
+    run("dropLogStateOutsideScope()");
+    expect(run("submitPhase")).toBe("idle");
+  });
+
+  it("shows a restored report that was already logged as done, and keeps it", () => {
+    const lastFill = { caseId: CASE_ID, isWorkFill: true, workContext: workTuple(STEP_ONE_ID), workCaseType: "enrollment" };
+    const { el, run } = buildScope({ activeWorkState: launch(STEP_ONE_ID), lastFill });
+    run('renderSubmissionActions({ completedAt: "2026-10-14T12:00:00Z", submitted: true })');
+    expect(run("submitPhase")).toBe("done");
+    expect(run("logScope")).toBe(`${CASE_ID}|${LAUNCH_A}`);
+    expect(el("submit-status").textContent).toBe("Logged to the case.");
+    expect(el("submit-status").getAttribute("role")).toBe("status");
+
+    // renderTaskCard runs this next; the done card used to vanish here.
+    run("dropLogStateOutsideScope()");
+    run('renderLogControls({ kind: "logged", submitted: false })');
+    expect(run("submitPhase")).toBe("done");
+    expect(el("submit-status").hidden).toBe(false);
+    expect(el("log-link").hidden).toBe(true);
+  });
+
+  it("shows a restored logged report as done after its launch ended, or with no launch at all", () => {
+    for (const [activeWorkState, workContext] of [
+      [{ status: "blocked", orgId: null }, workTuple(STEP_ONE_ID)],
+      [{ status: "none" }, null],
+    ] as const) {
+      const lastFill = { caseId: CASE_ID, isWorkFill: workContext != null, workContext, workCaseType: "enrollment" };
+      const { run } = buildScope({ activeWorkState, lastFill });
+      run('renderSubmissionActions({ completedAt: "2026-10-14T12:00:00Z", submitted: true })');
+      expect(run("submitPhase")).toBe("done");
+      expect(run("logScope")).toBe(`${CASE_ID}|manual`);
+    }
+  });
+
+  it("leaves a new launch to log fresh when the restored report was logged under an earlier one", () => {
+    const lastFill = { caseId: CASE_ID, isWorkFill: true, workContext: workTuple(STEP_ONE_ID), workCaseType: "enrollment" };
+    const { run } = buildScope({ activeWorkState: launch(STEP_ONE_ID, "enrollment", "case", LAUNCH_B), lastFill });
+    run('renderSubmissionActions({ completedAt: "2026-10-14T12:00:00Z", submitted: true })');
+    expect(run("submitPhase")).toBe("idle");
+
+    const unsubmitted = buildScope({ activeWorkState: launch(STEP_ONE_ID), lastFill });
+    unsubmitted.run('renderSubmissionActions({ completedAt: "2026-10-14T12:00:00Z", submitted: false })');
+    expect(unsubmitted.run("submitPhase")).toBe("idle");
+  });
+
+  it("starts the log fresh after a new fill", () => {
+    const { run } = buildScope({ activeWorkState: launch(STEP_ONE_ID) });
+    run('submitPhase = "done"; logScope = logScopeKey()');
+    run("renderSubmissionActions()");
+    expect(run("submitPhase")).toBe("idle");
+    expect(run("logScope")).toBeNull();
+  });
+});
+
+describe("Provider details opens itself once per state", () => {
+  it("opens for a by-hand page or denied access once, and again only when the state changes", () => {
+    const { scope, run } = buildScope({});
+    const open = scope.setSectionOpen as ReturnType<typeof vi.fn>;
+    run('openProviderDetailsOnce("byHand:https://payer.test/confirm")');
+    run('openProviderDetailsOnce("byHand:https://payer.test/confirm")');
+    run('openProviderDetailsOnce("byHand:https://payer.test/confirm")');
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith("provider", true);
+
+    run('openProviderDetailsOnce("byHand:https://payer.test/next-page")');
+    expect(open).toHaveBeenCalledTimes(2);
+    run('openProviderDetailsOnce("denied")');
+    run('openProviderDetailsOnce("denied")');
+    expect(open).toHaveBeenCalledTimes(3);
+    // Leaving the state and coming back counts as a change.
+    run("openProviderDetailsOnce(null)");
+    run('openProviderDetailsOnce("denied")');
+    expect(open).toHaveBeenCalledTimes(4);
+  });
+
+  it("is the only way the task card opens Provider details for these states", () => {
+    const body = (name: string) => tree.statements.find((node) =>
+      ts.isFunctionDeclaration(node) && node.name?.text === name)!.getText(tree);
+    expect(body("renderTaskNotice")).not.toContain("setSectionOpen");
+    expect(body("renderTaskCard")).not.toContain("setSectionOpen(\"provider\"");
+    expect(body("renderTaskCard")).toContain("openProviderDetailsOnce(");
+    // Page changes keep the log through the scope check, never a case id.
+    expect(body("clearFillResults")).toContain("dropLogStateOutsideScope()");
+    expect(body("renderTaskCard")).toContain("dropLogStateOutsideScope()");
+  });
+});
+
+describe("focus after a log control hides", () => {
+  it("moves focus to the first target that shows", () => {
+    const dom = new JSDOM(`
+      <div hidden><button id="hidden-inside">Log it</button></div>
+      <button id="hidden-self" hidden>Back</button>
+      <div id="status" tabindex="-1">Logged.</div>
+      <button id="title">Task</button>`);
+    const doc = dom.window.document;
+    const scope = createContext({});
+    runInContext(code(["focusFirstShown"]), scope);
+    const byId = (id: string) => doc.getElementById(id)!;
+    (scope.focusFirstShown as (...targets: HTMLElement[]) => void)(byId("hidden-inside"), byId("hidden-self"), byId("status"), byId("title"));
+    expect(doc.activeElement).toBe(byId("status"));
+    (scope.focusFirstShown as (...targets: HTMLElement[]) => void)(byId("hidden-inside"), byId("title"));
+    expect(doc.activeElement).toBe(byId("title"));
   });
 });

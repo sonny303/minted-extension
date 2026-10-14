@@ -293,7 +293,7 @@
               <!-- G4/G5: the test fill and Clear form results, in the same
                    notice look as a real fill. Run and clear errors land here
                    too, as a red notice with Copy support code. -->
-              <div id="sandbox-result" class="sandbox-result" hidden></div>
+              <div id="sandbox-result" class="sandbox-result" role="status" aria-live="polite" hidden></div>
               <div class="sandbox-actions">
                 <button id="sandbox-fill" class="primary" type="button">
                   Run test fill
@@ -360,7 +360,7 @@
 
                 <!-- Wrong tab, link timed out, read-only, case-only work: one
                      notice and at most one way forward. -->
-                <div id="task-notice" class="notice" hidden></div>
+                <div id="task-notice" class="notice" role="status" aria-live="polite" hidden></div>
 
                 <p id="ready-title" class="task-line-title" hidden></p>
                 <!-- S4.1: the fill offer card, light. Count and test-run state
@@ -384,7 +384,7 @@
                 <p id="fill-note" class="btn-note">
                   You click Continue and Submit. Minted never submits.
                 </p>
-                <div id="fill-problem" class="notice notice-danger" hidden></div>
+                <div id="fill-problem" class="notice notice-danger" role="alert" hidden></div>
 
                 <!-- S6.2: CAQH push — the offer + attestation. -->
                 <div id="caqh-section" class="caqh" hidden>
@@ -402,7 +402,7 @@
 
                 <div id="fill-results" hidden>
                   <p id="fill-report-time" class="lbl" hidden></p>
-                  <div id="fill-summary" class="notice notice-ok"></div>
+                  <div id="fill-summary" class="notice notice-ok" role="status" aria-live="polite"></div>
                   <div id="fill-manual" class="notice notice-warn" hidden></div>
                   <div id="fill-your-turn" class="notice notice-neutral" hidden></div>
                   <p id="fill-event-warn" class="status-line" hidden></p>
@@ -461,7 +461,7 @@
                     <span id="submit-moves" hidden>Logging moves this case to Submitted.</span>
                   </div>
                 </div>
-                <div id="dup-warn" class="notice notice-warn" hidden></div>
+                <div id="dup-warn" class="notice notice-warn" role="status" aria-live="polite" hidden></div>
                 <button id="mark-submitted" class="primary" type="button" hidden>
                   Log submission
                 </button>
@@ -471,7 +471,9 @@
                 <button id="submit-back" class="link" type="button" hidden>
                   Not yet. Back to filling
                 </button>
-                <div id="submit-status" class="logged" hidden></div>
+                <!-- The log result. main.ts switches it to role="alert" for a failure
+                     and moves focus here after logging, hence tabindex. -->
+                <div id="submit-status" class="logged" role="status" aria-live="polite" tabindex="-1" hidden></div>
                 <div id="submit-next" class="task-actions" hidden></div>
 
                 <div id="nba-section" class="nba" hidden></div>
