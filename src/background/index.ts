@@ -115,6 +115,7 @@ import {
   getActiveWorkState,
   getWorkPortalPermissionTarget,
   profileOptionsForActiveWork,
+  readActiveWorkRecord,
   registerActiveWorkListeners,
   registerValidatedWorkSelectionCommitter,
   registerWorkSwitchInvalidator,
@@ -122,6 +123,8 @@ import {
   revalidateActiveWork,
 } from "./activeWork";
 import {
+  canonicalizeWorkContextTuple,
+  isActiveWorkExpired,
   parseCanonicalWorkContextTuple,
   type ActiveWorkRecord,
 } from "../shared/workContext";
@@ -2231,42 +2234,70 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         : null;
       const summary = fillReport?.summary as (FillReportRecord["summary"] & Record<string, unknown>) | undefined;
       const workContextPresent = summary != null && Object.prototype.hasOwnProperty.call(summary, "workContext");
-      const workContext = workContextPresent
+      let workContext = workContextPresent
         ? parseCanonicalWorkContextTuple(summary?.workContext)
         : null;
       if (workContextPresent && workContext == null) {
         throw new ApiError(409, "The saved fill report has an invalid Work receipt. Reopen the task and fill again.");
       }
+      // No fill in this panel (filled by hand, or nothing to fill): a Work
+      // launch still names its exact case, task and step. Take them from the
+      // live launch record the worker holds, never from the panel's selection.
+      let fromLaunch = false;
+      if (workContext == null && request.isWorkFill) {
+        const launch = await readActiveWorkRecord();
+        if (launch == null || isActiveWorkExpired(launch, Date.now())) {
+          throw new ApiError(409, "This Work launch ended. Open the task in Minted Panel and click Work in portal again.");
+        }
+        if (launch.tuple.ownerKind === "case" && launch.caseType !== "enrollment") {
+          throw new ApiError(422, "Log this work in Minted Panel.");
+        }
+        workContext = canonicalizeWorkContextTuple(launch.tuple);
+        fromLaunch = true;
+      }
       if (workContext?.ownerKind === "contract") {
         throw new ApiError(422, "Contract Work has no case submission action. Return to the Contract task in Minted Panel.");
       }
       if (request.isWorkFill && workContext == null) {
-        throw new ApiError(409, "The exact Work fill receipt is unavailable. Reopen the task and fill again before marking submitted.");
+        throw new ApiError(409, "This Work launch ended. Open the task in Minted Panel and click Work in portal again.");
       }
 
       const typedEnrollment = workContext?.ownerKind === "case" ? workContext : null;
       if (typedEnrollment) {
-        if (!request.fillSessionId || fillReport == null ||
-          summary?.fillSessionId !== request.fillSessionId || summary.eventRecorded !== true ||
-          summary.workCaseType !== "enrollment" ||
-          fillReport.providerId !== typedEnrollment.providerId ||
-          fillReport.caseId !== typedEnrollment.ownerId ||
-          fillReport.portalKey !== typedEnrollment.portalKey ||
-          request.caseId !== typedEnrollment.ownerId ||
-          request.providerId !== typedEnrollment.providerId ||
-          request.portalKey !== typedEnrollment.portalKey) {
-          throw new ApiError(409, "Only a saved successful Enrollment Work fill can be marked submitted. Reopen the exact task and fill again.");
+        const sameTarget = request.caseId === typedEnrollment.ownerId &&
+          request.providerId === typedEnrollment.providerId &&
+          request.portalKey === typedEnrollment.portalKey;
+        const reportMatches = fromLaunch || (
+          request.fillSessionId != null && fillReport != null &&
+          summary?.fillSessionId === request.fillSessionId &&
+          summary.workCaseType === "enrollment" &&
+          fillReport.providerId === typedEnrollment.providerId &&
+          fillReport.caseId === typedEnrollment.ownerId &&
+          fillReport.portalKey === typedEnrollment.portalKey);
+        if (!sameTarget || !reportMatches) {
+          throw new ApiError(409, "This task changed in Minted Panel. Open it to check.");
         }
       }
 
       const caseId = typedEnrollment?.ownerId ?? request.caseId;
       const portalKey = typedEnrollment?.portalKey ?? request.portalKey;
-      const fillSessionId = request.fillSessionId;
+      // A saved fill record is evidence, not a requirement (panel, Oct 14).
+      // Name it only when Minted Panel actually holds it: the panel answers an
+      // unknown fill id with 404, and a fill whose record failed to save
+      // must still be loggable.
+      const fillSessionId = request.fillSessionId != null && !fromLaunch &&
+        summary?.eventRecorded === true
+        ? request.fillSessionId
+        : null;
       // One idempotency id per (case, fill session), remembered for the
       // browser session. Typed Work additionally binds one normalized request
       // digest to this ID so retries cannot change the payload.
       await assertCaseWriteMatchesActiveCase(caseId);
-      const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${caseId}.${fillSessionId ?? "none"}`;
+      // Keyed by the fill attempt when there was one, so retries of the same
+      // log replay rather than double-log. A log with no fill uses "none" and
+      // is released after success, so a later deliberate log is a new touch.
+      const attemptKey = request.fillSessionId ?? "none";
+      const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${caseId}.${attemptKey}`;
       let idempotencyId = await readSessionString(idKey);
       let createdIdThisAttempt = false;
       if (!idempotencyId) {
@@ -2285,15 +2316,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         idempotencyId,
         payerReferenceId: request.payerReferenceId,
         wipNote: request.wipNote,
-        ...(typedEnrollment ? { workContext: typedEnrollment } : {
-          taskId: request.taskId,
-          bumpStatus: request.bumpStatus,
-        }),
+        // bump_status only asks the panel to report what its trigger did to
+        // the case status; the trigger moves it on every submission.
+        bumpStatus: request.bumpStatus,
+        ...(typedEnrollment ? { workContext: typedEnrollment } : { taskId: request.taskId }),
       });
-      if (typedEnrollment && fillSessionId) {
+      const hashKey = `${SUBMIT_TOUCH_BODY_HASH_PREFIX}${caseId}.${attemptKey}`;
+      if (typedEnrollment) {
         submissionBody = await stableTypedSubmissionBody(
           idKey,
-          `${SUBMIT_TOUCH_BODY_HASH_PREFIX}${caseId}.${fillSessionId}`,
+          hashKey,
           idempotencyId,
           submissionBody,
           createdIdThisAttempt,
@@ -2301,8 +2333,13 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       }
       const { touch, statusBump } = await postSubmissionTouch(caseId, submissionBody);
       if (typedEnrollment && (touch.id !== idempotencyId || touch.caseId !== caseId ||
-        touch.fillSessionId !== fillSessionId)) {
+        (touch.fillSessionId ?? null) !== fillSessionId)) {
         throw new ApiError(502, "Minted Panel returned a submission receipt that does not match this Work fill.");
+      }
+      if (request.fillSessionId == null) {
+        // The log is durable; a later deliberate log gets a fresh id.
+        typedSubmissionBodies.delete(idKey);
+        await chrome.storage.session.remove([idKey, hashKey]).catch(() => undefined);
       }
       // Logging the submission is user activity on the case — reset the
       // active-case idle clock.

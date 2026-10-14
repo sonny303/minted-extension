@@ -277,6 +277,7 @@ async function seedWorkFillReceipt(
   tuple: typeof WORK_CASE_TUPLE | typeof WORK_CONTRACT_TUPLE = WORK_CASE_TUPLE,
   caseType: "enrollment" | "contract" = tuple.ownerKind === "contract" ? "contract" : "enrollment",
   fillSessionId = WORK_FILL_SESSION,
+  eventRecorded = true,
 ) {
   const { canonicalizeWorkContextTuple } = await import("../shared/workContext");
   const canonicalTuple = canonicalizeWorkContextTuple(tuple);
@@ -303,7 +304,7 @@ async function seedWorkFillReceipt(
       filledLabels: ["NPI"],
       skipped: [],
       manual: [],
-      eventRecorded: true,
+      eventRecorded,
       eventError: null,
       fillSessionId,
       pageFields: 1,
@@ -493,6 +494,70 @@ describe("MINT-58 — exact Work fill submission telemetry", () => {
     expect(mock.state.touchBodies).toHaveLength(2);
     expect(mock.state.touchBodies[1]).toEqual(firstBody);
     expect(mock.state.touches.size).toBe(1);
+  });
+
+  // 0.1.8: Log it works without a fill. The exact case, task and step come
+  // from the live launch record, never from the panel's selection.
+  async function seedLaunchOnly(caseType: "enrollment" | "recredentialing" = "enrollment") {
+    await enterActiveCase({ caseId: FIXTURES.CASE_ID, providerId: FIXTURES.PROVIDER_ID, orgId: FIXTURES.PRIMARY_ORG });
+    await writeActiveOrgId(FIXTURES.PRIMARY_ORG);
+    await writePanelMode("case");
+    stub.sessionStore.set("minted.workbenchOwner", FIXTURES.USER_ID);
+    const now = new Date().toISOString();
+    stub.sessionStore.set("minted.activeWork.v2", {
+      tuple: WORK_CASE_TUPLE,
+      boundTabId: 21,
+      formOrigin: "https://portal.example.com",
+      formPath: "/enroll",
+      caseType,
+      createdAt: now,
+      lastActivityAt: now,
+    });
+    const { canonicalizeWorkContextTuple } = await import("../shared/workContext");
+    return canonicalizeWorkContextTuple(WORK_CASE_TUPLE);
+  }
+
+  it("logs a Work submission with no fill from the live launch, and asks for the status report", async () => {
+    const tuple = await seedLaunchOnly();
+
+    const result = await markWorkSubmitted({ fillSessionId: null, bumpStatus: true, payerReferenceId: "RFP-1" }) as {
+      touch: { fillSessionId: string | null };
+    };
+
+    expect(result.touch.fillSessionId).toBeNull();
+    expect(mock.state.touchBodies[0]).toMatchObject({
+      kind: "portal_submission",
+      portal_key: tuple.portalKey,
+      fill_session_id: null,
+      work_context: tuple,
+      bump_status: true,
+      payer_reference_id: "RFP-1",
+    });
+    expect(mock.state.touchBodies[0]).not.toHaveProperty("task_id");
+
+    // The no-fill id is released after success: a later deliberate log is a
+    // new touch, not a silent replay of the first.
+    await markWorkSubmitted({ fillSessionId: null, bumpStatus: true, payerReferenceId: "RFP-2" });
+    expect(mock.state.touches.size).toBe(2);
+  });
+
+  it("logs a Work fill whose record never saved without naming the unsaved fill", async () => {
+    const { tuple } = await seedWorkFillReceipt(WORK_CASE_TUPLE, "enrollment", WORK_FILL_SESSION, false);
+
+    await markWorkSubmitted({ bumpStatus: true });
+
+    expect(mock.state.touchBodies[0]).toMatchObject({ fill_session_id: null, work_context: tuple, bump_status: true });
+  });
+
+  it("refuses a no-fill Work log once the launch has ended, and sends nothing", async () => {
+    await expect(markWorkSubmitted({ fillSessionId: null })).rejects.toThrow(/Work launch ended/);
+    expect(mock.state.touchBodies).toHaveLength(0);
+  });
+
+  it("sends recredentialing Work back to Minted Panel", async () => {
+    await seedLaunchOnly("recredentialing");
+    await expect(markWorkSubmitted({ fillSessionId: null })).rejects.toThrow(/Log this work in Minted Panel/);
+    expect(mock.state.touchBodies).toHaveLength(0);
   });
 
   it("does not turn a Contract Work fill receipt into a case touch", async () => {
