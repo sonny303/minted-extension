@@ -156,8 +156,15 @@ import {
 } from "../shared/browseProviders";
 import {
   findSandboxProvider,
+  sandboxClearView,
+  sandboxEntryTitle,
   sandboxFillState,
+  sandboxFillView,
+  sandboxProfileName,
+  SANDBOX_ENTRY_META,
+  SANDBOX_NO_FORM_NOTE,
   SANDBOX_UNAVAILABLE_NOTE,
+  type SandboxFillSummary,
 } from "../shared/sandbox";
 import { providerDisplayName } from "../shared/providerName";
 import {
@@ -286,6 +293,7 @@ const captureBatchCount = el<HTMLElement>("capture-batch-count");
 const captureBatchDelete = el<HTMLButtonElement>("capture-batch-delete");
 const captureBatchClear = el<HTMLButtonElement>("capture-batch-clear");
 const sandboxEntry = el<HTMLButtonElement>("sandbox-entry");
+const sandboxEntryHeading = el<HTMLElement>("sandbox-entry-title");
 const sandboxEntryMeta = el<HTMLElement>("sandbox-entry-meta");
 const sandboxUnavailable = el<HTMLElement>("sandbox-unavailable");
 const sandboxBar = el<HTMLElement>("sandbox-bar");
@@ -293,7 +301,7 @@ const sandboxBarNote = el<HTMLElement>("sandbox-bar-note");
 const sandboxFillBtn = el<HTMLButtonElement>("sandbox-fill");
 const sandboxClearBtn = el<HTMLButtonElement>("sandbox-clear");
 const sandboxExitBtn = el<HTMLButtonElement>("sandbox-exit");
-const sandboxStatus = el<HTMLElement>("sandbox-status");
+const sandboxResult = el<HTMLElement>("sandbox-result");
 const captureRestored = el<HTMLElement>("capture-restored");
 const captureRows = el<HTMLElement>("capture-rows");
 const captureActions = el<HTMLElement>("capture-actions");
@@ -5488,6 +5496,12 @@ function isCurrentTrainTargetRequest(target: TrainTargetRequestContext): boolean
 // WORKING, not a stored selection, and it must never survive into a real case
 // (switching provider or case leaves it, below).
 let sandboxActive = false;
+// The test-mode run in flight ("fill" or "clear"), the fields the last test
+// fill wrote (null when no fill result is showing), and a counter that drops
+// a late answer once test mode was left or re-entered.
+let sandboxBusy: "fill" | "clear" | null = null;
+let sandboxFilledFields: number | null = null;
+let sandboxGeneration = 0;
 
 // CAQH exception strip UI is not shipped yet.
 // findCaqhGaps + PULL_CAQH_FIELD remain for a future value-reading path.
@@ -6333,22 +6347,23 @@ function sandboxProvider(): ProviderListItem | null {
   return findSandboxProvider(providers);
 }
 
-/** The pinned Search entry. Rendered from the roster, so an org that has not
- * designated a test provider gets the honest reason instead of a button that
- * fails when pressed. */
+/** G1/G2: the pinned Search entry. Rendered from the roster, so an org that
+ * has not designated a test provider gets the honest reason instead of a
+ * button that fails when pressed. */
 function renderSandboxEntry(): void {
   const provider = sandboxProvider();
   const offer = panelMode === "search" && orgReady;
   sandboxEntry.hidden = !offer || provider == null;
   sandboxUnavailable.hidden = !offer || provider != null;
   if (provider) {
-    sandboxEntryMeta.textContent = `${providerLabel(provider)} · no case needed`;
+    sandboxEntryHeading.textContent = sandboxEntryTitle(provider);
+    sandboxEntryMeta.textContent = SANDBOX_ENTRY_META;
   } else {
     sandboxUnavailable.textContent = SANDBOX_UNAVAILABLE_NOTE;
   }
 }
 
-/** The in-case-work sandbox chrome. Clear portal form lives here and ONLY
+/** G3/G4: the in-case-work test-mode chrome. Clear form lives here and ONLY
  * here: it resets every input on the page, which on a live case would wipe a
  * coordinator's real typing. */
 function renderSandboxBar(): void {
@@ -6363,17 +6378,80 @@ function renderSandboxBar(): void {
   const provider = providers.find((p) => p.id === selectedProviderId()) ?? null;
   const state = sandboxFillState(provider);
   sandboxBarNote.textContent = provider
-    ? `Filling as ${providerLabel(provider)}${state ? ` · ${state}` : ""}. Nothing is logged to a case.`
-    : "Sandbox provider is no longer on this roster.";
-  const ready = provider != null && portal != null && portalTabId != null;
-  sandboxFillBtn.disabled = !ready;
-  sandboxClearBtn.disabled = portalTabId == null;
+    ? `Filling as ${sandboxProfileName(provider)}${state ? ` (${state})` : ""}.`
+    : "The test profile is no longer on this organization's provider list.";
+  // G4: once a test fill wrote fields, Clear form is the next step, so it
+  // takes the primary spot (CSS orders the primary button first).
+  const clearNext = sandboxFilledFields != null && sandboxFilledFields > 0;
+  sandboxFillBtn.className = clearNext ? "secondary" : "primary";
+  sandboxClearBtn.className = clearNext ? "primary" : "secondary";
+  sandboxFillBtn.classList.toggle("filling", sandboxBusy === "fill");
+  sandboxFillBtn.textContent = sandboxBusy === "fill"
+    ? "Filling…"
+    : clearNext ? "Run test fill again" : "Run test fill";
+  sandboxClearBtn.textContent = sandboxBusy === "clear" ? "Clearing…" : "Clear form";
+  // Whether a form is open is checked at the click, not here: this bar is not
+  // re-rendered on every page change, so a disabled state would go stale.
+  sandboxFillBtn.disabled = provider == null || sandboxBusy != null;
+  sandboxClearBtn.disabled = provider == null || sandboxBusy != null;
 }
 
-function setSandboxStatus(message: string | null, isError = false): void {
-  sandboxStatus.hidden = message == null;
-  sandboxStatus.textContent = message ?? "";
-  sandboxStatus.classList.toggle("capture-editor-warn", isError);
+/** Replace what the test-mode result area says. An empty list hides it. */
+function setSandboxResult(parts: readonly HTMLElement[]): void {
+  sandboxResult.replaceChildren(...parts);
+  sandboxResult.hidden = parts.length === 0;
+}
+
+/** A standalone notice box in the 0.1.8 result look. */
+function sandboxNotice(
+  tone: NoticeTone,
+  lines: readonly NoticeLine[],
+  extra: readonly HTMLElement[] = [],
+): HTMLElement {
+  const box = document.createElement("div");
+  fillNotice(box, tone, lines, extra);
+  return box;
+}
+
+/** A test-mode error: the error text and Copy support code, never a bare
+ * string. */
+function showSandboxError(text: string, code: string | number | null): void {
+  setSandboxResult([sandboxNotice("danger", [text], [supportButton(code, null, "danger")])]);
+}
+
+/** Forget any result and drop any answer still on its way. */
+function resetSandboxResult(): void {
+  sandboxGeneration += 1;
+  sandboxBusy = null;
+  sandboxFilledFields = null;
+  setSandboxResult([]);
+}
+
+/** G4: the same result look as a real fill (C3), inside the test-mode bar. */
+function renderSandboxFillResult(summary: SandboxFillSummary): void {
+  const view = sandboxFillView(summary);
+  sandboxFilledFields = view.filled;
+  const parts: HTMLElement[] = [
+    sandboxNotice(
+      view.tone,
+      [{ text: view.lines[0], strong: true }, view.lines[1]],
+      view.tone === "danger"
+        ? [supportButton("test-nothing-filled", summary.fillSessionId, "danger")]
+        : [],
+    ),
+  ];
+  if (view.skipLines.length > 0) parts.push(sandboxNotice("neutral", view.skipLines));
+  // A failed machine log is reported, never swallowed, but it does not make
+  // the fill a failure, because the fill happened.
+  if (view.recordLine != null) {
+    const line = document.createElement("p");
+    line.className = "status-line";
+    const text = document.createElement("span");
+    text.textContent = view.recordLine;
+    line.append(text, supportButton("test-record", summary.fillSessionId));
+    parts.push(line);
+  }
+  setSandboxResult(parts);
 }
 
 /**
@@ -6391,7 +6469,7 @@ function setSandboxStatus(message: string | null, isError = false): void {
 function clearSandboxOnRealSelection(): void {
   if (!sandboxActive) return;
   sandboxActive = false;
-  setSandboxStatus(null);
+  resetSandboxResult();
   renderSandboxBar();
 }
 
@@ -6407,7 +6485,7 @@ function clearSandboxOnRealSelection(): void {
 async function enterSandbox(): Promise<void> {
   const provider = sandboxProvider();
   if (provider == null) return;
-  setSandboxStatus(null);
+  resetSandboxResult();
   hideSearchResults();
   searchInput.value = "";
   await openInCaseWork(selectProviderInPanel(provider));
@@ -6422,66 +6500,83 @@ function leaveSandbox(): void {
 }
 
 async function runSandboxFill(): Promise<void> {
+  if (sandboxBusy != null) return;
   const providerId = selectedProviderId();
+  if (providerId == null) return;
   const activePortal = portal;
-  if (providerId == null || activePortal == null || portalTabId == null) return;
-  const provider = providers.find((p) => p.id === providerId) ?? null;
-  sandboxFillBtn.disabled = true;
-  setSandboxStatus("Filling…");
-  const response = await sendToBackground({
-    type: "SANDBOX_FILL",
-    tabId: portalTabId,
-    providerId,
-    portalKey: activePortal.key,
-    state: sandboxFillState(provider),
-    facilityId: selectedFacilityId(),
-  });
-  sandboxFillBtn.disabled = false;
-  if (!response.ok) {
-    setSandboxStatus(response.error, true);
+  const tabId = portalTabId;
+  if (activePortal == null || tabId == null) {
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice("warn", [SANDBOX_NO_FORM_NOTE])]);
+    renderSandboxBar();
     return;
   }
-  const summary = response.data;
-  const parts = [
-    summary.fieldsAttempted != null
-      ? `Verified ${summary.fieldsVerified ?? 0}; ${summary.fieldsAttempted} setter attempts remain unverified`
-      : `Filled ${summary.filled} of ${summary.pageFields} fields on this page`,
-  ];
-  if (summary.skipped.length > 0)
-    parts.push(`${summary.skipped.length} skipped`);
-  if (summary.manual.length > 0)
-    parts.push(`${summary.manual.length} form-wide planning items (page not checked)`);
-  if (summary.notChecked?.length) parts.push(`${summary.notChecked.length} not checked`);
-  // A failed machine log is reported, never swallowed — but it does not make
-  // the fill a failure, because the fill happened.
-  setSandboxStatus(
-    summary.logError
-      ? `${parts.join(" · ")}. ${summary.logError}`
-      : `${parts.join(" · ")}.`,
-    summary.logError != null,
-  );
+  const provider = providers.find((p) => p.id === providerId) ?? null;
+  const generation = sandboxGeneration;
+  sandboxBusy = "fill";
+  sandboxFilledFields = null;
+  setSandboxResult([]);
+  renderSandboxBar();
+  let response: Awaited<ReturnType<typeof sendToBackground<"SANDBOX_FILL">>>;
+  try {
+    response = await sendToBackground({
+      type: "SANDBOX_FILL",
+      tabId,
+      providerId,
+      portalKey: activePortal.key,
+      state: sandboxFillState(provider),
+      facilityId: selectedFacilityId(),
+    });
+  } catch {
+    response = { ok: false, error: "Minted couldn't run the test fill. Reload the page, then try again." };
+  }
+  // Test mode was left (or re-entered) while this ran: the answer is stale.
+  if (generation !== sandboxGeneration) return;
+  sandboxBusy = null;
+  if (response.ok) {
+    renderSandboxFillResult(response.data);
+  } else {
+    showSandboxError(response.error, response.code ?? "test-fill");
+  }
+  renderSandboxBar();
 }
 
 async function clearPortalFormFromPanel(): Promise<void> {
+  if (sandboxBusy != null) return;
   const providerId = selectedProviderId();
-  if (portalTabId == null || providerId == null) return;
-  sandboxClearBtn.disabled = true;
-  const response = await sendToBackground({
-    type: "CLEAR_PORTAL_FORM",
-    tabId: portalTabId,
-    providerId,
-  });
-  sandboxClearBtn.disabled = false;
-  if (!response.ok) {
-    setSandboxStatus(response.error, true);
+  if (providerId == null) return;
+  const tabId = portalTabId;
+  if (tabId == null) {
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice("warn", [SANDBOX_NO_FORM_NOTE])]);
+    renderSandboxBar();
     return;
   }
-  const { cleared } = response.data;
-  setSandboxStatus(
-    cleared === 0
-      ? "Nothing to clear."
-      : `Cleared ${cleared} ${cleared === 1 ? "field" : "fields"}. Ready to re-test.`,
-  );
+  const generation = sandboxGeneration;
+  sandboxBusy = "clear";
+  renderSandboxBar();
+  let response: Awaited<ReturnType<typeof sendToBackground<"CLEAR_PORTAL_FORM">>>;
+  try {
+    response = await sendToBackground({
+      type: "CLEAR_PORTAL_FORM",
+      tabId,
+      providerId,
+    });
+  } catch {
+    response = { ok: false, error: "Minted couldn't clear the form. Reload the page, then try again." };
+  }
+  if (generation !== sandboxGeneration) return;
+  sandboxBusy = null;
+  if (response.ok) {
+    // G5: what the clear actually changed. The fill result is no longer true.
+    const view = sandboxClearView(response.data.cleared);
+    sandboxFilledFields = null;
+    setSandboxResult([sandboxNotice(view.tone, [view.text])]);
+  } else {
+    // The fill result stays true, so Clear form keeps the primary spot.
+    showSandboxError(response.error, response.code ?? "test-clear");
+  }
+  renderSandboxBar();
 }
 
 sandboxEntry.addEventListener("click", () => void enterSandbox());

@@ -2564,3 +2564,54 @@ a.link:focus-visible {
 #org-switch {
   margin-bottom: 12px;
 }
+
+/* ---- test mode (sandbox test profile, states G1 to G5) ----
+   A white card in the dashed amber frame: the frame and the title strip say
+   "test rig", and the result inside uses the same notices as a real fill, so
+   a test fill reads exactly like the real thing. Overrides the US-5 rules
+   above. */
+.sandbox-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+  background: var(--mp-card);
+  overflow: hidden;
+}
+
+.sandbox-bar-title {
+  margin: 0 -12px;
+  padding: 8px 12px;
+  background: var(--mp-warn-tint);
+  border-bottom: 1px dashed var(--mp-warn);
+  font: 600 13px/1.45 var(--mp-font);
+}
+
+.sandbox-bar-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink-secondary);
+}
+
+.sandbox-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sandbox-actions {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 0;
+}
+
+/* After a fill that wrote fields, Clear form is primary: keep the primary
+   button on top whichever one it is. */
+.sandbox-actions .primary {
+  order: -1;
+}
+
+.sandbox-actions .link {
+  align-self: flex-start;
+}
