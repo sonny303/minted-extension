@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
 import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY, ACTIVE_WORK_KEY, advanceActiveWorkContextVersion, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, noteRecordedWorkFill, onActiveWorkTabActivated, onActiveWorkTabRemoved, onActiveWorkTabUpdated, readActiveWorkCaseObservation, reconcileActiveWorkTab, recordActiveWorkCaseObservation, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
+import { readPanelMode, writePanelMode } from "./mode";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
 vi.mock("./api", async (importOriginal) => ({
@@ -370,6 +371,36 @@ describe("SET_ACTIVE_WORK exact tab binding", () => {
     await expect(launch).resolves.toEqual({ ok: false, code: "SUPERSEDED" });
     await expect(chrome.tabs.get(700)).rejects.toThrow(/No tab/);
     expect((await getActiveWorkState()).status).toBe("none");
+  });
+});
+
+// The validator request refuses to leave the worker outside case mode
+// (api.workContext.test pins that), so a launch must switch mode first.
+describe("SET_ACTIVE_WORK panel mode", () => {
+  it.each(["search", "train"] as const)("is in case mode before validating a launch from %s", async (mode) => {
+    await writePanelMode(mode);
+    let modeAtValidation: string | null = null;
+    vi.mocked(validateWorkContext).mockImplementationOnce(async (tuple) => {
+      modeAtValidation = await readPanelMode();
+      return validationResult({ ...message, ...tuple });
+    });
+
+    const ack = await handleExternalSetActiveWork(message, APP_ORIGIN, 1);
+
+    expect(modeAtValidation).toBe("case");
+    expect(ack).toMatchObject({ ok: true, tabId: 700 });
+  });
+
+  it("leaves the mode alone for a launch it refuses before validating", async () => {
+    await writePanelMode("search");
+
+    await expect(handleExternalSetActiveWork(message, "https://evil.example.com", 1))
+      .resolves.toEqual({ ok: false, code: "ORIGIN_REJECTED" });
+    await expect(handleExternalSetActiveWork({ ...message, ownerId: "not-a-uuid" }, APP_ORIGIN, 1))
+      .resolves.toEqual({ ok: false, code: "INVALID_REQUEST" });
+
+    expect(await readPanelMode()).toBe("search");
+    expect(validateWorkContext).not.toHaveBeenCalled();
   });
 });
 
