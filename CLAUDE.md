@@ -278,7 +278,20 @@ its own when the coordinator needs to act or read a result
 - **AI is off** (`AI_FILL_ENABLED = false`, `src/shared/config.ts`): no model
   check, no page scan, no review card. The code is kept for a designed return.
 - The A6 org-switch prompt renders into `#org-switch` above the org picker,
-  never inside `#case-work`.
+  never inside `#case-work`; so does a launch notice (A7) while no org has
+  resolved.
+- **Why a link ended (D5).** The worker's block record carries a value-free
+  `reason` (`tab_closed` | `left_site` | `expired` | `ended`) plus the ended
+  launch's `ownerKind`/`ownerId`, surfaced on the `blocked` variant of
+  `ActiveWorkState` (worker↔panel only, not an /api contract). Copy and the
+  "Back to case" rule live in `src/shared/workLinkNotice.ts`. A new launch
+  replacing the one on screen shows a one-time notice (D6,
+  `isLaunchReplacement`). Known blip: the 30 s poll can land inside a new
+  launch's validation and show the generic "link ended" line for a moment.
+- **A dead session drops to sign-in (A4).** Every panel request goes through
+  a local `sendToBackground` wrapper; a 401 resets the panel session (worker
+  state is kept) and shows sign-in with "Your sign-in expired. Sign in again.
+  The case stays linked." when a case or launch is linked.
 
 ## Panel modes — three jobs, one panel
 
@@ -431,6 +444,12 @@ already excludes from queue/generation/scorecard) with **no case in play**.
 Not a synthetic identity — filling as a real provider is what exercises the
 true profile pipeline. State comes from the provider's home state; null is a
 legitimate answer.
+
+**Test mode copy (G1 to G5)** lives in `src/shared/sandbox.ts`: the Search
+row reads "Test profile: {name}", results use the real fill's notice look
+(`sandboxFillView`, `sandboxClearView`), and the count is `fieldsAttempted -
+fieldsRejected` (a test fill's `filled` counts read-back values, which v2 runs
+never report). A result is cleared when the page changes.
 
 **Guarded at BOTH layers, deliberately — neither alone is enough:**
 
