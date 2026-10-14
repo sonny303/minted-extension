@@ -493,3 +493,248 @@ Today this is every case fill. The server rejects the record (422) because the t
 - A. Log it, complete the task step, and move the case to Submitted, in one click. (Today, but the button does not say so.)
 - **B. The same, with a visible, pre-checked box: "Also move case to Submitted." (Recommended)**
 - C. Log it and complete the step only. Status changes stay in the web app.
+
+---
+
+## 9. PM decisions review (Oct 14)
+
+**Question:** after the five removals, is every state still designed, with a clear way out?
+
+**Short answer:** yes for removals 1, 2, 4 and 5, with small additions. Removal 3 needs AI turned off, not just its buttons removed. Two findings block a complete close-out. Neither is caused by the removals.
+
+**Evidence:** extension code on this branch (same as v0.1.7), panel `main` plus the two Oct 14 server fixes, and read-only queries on production (Oct 14).
+
+### 9.1 Blocking findings
+
+| #   | Finding | Why it blocks | Smallest fix | Where |
+| --- | ------- | ------------- | ------------ | ----- |
+| B1  | **"Also move case to Submitted" cannot really be unchecked.** A database trigger moves the case to Submitted on every extension submission touch, whether or not `bump_status` is sent. `bump_status` only asks the server to report what happened. | An unchecked box would lie. | Replace the checkbox with a plain line: "Logging moves this case to Submitted." Show it only when the case is Not started or In progress. Also send `bump_status: true` on the Work path, so the panel can confirm the move (today it is sent on the manual path only). | panel trigger `case_status_on_touch` (migration `20260719120200`, lines 98 to 104); ext `index.ts:2288` |
+| B2  | **"Log submission" only exists after a Fill in this panel.** A coordinator who filled by hand (untrained page, or nothing filled) cannot log. The server now accepts a submission with no fill record, but the extension still refuses one on the Work path. | Close-out dead end | Show "Submitted on {payer}? Log it" whenever the case is linked (Work) or selected on a recognized form (manual), with or without a fill. Remove the two "fill record required" checks in the worker. | ext `main.ts:3706-3708`, `main.ts:2103-2128`, `index.ts:2244`, `index.ts:2250-2258` |
+
+### 9.2 Removal by removal
+
+**Verdicts**
+
+| #   | Removal | Verdict |
+| --- | ------- | ------- |
+| 1   | Other open tasks and step ticking | **Safe.** Add an "Open task in Minted Panel" link and two after-log messages. |
+| 2   | "Checklist task" picker | **Safe.** It never shows in production today. Replace it with a fixed, stated rule. |
+| 3   | AI Accept, Clear, Retry | **Not safe alone.** Turn AI off in the fill flow for 0.1.8. |
+| 4   | Engineer detail to admin-only Details | **Safe**, if the "Needs you" list stays for everyone and specialists get "Copy support code". |
+| 5   | Work-context line to Details | **Safe.** Keep the plain "Opened from Minted Panel · Back to case" line for everyone. |
+
+#### Removal 1: other open tasks and step ticking
+
+| Question | Answer |
+| -------- | ------ |
+| What the code does today | The case card lists open tasks, with a checkbox per step that writes `PATCH /api/tasks/:id/steps` (`main.ts:1270-1335`, `main.ts:1392-1430`, worker `index.ts:1434`). |
+| What she loses | Ticking a step from the panel. |
+| How much that matters | Little. In production, all 12 open portal tasks have exactly one step. 14 of 62 open cases have other open tasks, and that work already lives in the web app. |
+| Work mode: does Log submission complete the right step? | Yes. The server completes exactly the launched step (`complete_sop_task_step` inside `record_typed_enrollment_submission`). The task closes when that was its last open step. The server refuses (409) if an earlier step is open or the step changed after launch. |
+| Manual mode | Legacy cases (case type empty, 64 of 68 cases): the server closes the whole matched task, not a step. Typed cases: the server refuses a manual submission ("Exact Work context is required for typed cases", `submissionTouches.ts:563`). That is latent today: 3 of the 4 typed cases use Work-only forms that manual mode cannot recognize, and the fourth points at a form key with no registration at all. (Two legacy tasks also point at unregistered keys, `aetna_direct` and `bcbs-nc-p2-enrollment-form`, so they have no fill path anywhere. Data cleanup, not a UX change.) |
+| New gaps | (a) After logging, a task with more steps stays open and nothing says so. (b) A 409 (the task changed in the web app) offers only "Retry", which can never succeed (`main.ts:3765`). |
+| Replacement | The task card shows the current task only, with "Open task in Minted Panel ↗" (`/tasks/{taskId}`, an existing panel route). After logging, re-read the case context: task gone means done; task still open means "This step is done. {N} more steps are in Minted Panel." A 409 shows "This task changed in Minted Panel. Open it to check." with no Retry. |
+| Contract impact | None. `PATCH /api/tasks/:id/steps` loses its only extension caller. Leave the route in place. |
+
+**Task card pill:** show the case status ("Not started", then "Submitted"). That is the status the extension changes. One pill only.
+
+#### Removal 2: the "Checklist task" picker
+
+**Today's rule** (`renderTaskLink`, `main.ts:1562-1598`):
+
+- Work mode: "This fill is pinned to {task · step}". No picker. Nothing changes here: the launch already carries the exact task and step.
+- Manual mode: 0 matching tasks, log with no task. 1 match, "Will close task: {title}". 2 or more, a picker preset to "Don't link a task".
+
+**Production:** zero case and form pairs have 2 or more open tasks. The picker never shows today.
+
+**New rule (manual mode).** Show the plan in one line above the button, then the matching result after logging.
+
+| Tasks on this case that use this form | Line above the button | After logging |
+| ------------------------------------- | --------------------- | ------------- |
+| 1, and its other steps are done | "This also closes: {title}." | "Logged. Task done: {title}." |
+| 1, with other open steps | "This logs to the case. The task has other steps." | "Logged to the case. Finish the task in Minted Panel." + Open task |
+| 0 | "This logs to the case. No task uses this form." | "Logged to the case. No task was closed." + Open case |
+| 2 or more | "This logs to the case. {N} tasks use this form." | "Logged to the case. Mark the right task done in Minted Panel." + Open case |
+
+The "other steps" check uses the step list the case context already returns. No new data.
+
+#### Removal 3: AI suggestion controls
+
+| If only the buttons go | Effect |
+| ---------------------- | ------ |
+| AI values are amber and stay on the page | No way to keep or undo them. |
+| Any selection change clears them silently | `clearFillResults` sends `CLEAR_AI_FILL` and restores the old values (`main.ts:1713-1722`). Values she relied on vanish with no message. |
+| "Good Catch" learning | Never runs. It needs an accepted receipt (`readAcceptedAiFillReceipt`, `index.ts:280`), and Accept is gone. |
+| Who gets AI | Any computer where Chrome's built-in model is already downloaded (`canUseNano`, `src/shared/nanoAi.ts:380`). There is no switch. The same case fills differently on two desks. |
+
+**Recommendation: turn AI off in the fill flow for 0.1.8.** Add one flag (for example `AI_FILL_ENABLED = false` in `src/shared/config.ts`). When it is off, skip `canUseNano` and `PREPARE_AI_FILL` (`main.ts:3584`) and never render `#fill-ai-review`. Nothing amber is written, the "On-device AI is unavailable" line goes away, and Fill starts sooner. Keep the code for a later, designed return. No server or contract change.
+
+#### Removals 4 and 5: detail moves to admin-only Details
+
+| Check | Answer |
+| ----- | ------ |
+| Admin gate | Use the role in the **current** org. `canTrainForms` means "admin in any org" (`src/shared/panelMode.ts:29`). That is right for training and wrong for case detail. |
+| What must stay for everyone | The "Needs you" list: field label, plain reason, and "Add in Minted Panel ↗" for missing provider data. Without it, "3 fields need you" does not say which three. Only selectors, reason codes, checked counts, mapping version and receipt ids move. |
+| Fix-it links | "Fix mapping" opens the training flow, which is admin work. Show it only inside Details. |
+| A specialist's way out when a fill goes wrong | Every error line and the "record not saved" line get **"Copy support code"**. |
+| Support code | Version, short case id, short fill id, time, error code. Example: `MP 0.1.8 · case 74354240 · fill 3f2a9c1e · 14:32 · 422`. No names, no values. The fill id is made in the browser before saving (`fill.ts:869`), so the code exists even when the record did not save. |
+| Plain context line | Everyone keeps "Opened from Minted Panel · Back to case". Only the portal key and mapping version move into Details. |
+
+### 9.3 State matrix after the removals
+
+**Modes:** W = launched from "Work in portal". M = manual (Search, queue or picker). S = sandbox. **In prototype:** Yes = in your list. Check = in the section 5 storyboard but not in your list. No = not designed. **NO EXIT** marks a state with no way forward today.
+
+**A. Session and organization**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) | Exit |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- | ---- |
+| A1  | Panel loading | All | No | none | "Loading…" | Automatic |
+| A2  | Signed out | All | No | Sign in | Keep today's form | Sign in |
+| A3  | Signed out, a launched case is waiting | W, M | No | Sign in | "Sign in to open the case you sent from Minted Panel." | Sign in |
+| A4  | Sign-in expired during work | All | No | Sign in | "Your sign-in expired. Sign in again. The case stays linked." | Sign in |
+| A5  | Several orgs, none picked | M | No | Pick org | "Pick the organization you're working in." | Pick |
+| A6  | Old-style launch for another org | M | No | Switch org | "This case is in {org}." [Switch to {org}] | **NO EXIT.** The prompt sits inside the hidden case area (`sidepanel.html:236`), and picking the wrong org deletes the launch. Fix: move `#handoff-banner` above `#org-field`. |
+| A7  | Launch for an org she is not in | W, M | No | Search | "This case is in an organization your account isn't part of. Sign in with the right account, or search." | Search |
+| A8  | Read-only role (billing) | All | Yes | none | Show it before Fill, not after a failed save. | Open case |
+
+**B. Arrival, page and selection**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) | Exit |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- | ---- |
+| B1  | Work launch opening | W | No | none | "Opening {provider}, {payer} {state}…" No queue under it. | Automatic |
+| B2  | Nothing selected (queue) | M | No | Pick a row | Keep "Pick up where you left off". Empty: "Nothing needs you right now." Error: "Can't load your list right now. Use Search." | Search |
+| B3  | Linked, but another tab is active | W | Yes ("wrong tab") | Go to tab | | Go to tab |
+| B4  | No form on this tab | M | No | none | "Open the payer's form in this tab to fill it." | Open form |
+| B5  | Work-only form opened by hand (Aetna, BCBS KC, BCBS NC) | M | No | Open case | "This form opens from the case. In Minted Panel, click Work in portal." [Open case] | Misleading today: it says "Open a registered payer portal" while she is on one. Copy fix only. |
+| B6  | No forms set up for the org | M | No | none | "No payer forms are set up yet. Ask an admin." | none needed |
+| B7  | Needs site access | W, M, S | Yes | Allow on {site} | | Allow |
+| B8  | Access denied | W, M, S | Yes | Allow on {site} | | Allow again |
+| B9  | Provider is in several groups | M | No | Pick group | "Pick the group for this case." | Pick |
+| B10 | Several locations, none picked | W, M | No | Pick location | "Pick the location for this form." Picker inline, in the status spot. | Pick |
+| B11 | Provider has no open cases | M | No | Search | "{provider} has no open cases. Search for another, or open Minted Panel." | Search |
+| B12 | No case picked yet | M | No | Pick case | "Pick the case you're working on." | Pick |
+| B13 | "No case · Ad hoc fill" picked | M | No | Fill | **Conflicts with the locked rule** "a case is required before Fill" (sandbox is the only exception). PM: remove it from the picker for 0.1.8, or approve a second exception and update both CLAUDE.md files. | n/a |
+| B14 | Case logged as submitted recently (pickup warning) | W, M | No | Continue | "This case was logged as submitted {3 days ago}. Check before you work it again." [Continue] [Open case] | Continue |
+| B15 | CAQH form | M | No | Record attestation | "CAQH last attested {date}." [Record attestation]. Future date: "That date is in the future." | Done |
+| B16 | Coverage offer (manual only) | M | No | Fill | Light card, not today's dark one: "We can fill {12} of {18} fields on this form." Untested form: "This form hasn't had a test run. Check the result before you submit." Drift detail goes to admin Details. | Fill |
+
+**C. Fill**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) | Exit |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- | ---- |
+| C1  | Ready | W, M | Yes | Fill this page | | |
+| C2  | Filling | W, M | Yes | none | | |
+| C3  | Filled | W, M | Yes | Your turn | | Continue on portal |
+| C4  | Partial: some fields need her | W, M | Check | Your turn | "Filled {12} fields. {3} need you:" then one row each: label, plain reason, "Add in Minted Panel ↗" | Continue on portal |
+| C5  | Nothing filled | W, M | Yes | | | |
+| C6  | No trained fields on this page | W, M | Check | Provider details | "Minted hasn't learned this page yet. Fill it by hand. Provider details are open below." | Continue on portal |
+| C7  | Page changed during the fill | W, M | Yes | Fill this page | | |
+| C8  | Wrong tab at click | W, M | Yes | Go to tab | | |
+| C9  | Page not reachable | W, M | No | Reload page | "We lost touch with the {payer} page. Reload it, then click Fill again." [Reload page] [Copy support code] | Reload |
+| C10 | Fill failed on the page (unexpected) | W, M | No | Try again | "Something on this page stopped the fill. Try again, or fill it by hand." [Copy support code] | Try again |
+| C11 | Selection changed during the fill | M | No | Fill this page | "You changed the case while we were filling. The form may be partly filled. Check it, then click Fill again." Today the result is dropped with no message (`main.ts:3661`). | Fill |
+| C12 | Record not saved, temporary | W, M | Yes | Try again | | |
+| C13 | Record not saved, rejected | W, M | Partial | Keep going | "Minted Panel didn't save a record of this fill. That's on us. You can keep going." [Copy support code]. No Try again. | Continue on portal |
+| C14 | Result restored after reopening the panel | W, M | No | Your turn | "From {9:42 PM}" above the result. Keep today's behavior. | |
+
+**D. Page 2 and the link to the case**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) | Exit |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- | ---- |
+| D1  | Page 2, trained | W | Yes | Fill this page | | |
+| D2  | Page 2, not trained | W | Check (C6) | Provider details | | |
+| D3  | Portal left the form's address | W | Partial | Back to case | Until the page-2 rule ships: "This page isn't part of the form you opened. Go back, or open the case in Minted Panel." | **NO EXIT** until the page-2 rule (Q3) ships: Fill closes and the result clears. |
+| D4  | Link timed out (60 minutes) | W | Yes | Back to case | | |
+| D5  | Work tab closed | W | No | Back to case | "The {payer} tab was closed. Click Work in portal again." | Back to case |
+| D6  | Another launch replaced this one | W | No | none | "You opened another case from Minted Panel. This panel now shows {provider}, {payer} {state}." | |
+| D7  | Contract or recredentialing Work | W | No | Open task | "Log this work in Minted Panel." [Open task] | Open task |
+
+**E. Close-out**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) | Exit |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- | ---- |
+| E1  | Log submission form | W, M | Yes, but drop the checkbox (B1) | Log submission | Plan line from 9.2 above the button | |
+| E2  | Submitted by hand, never used Fill | W, M | No | Log submission | The same form, reachable without a fill (B2) | **NO EXIT** today |
+| E3  | Already logged as submitted recently | W, M | No | Log again | "This case was already logged as submitted {earlier today}. Log it again?" [Log again] [Cancel]. Today there is no Cancel. | Cancel |
+| E4  | Logging | W, M | No | none | "Logging…" | Automatic |
+| E5  | Logged, task done | W, M | Yes | Up next | "Logged. Task done: {title}. Case moved to Submitted." | |
+| E6  | Logged, task has more steps | W, M | No | Open task | "Logged. This step is done. {N} more steps are in Minted Panel." | Open task |
+| E7  | Logged, no task closed (manual, 0 or 2+ matches) | M | No | Open case | See the table in 9.2 | Open case |
+| E8  | Logged, case already past Submitted | W, M | No | Up next | "Logged. The case stays at {status}." | |
+| E9  | Log failed, offline or server down | W, M | No | Try again | "Not logged yet. Your entries are kept. Try again." | Try again |
+| E10 | Log failed, task changed in the web app (409) | W | No | Open task | "This task changed in Minted Panel. Open it to check." No Try again. | **NO EXIT** today: only Retry, which repeats the 409 (`main.ts:3765`). |
+| E11 | Log failed, typed case in manual mode (422) | M | No | Open case | "Log this from the case: in Minted Panel, click Work in portal." | Latent today |
+| E12 | Up next | W, M | Check | Open | Empty: "Nothing else needs you right now." | |
+
+**F. Log a call, email, or note**
+
+| #   | State | Mode | In prototype | Primary action | Copy (if not designed) |
+| --- | ----- | ---- | ------------ | -------------- | ---------------------- |
+| F1  | Form open | W, M | Yes | Save | Errors: "Pick a type." and "Add one line about what happened." |
+| F2  | Saved | W, M | No | none | "Saved to the case." |
+| F3  | Save failed | W, M | No | Try again | "Not saved yet. Your entries are kept. Try again." |
+
+**G. Sandbox (entered from Search)**
+
+| #   | State | In prototype | Primary action | Copy (if not designed) |
+| --- | ----- | ------------ | -------------- | ---------------------- |
+| G1  | Test profile row in Search | No | Open | "Test profile: {provider}. No case needed." |
+| G2  | Org has no test provider | No | none | Keep today's note |
+| G3  | Test mode, ready | No | Run test fill | Banner: "Test mode. Nothing is saved to a case." |
+| G4  | Test fill done | No | Clear form | Same result card as C3, plus [Clear form] [Leave test mode] |
+| G5  | Clear form, nothing to clear | No | none | "Nothing to clear." |
+
+**States with no exit today:** A6, D3, E2, E10. **Misleading or silent (exit exists, but she cannot tell):** B5, C11. **Latent:** E11. **Rule conflict:** B13.
+
+### 9.4 Size spec for 0.1.8
+
+One size per job. Every value maps to an existing token, or adds one where none exists.
+
+| Component | 0.1.8 spec | Token or rule | Today |
+| --------- | ---------- | ------------- | ----- |
+| Primary button | 40px tall, full width, 14px/500 | `--mp-r-btn` (4px) | 44px (`sidepanel.css:403`) |
+| Secondary button | 36px tall, 13px/500 | `--mp-r-ctl` | 38px (`:457`) |
+| Text link button | 12px/500, primary ink | `--mp-primary` | 11px |
+| Input and select | 36px tall, 13px/500 | `--mp-r-ctl`, `--mp-border` | 36px. Matches. |
+| Checkbox and radio | 16px square, `accent-color: var(--mp-primary)`, label text 13px sentence case | new reset rule | Inherits the 100% wide, 36px tall input rule (`:349`) |
+| Card (task card, result card, notices) | 12px padding, 1px border, 6px radius, 12px between cards | `--mp-r-card`, `--mp-border` | 8, 9, 10 and 11px paddings; 4px or 6px radius |
+| Collapsible section header | 36px row, 13px/600 sentence case title, 12px chevron, optional pill on the right | new | n/a |
+| Status pill | 20px tall, 0 8px padding, 11px/600, tone tint background | `--mp-r-ctl`, `--mp-*-tint` | about 17px (`:522`) |
+| Status line under the button | 12px/1.45, 12px icon, 8px top margin, left aligned. Tones: ok, warn, danger, neutral. | `--mp-ok`/`--mp-warn`/`--mp-danger` and their tints | `.error` 11.5px, `.logged` bold 12.5px, `.btn-note` 11px centered |
+| Field label | 11px/600, uppercase, 0.06em spacing, secondary ink. Only above a field, never beside a checkbox. | `--mp-ink-secondary` (about 4.8:1 contrast) | 10px/700 in `--mp-label` (about 2.4:1, fails WCAG AA) (`:325`) |
+| Helper and caption text | 11px/400, secondary ink | `--mp-ink-secondary` | `--mp-ink-faint` (about 2.5:1, fails AA) |
+| Mode switch | 32px segmented control | `--mp-r-ctl` | about 30px. Close enough. |
+| Icon button | 28px hit area, 16px icon | `--mp-r-ctl` | gear 24px. Fine. |
+| Type scale | Title 14/600 · Body 13/400 · Small 12/400 · Caption 11/500 · Mono IDs 12/400 | `--mp-font`, `--mp-mono` | 12 sizes in use: 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13 and 14px |
+| Spacing | 14px panel gutter, 12px between blocks, 8px inside blocks | `main` padding | Mostly matches |
+| Warning and error colors | Token tints only | `--mp-warn-tint`, `--mp-danger-tint` | Hard-coded hex in `.error` (`:675`), `.gap-flag`, `.dup-warn`, `.dup-pickup`, `.sandbox-bar` (`:616`) |
+
+**Current violations to fix in 0.1.8**
+
+1. The step checkbox: the input rule (`:349`) makes it 100% wide and 36px tall, and the label rule (`:325`) makes its text 10px grey uppercase. It goes away with removal 1, but the cause stays. **Any new checkbox**, including one for "Also move case to Submitted", would look the same. Fix the two generic rules: add a checkbox and radio reset, and scope the uppercase style to `.field > label`.
+2. `.capture-row-tick` (`:2107`) in Train forms has the same oversized box.
+3. Three heights stacked together: primary 44, secondary 38, inputs 36.
+4. Tiny labels: `.case-note-label` (`:939`) and `.case-context-label` (`:971`) at 9.5px. `.section-title` and `.exec-chip` at 10px.
+5. `.logged` (`:700`) is bold 12.5px with a green check, and it is used for problems too. `.error` (`:675`) is 11.5px. Status lines need one size and four tones.
+6. Mixed radius: `.handoff-banner`, `.nba-card` and `.sandbox-bar` use 4px; other cards use 6px.
+7. `.offer-card` is a dark green slab in a light panel. Make it a light card like the others.
+
+### 9.5 Prototype changes needed
+
+| #   | State | Change |
+| --- | ----- | ------ |
+| 1   | E1 Log submission | Remove the "Also move case to Submitted" checkbox. Add the plain line "Logging moves this case to Submitted." (only when Not started or In progress). Add the plan line from 9.2 above the button. |
+| 2   | E2 Filled by hand | Show "Submitted on {payer}? Log it" whenever the case is linked or selected on a recognized form, even with no fill. |
+| 3   | E5 to E11 After logging | Add variants: task done; step done but task has more steps (Open task); no task closed (Open case); case already past Submitted; offline (Try again); task changed (Open task, no Try again); manual typed case (Open case). |
+| 4   | Task card | Current task only: title, due date, plain "Auto-fill" text, one case-status pill, "Open task in Minted Panel ↗". Manual variants: "No task on this case uses this form" and "{N} tasks use this form". No step checkboxes. |
+| 5   | C3, C4 Results | No amber AI guesses and no Keep or Undo anywhere (AI is off). Partial keeps a "Needs you" list for everyone: label, plain reason, Add link. |
+| 6   | Errors | Add "Copy support code" to every error and to "record not saved". Add a "Details" link for admins of the current org only. "Fix mapping" lives inside Details. |
+| 7   | A3, A4, A5, A6, A7 | Add the session and org states. The org-switch prompt sits above the org picker, never inside the case area. |
+| 8   | B1, B5, B9 to B16 | Add launch loading; "This form opens from the case" (Work-only form opened by hand); group, location and case picking; no open cases; pickup warning; CAQH; the manual coverage card as a light card. |
+| 9   | C9 to C11, C13, C14 | Add page not reachable; fill failed on the page; selection changed during the fill; record rejected (no Try again); restored result label. |
+| 10  | D3, D5, D6, D7 | Add the link-ended, tab-closed, launch-replaced, and contract or recredentialing states. |
+| 11  | E3 | Duplicate submission warning with [Log again] and [Cancel]. |
+| 12  | F2, F3 | "Saved to the case." and the save-failed state for "Log a call, email, or note". |
+| 13  | G1 to G5 | Sandbox states, using the same result card with a "Test mode" banner. |
+| 14  | B13 | Remove "No case · Ad hoc fill" from the case picker, pending the PM's call. |
+| 15  | All | Apply the 9.4 size spec: 40 / 36 / 36 heights, 16px checkboxes, 20px pills, 36px section headers, 12px card padding with 6px radius, 11px labels in secondary ink. |
