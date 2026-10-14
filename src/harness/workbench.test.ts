@@ -3209,12 +3209,30 @@ describe("Work across pages — recovered fill, the auto-start bump, refused log
     });
   });
 
+  it("follows the bump when the panel never read the case under this launch", async () => {
+    // The panel showed this case before the launch and keeps its cached
+    // context, so no GET_CASE_CONTEXT arrives. The fill reads it once itself.
+    const requestsBefore = mock.state.requests.length;
+    const page1 = await fill();
+    expect(page1.eventRecorded).toBe(true);
+    expect(storedTupleVersion()).toBe(5);
+
+    pageUrl = PAGE_2;
+    const page2 = await fill();
+    expect(page2.eventRecorded).toBe(true);
+    expect(page2.workContext?.contextVersion).toBe(5);
+
+    // Page 2 found the observation already at 5: no second case read.
+    const contextReads = mock.state.requests.slice(requestsBefore).filter((r: { method: string; path: string }) =>
+      r.method === "GET" && r.path === `/api/cases/${WORK_CASE_TUPLE.ownerId}/context`);
+    expect(contextReads).toHaveLength(1);
+  });
+
   it("logs from a later page by recovering the launch's recorded fill (no fill id from the panel)", async () => {
-    // No case read before the fill: nothing is inferred, the tuple stays.
     const page1 = await fill();
     expect(page1.eventRecorded).toBe(true);
     expect(mock.state.caseWork.get(WORK_CASE_TUPLE.ownerId)).toEqual({ contextVersion: 5, caseStatus: "in_progress" });
-    expect(storedTupleVersion()).toBe(4);
+    expect(storedTupleVersion()).toBe(5);
 
     // The portal moved on and the panel let go of its fill result.
     pageUrl = PAGE_DONE;

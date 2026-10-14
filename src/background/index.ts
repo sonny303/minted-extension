@@ -116,6 +116,7 @@ import {
   getWorkPortalPermissionTarget,
   noteRecordedWorkFill,
   profileOptionsForActiveWork,
+  readActiveWorkCaseObservation,
   readActiveWorkRecord,
   recordActiveWorkCaseObservation,
   registerActiveWorkListeners,
@@ -497,6 +498,7 @@ async function createWorkFillGuard(
   await chrome.tabs.get(request.tabId);
   const tabUrl = await currentWorkTabUrl(request.tabId);
   const initialValidation = await revalidateActiveWork(work, epoch);
+  await ensureLaunchedCaseObserved(work);
   const validate = async (): Promise<void> => {
     if (
       revision !== fillSelectionRevision ||
@@ -1003,6 +1005,24 @@ async function observeLaunchedCase(caseId: string, context: CaseContext): Promis
   if (tuple?.launchReceiptId !== observation.launchReceiptId ||
       tuple.contextVersion !== observation.contextVersion) return;
   await noteWorkFillRecorded(record.summary);
+}
+
+/** The panel caches case context per case, so a case it already showed
+ * before the launch is never read again under that launch. Before a Work
+ * fill, read the launched case once if nothing was observed at the tuple's
+ * version: the auto-start inference needs that fact, and a fill just
+ * validated at this version is the moment it holds. One read per launch
+ * version at most. Best-effort: without it the tuple simply stays put. */
+async function ensureLaunchedCaseObserved(work: ActiveWorkRecord): Promise<void> {
+  if (work.tuple.ownerKind !== "case") return;
+  try {
+    const seen = await readActiveWorkCaseObservation();
+    if (seen?.launchReceiptId === work.tuple.launchReceiptId &&
+        seen.contextVersion === work.tuple.contextVersion) return;
+    await recordActiveWorkCaseObservation(work.tuple.ownerId, await getCaseContext(work.tuple.ownerId));
+  } catch {
+    // The fill goes on; only the version inference is skipped.
+  }
 }
 
 /** A touch the server definitely refused was never recorded, so its
