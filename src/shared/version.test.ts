@@ -11,11 +11,11 @@ describe("getExtensionVersionInfo", () => {
   it("resolves default fallback when chrome runtime is undefined", () => {
     delete (globalThis as { chrome?: unknown }).chrome;
     const info = getExtensionVersionInfo();
-    expect(info.version).toBe("0.1.8");
-    expect(info.displayVersion).toBe("v0.1.8");
+    expect(info.version).toBe("0.1.9");
+    expect(info.displayVersion).toBe("v0.1.9");
     expect(info.name).toBe("Minted Panel Workbench");
     expect(info.isStaging).toBe(false);
-    expect(info.tooltip).toBe("Minted Panel Workbench v0.1.8");
+    expect(info.tooltip).toBe("Minted Panel Workbench v0.1.9");
   });
 
   it("resolves dynamically from chrome.runtime.getManifest() for production", () => {
