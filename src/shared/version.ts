@@ -13,7 +13,7 @@ export interface ExtensionVersionInfo {
 
 export function getExtensionVersionInfo(): ExtensionVersionInfo {
   let name = "Minted Panel Workbench";
-  let version = "0.1.8";
+  let version = "0.1.9";
 
   try {
     if (typeof chrome !== "undefined" && typeof chrome.runtime?.getManifest === "function") {

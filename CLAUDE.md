@@ -347,6 +347,9 @@ cases**, or **Train forms**.
   its own.
 - A `SET_ACTIVE_CASE` handoff **forces** the mode to `case` on receipt — the
   chooser never stands between the webapp's launch and the case it launched.
+  A `SET_ACTIVE_WORK` launch does the same once it parses, BEFORE it
+  validates: `validateWorkContext` only sends in case mode, so a launch from
+  Search or Train would otherwise fail in the worker as `CONTEXT_STALE`.
 - **Search replaced the browse-providers dropdown** (a dropdown couldn't show
   which group a provider belongs to, so same-named providers were
   indistinguishable). Rows name the group via `providerGroupsLabel`;

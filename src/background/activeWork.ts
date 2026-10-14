@@ -2,6 +2,7 @@
 // identifiers and a portal origin only; profile values and effective maps are
 // fetched into worker memory immediately before each supported fill.
 import { validateWorkContext, type ProviderProfileRequestOptions } from "./api";
+import { writePanelMode } from "./mode";
 import { isAllowedHandoffOrigin } from "../shared/handoff";
 import {
   activeWorkTupleKey,
@@ -492,6 +493,11 @@ export async function handleExternalSetActiveWork(
       await writeWorkBlock({ orgId: requestedTuple.orgId, reason: "ended" });
       const prior = await readStoredRecord();
       if (prior != null) await chrome.storage.session.remove([ACTIVE_WORK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY]);
+      // A launch is case work whatever job the panel was on, the same rule
+      // SET_ACTIVE_CASE follows. Switch before validating: the validator call
+      // only goes out in case mode, so a launch from Search or Train used to
+      // fail in the worker and never reach Minted Panel.
+      await writePanelMode("case");
       return true;
     });
     if (!revoked) return { ok: false, code: "SUPERSEDED" };
