@@ -7,6 +7,7 @@
 // holds where we are blank — and even that is a human-confirmed pull of a
 // single field, never a sync.
 import type { ProfileToken } from "./apiTypes";
+import { formatDisplayDate } from "./detailFields";
 
 /** Days after which the push offer de-emphasizes (matches the panel's
  * CAQH_CURRENT_DAYS; the server is authoritative and sends it back on
@@ -16,7 +17,8 @@ export const CAQH_FRESH_DAYS = 120;
 export interface CaqhPushOffer {
   /** Token keys we hold a value for and would carry into CAQH. */
   fieldKeys: string[];
-  /** The offer headline: "Update CAQH — 14 fields". */
+  /** The card's one line (B15): "CAQH last attested 07/25/2026." or
+   * "CAQH not attested yet." See attestationHeadline. */
   headline: string;
   /** Days since the last attestation, or null when never attested. */
   daysSinceAttestation: number | null;
@@ -66,18 +68,28 @@ export function buildCaqhPushOffer(
   const daysSinceAttestation = daysBetween(lastAttestedOn, today);
   return {
     fieldKeys,
-    headline: `Update CAQH — ${fieldKeys.length} ${fieldKeys.length === 1 ? "field" : "fields"}`,
+    headline: attestationHeadline(lastAttestedOn),
     daysSinceAttestation,
     deEmphasize: daysSinceAttestation != null && daysSinceAttestation <= freshDays,
   };
 }
 
-/** The attestation subtitle: "Last attested 8 days ago" / "Never attested". */
-export function attestationLine(offer: CaqhPushOffer): string {
-  if (offer.daysSinceAttestation == null) return "Never attested";
-  if (offer.daysSinceAttestation === 0) return "Attested today";
-  const unit = offer.daysSinceAttestation === 1 ? "day" : "days";
-  return `Last attested ${offer.daysSinceAttestation} ${unit} ago`;
+/** B15: the date as the rest of the panel shows dates (MM/DD/YYYY). An
+ * unreadable date reads as never attested rather than a blank. */
+export function attestationHeadline(lastAttestedOn: string | null): string {
+  const shown = lastAttestedOn ? formatDisplayDate(lastAttestedOn) : "";
+  return shown ? `CAQH last attested ${shown}.` : "CAQH not attested yet.";
+}
+
+export const CAQH_FUTURE_DATE_LINE = "That date is in the future.";
+
+/** What a failed attestation says. Minted Panel refuses a future date with a
+ * 422 (an attestation records something that already happened); every other
+ * failure keeps its own message. */
+export function attestationFailureText(failure: { error: string; code?: number }): string {
+  return failure.code === 422 && /future/i.test(failure.error)
+    ? CAQH_FUTURE_DATE_LINE
+    : failure.error;
 }
 
 /** One field CAQH holds a value for that Minted Panel does not (S6.3). */

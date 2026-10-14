@@ -43,7 +43,12 @@
         <h1>Sign in</h1>
         <p class="hint">Use your Minted Panel account.</p>
         <p id="signin-handoff-hint" class="handoff-hint" hidden>
-          A case was handed off from Minted Panel — sign in to open it.
+          Sign in to open the case you sent from Minted Panel.
+        </p>
+        <!-- A4: the session ended mid-work. The worker keeps the case linked
+             for the same user, so signing in again picks it back up. -->
+        <p id="signin-expired-hint" class="handoff-hint" hidden>
+          Your sign-in expired. Sign in again. The case stays linked.
         </p>
         <form id="signin-form">
           <div class="field">
@@ -634,9 +639,7 @@
         <!-- Empty portal registry: not the same as "page not recognized". -->
         <div id="portal-registry-empty" class="capture" hidden>
           <p class="capture-summary">
-            No payer portals are registered for this organization yet. Add a
-            portal in Minted Panel (Payer Setup / Forms) so capture and fill
-            can recognize enrollment pages.
+            No payer forms are set up yet. Ask an admin.
           </p>
         </div>
 
@@ -646,12 +649,12 @@
                user can grant it in one click; hidden once granted or on a
                recognized page. -->
         <div id="portal-access" class="capture" hidden>
-          <p class="capture-summary">
-            On a payer portal? Give Minted access to this organization's portal
-            sites so it can capture and fill their forms.
+          <p id="portal-access-text" class="capture-summary">
+            On a payer form? Allow Minted on your organization's payer sites so
+            it can fill them.
           </p>
           <button id="portal-access-grant" class="secondary" type="button">
-            Enable form capture &amp; fill
+            Allow Minted on payer sites
           </button>
         </div>
 
