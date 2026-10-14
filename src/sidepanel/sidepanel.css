@@ -245,7 +245,7 @@ body {
 .avatar-menu-version {
   margin: 0 0 6px;
   padding: 0 8px 4px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-family: var(--mp-mono);
   color: var(--mp-ink-faint);
   border-bottom: 1px solid var(--mp-border);
@@ -322,14 +322,22 @@ h1 {
   margin-bottom: 12px;
 }
 
+/* A bare <label> is plain text. The uppercase field label belongs to a
+   field's own label only, so a checkbox or picker row can never inherit it
+   (0.1.8 size spec: that inheritance made the step checkbox 10px capitals). */
 label {
   display: block;
+}
+
+.field > label,
+.label-row > label {
+  display: block;
   margin-bottom: 6px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--mp-label);
+  color: var(--mp-ink-secondary);
 }
 
 .label-row {
@@ -346,7 +354,7 @@ label {
 
 /* Inputs & selects — the app's shadcn control: 36px, warm 1px border, 4px
    radius, no shadow, 2px soft primary focus ring. */
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select {
   width: 100%;
   height: 36px;
@@ -383,11 +391,30 @@ select:disabled {
   opacity: 1;
 }
 
-input:focus,
+input:not([type="checkbox"]):not([type="radio"]):focus,
 select:focus {
   outline: none;
   border-color: var(--mp-primary);
   box-shadow: var(--mp-focus);
+}
+
+/* Checkbox and radio: one 16px size everywhere, primary accent. Never the
+   full-width 36px text-control box. */
+input[type="checkbox"],
+input[type="radio"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--mp-primary);
+  cursor: pointer;
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--mp-info);
+  outline-offset: 2px;
 }
 
 input::placeholder {
@@ -398,11 +425,11 @@ input::placeholder {
 /* ---- buttons ---- */
 
 /* Primary button — the app's shadcn default variant: solid primary green,
-   white label, medium weight, colors transition on hover. The panel keeps its
-   taller 44px full-width CTA target. */
+   white label, medium weight, colors transition on hover. 40px full width
+   (0.1.8 size spec). */
 button.primary {
   width: 100%;
-  height: 44px;
+  height: 40px;
   padding: 0 12px;
   font: 500 14px var(--mp-font);
   color: #ffffff;
@@ -452,16 +479,16 @@ button.primary.filling::before {
   }
 }
 
-/* Secondary button — the app's outline/secondary variant: white surface, warm
-   1px border, hover to the muted fill. */
+/* Secondary button — white surface, primary outline and label, 36px (0.1.8
+   size spec). Hover to the primary tint. */
 button.secondary {
   width: 100%;
-  height: 38px;
+  height: 36px;
   padding: 0 12px;
   font: 500 13px var(--mp-font);
-  color: var(--mp-ink);
+  color: var(--mp-primary);
   background: var(--mp-card);
-  border: 1px solid var(--mp-border);
+  border: 1px solid var(--mp-primary);
   border-radius: var(--mp-radius-control);
   box-shadow: var(--mp-shadow-sm);
   cursor: pointer;
@@ -471,7 +498,7 @@ button.secondary {
 }
 
 button.secondary:hover:not(:disabled) {
-  background: var(--mp-muted);
+  background: var(--mp-primary-tint);
 }
 
 button.secondary:disabled {
@@ -479,28 +506,39 @@ button.secondary:disabled {
   cursor: not-allowed;
 }
 
-button.link {
+button.link,
+a.link {
   padding: 0;
-  font: 500 11px var(--mp-font);
+  font: 500 12px var(--mp-font);
   color: var(--mp-primary);
   background: none;
   border: none;
   cursor: pointer;
-  text-underline-offset: 4px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-button.link:hover {
-  text-decoration: underline;
+button.link:hover,
+a.link:hover {
+  color: var(--mp-primary-hover);
+}
+
+button.primary:focus-visible,
+button.secondary:focus-visible,
+button.link:focus-visible,
+a.link:focus-visible {
+  outline: 2px solid var(--mp-info);
+  outline-offset: 2px;
 }
 
 /* Helper line under a button ("Keep this tab open while filling.", the
    Mark-submitted hint). */
 .btn-note {
-  margin: 7px 0 12px;
+  margin: 8px 0 12px;
   font-size: 11px;
-  line-height: 1.4;
-  color: var(--mp-ink-400);
-  text-align: center;
+  line-height: 1.45;
+  color: var(--mp-ink-secondary);
 }
 
 .train-actions {
@@ -520,8 +558,10 @@ button.link:hover {
 /* ---- status pill (case status from the cases response, bucket counts) ---- */
 
 .pill {
-  display: inline-block;
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
   border-radius: var(--mp-radius-control);
   font: 600 11px/1 var(--mp-font);
   background: var(--mp-slate-100);
@@ -560,7 +600,7 @@ button.link:hover {
   padding: 8px 11px;
   border: 1px dashed var(--mp-line-dash);
   border-radius: var(--mp-r-ctl);
-  font: 500 12.5px/1.3 var(--mp-font);
+  font: 500 12px/1.3 var(--mp-font);
   color: var(--mp-ink-400);
 }
 
@@ -597,7 +637,7 @@ button.link:hover {
   background: var(--mp-cream-50);
   border: 1px solid var(--mp-line-100);
   border-radius: var(--mp-r-ctl);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -615,16 +655,16 @@ button.link:hover {
    work that landed on a case. */
 .sandbox-bar {
   margin: 0 0 12px;
-  padding: 9px 11px;
-  background: #fffbeb;
-  border: 1px dashed #f59e0b;
-  border-radius: var(--mp-r-ctl);
+  padding: 12px;
+  background: var(--mp-warn-tint);
+  border: 1px dashed var(--mp-warn);
+  border-radius: var(--mp-r-card);
 }
 
 .sandbox-bar-title {
   margin: 0 0 2px;
-  font: 600 12px/1.4 var(--mp-font);
-  color: #92400e;
+  font: 600 12px/1.45 var(--mp-font);
+  color: #78350f;
 }
 
 .sandbox-actions {
@@ -646,7 +686,7 @@ button.link:hover {
   background: var(--mp-muted);
   border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--mp-ink-secondary);
 }
@@ -674,57 +714,35 @@ button.link:hover {
 /* Error notice — the app's red box (bg/border/text #FEF2F2/#FCA5A5/#B91C1C). */
 .error {
   display: flex;
-  gap: 9px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 12px;
-  padding: 11px 12px;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: #b91c1c;
-  border: 1px solid #fca5a5;
-  background: #fef2f2;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-red-800);
+  background: var(--mp-danger-tint);
   border-radius: var(--mp-r-card);
-}
-
-.error::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: var(--mp-danger);
-  flex: none;
 }
 
 /* "Logged to the case." confirmation. */
 .logged {
   display: flex;
-  gap: 9px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 12px;
-  padding: 11px 12px;
-  background: var(--mp-primary-tint);
-  border: 1px solid var(--mp-mint-300);
+  padding: 12px;
+  background: var(--mp-ok-tint);
   border-radius: var(--mp-r-card);
-  font: 700 12.5px/1.3 var(--mp-font);
-  color: var(--mp-primary);
-}
-
-.logged::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  margin-top: -1px;
-  flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='8' fill='%23059669'/%3E%3Cpath d='M4.5 8.4l2.2 2.2 4.8-5' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
-    center / 16px no-repeat;
+  font: 400 12px/1.45 var(--mp-font);
+  color: var(--mp-grn-700);
 }
 
 /* ---- provider card — the app's Card: cool border, 4px radius, no shadow ---- */
 
 .card {
   margin-bottom: 12px;
-  padding: 11px 12px;
+  padding: 12px;
   background: var(--mp-card);
   border: 1px solid var(--mp-border);
   border-radius: var(--mp-r-card);
@@ -774,13 +792,13 @@ button.link:hover {
 
 .view-settings-title {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .view-settings-hint {
   margin: 3px 0 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--mp-ink-400);
 }
 
@@ -793,7 +811,7 @@ button.link:hover {
 
 .view-settings-group {
   margin: 8px 0 3px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -827,8 +845,8 @@ button.link:hover {
 
 .view-settings-field input[type="checkbox"] {
   flex: none;
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   margin: 0;
   padding: 0;
   box-shadow: none;
@@ -902,7 +920,7 @@ button.link:hover {
   height: auto;
   margin-left: auto;
   padding: 2px 8px;
-  font: 600 9.5px/1.5 var(--mp-font);
+  font: 600 11px/1.5 var(--mp-font);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--mp-green-700);
@@ -937,10 +955,10 @@ button.link:hover {
 }
 
 .case-note-label {
-  font: 700 9.5px/1.4 var(--mp-font);
-  letter-spacing: 0.07em;
+  font: 600 11px/1.4 var(--mp-font);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--mp-label);
+  color: var(--mp-ink-secondary);
 }
 
 .case-note-body {
@@ -969,10 +987,8 @@ button.link:hover {
 }
 
 .case-context-label {
-  font: 700 9.5px/1.4 var(--mp-font);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--mp-label);
+  font: 400 12px/1.45 var(--mp-font);
+  color: var(--mp-ink-secondary);
 }
 
 .case-context-ref-value {
@@ -1007,7 +1023,7 @@ button.link:hover {
   width: 100%;
   min-height: 52px;
   padding: 8px 11px;
-  font: 500 12.5px/1.4 var(--mp-font);
+  font: 500 13px/1.4 var(--mp-font);
   color: var(--mp-ink);
   background: var(--mp-card);
   border: 1px solid var(--mp-border);
@@ -1030,7 +1046,7 @@ button.link:hover {
 /* Phase 4: the "close a task on submit" affordance. */
 .task-link-single {
   margin: 0;
-  font: 500 12.5px/1.4 var(--mp-font);
+  font: 500 13px/1.4 var(--mp-font);
   color: var(--mp-ink);
 }
 
@@ -1045,7 +1061,7 @@ button.link:hover {
 
 .coverage-count {
   margin: 0;
-  font: 600 12.5px/1.35 var(--mp-font);
+  font: 600 13px/1.35 var(--mp-font);
   color: var(--mp-ink-900);
 }
 
@@ -1087,7 +1103,7 @@ button.link:hover {
 }
 
 .coverage-gap-reason {
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.4;
   color: var(--mp-ink-600);
 }
@@ -1100,11 +1116,11 @@ button.link:hover {
   align-items: flex-start;
   margin: 0 0 12px;
   padding: 10px 12px;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.45;
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fde68a;
+  color: #78350f;
+  background: var(--mp-warn-tint);
+  border: none;
   border-radius: var(--mp-r-card);
 }
 
@@ -1126,21 +1142,15 @@ button.link:hover {
   align-items: flex-start;
   margin: 0 0 10px;
   padding: 10px 12px;
-  font: 600 11.5px/1.45 var(--mp-font);
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
+  font: 400 12px/1.45 var(--mp-font);
+  color: #78350f;
+  background: var(--mp-warn-tint);
+  border: none;
   border-radius: var(--mp-r-card);
 }
 
 .dup-warn::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  margin-top: 4px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--mp-danger);
+  content: none;
 }
 
 /* ---- fill report: one white card, three collapsible buckets ---- */
@@ -1197,7 +1207,7 @@ button.link:hover {
   padding: 9px 12px;
   cursor: pointer;
   list-style: none;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--mp-ink-900);
 }
@@ -1318,18 +1328,17 @@ button.link:hover {
   align-items: center;
   gap: 6px 10px;
   margin: 0 0 12px;
-  padding: 8px 10px;
-  font: 500 12px/1.5 var(--mp-font);
+  padding: 12px;
+  font: 400 12px/1.45 var(--mp-font);
   color: var(--mp-green-900);
-  background: var(--mp-mint-200);
-  border: 1px solid var(--mp-mint-300);
-  border-radius: var(--mp-radius-control);
+  background: var(--mp-primary-tint);
+  border: none;
+  border-radius: var(--mp-r-card);
 }
 
 .handoff-banner.banner-warn {
-  color: #92400e;
-  background: #fef3c7;
-  border-color: #fde68a;
+  color: #78350f;
+  background: var(--mp-warn-tint);
 }
 
 .banner-action {
@@ -1361,7 +1370,7 @@ button.link:hover {
 .search-group {
   margin: 0;
   padding: 6px 10px 4px;
-  font: 700 10px/1.4 var(--mp-font);
+  font: 600 11px/1.4 var(--mp-font);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mp-ink-400);
@@ -1503,7 +1512,7 @@ button.link:hover {
 .badge {
   flex: none;
   padding: 2px 7px;
-  font: 700 10px/1.4 var(--mp-font);
+  font: 600 11px/1.4 var(--mp-font);
   border-radius: var(--mp-radius-control);
   white-space: nowrap;
 }
@@ -1523,10 +1532,10 @@ button.link:hover {
 /* ---- active cases beneath the quick cards (F4.3.5) ---- */
 .section-title {
   margin: 0 0 6px;
-  font: 700 10px/1.4 var(--mp-font);
-  letter-spacing: 0.08em;
+  font: 600 11px/1.4 var(--mp-font);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--mp-ink-400);
+  color: var(--mp-ink-secondary);
 }
 
 .active-cases {
@@ -1600,7 +1609,7 @@ button.link:hover {
 .exec-chip {
   flex: none;
   padding: 1px 6px;
-  font: 600 10px/1.5 var(--mp-font);
+  font: 600 11px/1.5 var(--mp-font);
   color: var(--mp-ink-600);
   background: var(--mp-cream-100);
   border: 1px solid var(--mp-line-200);
@@ -1682,15 +1691,15 @@ button.link:hover {
 }
 
 .nba-card {
-  padding: 10px 12px;
+  padding: 12px;
   background: var(--mp-card);
   border: 1px solid var(--mp-line-200);
-  border-radius: var(--mp-radius-control);
+  border-radius: var(--mp-r-card);
 }
 
 .nba-title {
   margin: 0 0 2px;
-  font: 700 12.5px/1.4 var(--mp-font);
+  font: 700 13px/1.4 var(--mp-font);
   color: var(--mp-ink-900);
 }
 
@@ -1730,7 +1739,7 @@ button.link:hover {
 
 .nba-link {
   width: auto;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 /* ---- S2.2: served-catalog layout picker — search + collapsible groups ---- */
@@ -1770,7 +1779,7 @@ button.link:hover {
 }
 .view-settings-groupbox > summary::after {
   content: "▾";
-  font-size: 10px;
+  font-size: 11px;
   color: var(--mp-ink-secondary);
   transition: transform 0.12s ease;
 }
@@ -1866,10 +1875,12 @@ button.link:hover {
 
 /* ---- S4.1: the fill offer card (dark surface, states the run before it) ---- */
 .offer-card {
-  background: var(--mp-sidebar);
-  color: #ffffff;
-  border-radius: var(--mp-radius-sm);
-  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--mp-card);
+  color: var(--mp-ink);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-r-card);
+  padding: 12px;
 }
 .offer-head {
   display: flex;
@@ -1878,44 +1889,38 @@ button.link:hover {
   gap: 8px;
 }
 .offer-card .coverage-count {
-  color: #ffffff;
+  color: var(--mp-ink);
+  font-size: 14px;
+  font-weight: 600;
   margin: 0;
 }
 .proven-chip {
-  background: rgba(255, 255, 255, 0.16);
-  color: #ffffff;
+  background: var(--mp-ok-tint);
+  color: var(--mp-grn-700);
   font-weight: 600;
-  letter-spacing: 0.04em;
 }
 .offer-note {
-  margin: 6px 0 0;
-  font-size: 11px;
-  color: var(--mp-nav-ink);
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink);
 }
 .drift-strip {
   margin-top: 8px;
-  padding: 6px 8px;
-  border-radius: var(--mp-radius-control);
-  background: #fef3c7;
-  color: #92400e;
-  font-size: 11px;
-}
-.offer-card .coverage-gap-label,
-.offer-card .coverage-gap-reason {
-  color: var(--mp-nav-ink);
-}
-.offer-card .refresh-maps {
-  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: var(--mp-r-card);
+  background: var(--mp-warn-tint);
+  color: #78350f;
+  font-size: 12px;
 }
 
 /* ---- S4.2: the duplicate-work guard, on pickup ---- */
 .dup-pickup {
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border: 1px solid #fde68a;
-  background: #fef3c7;
-  color: #92400e;
-  border-radius: var(--mp-radius-sm);
+  margin-bottom: 12px;
+  padding: 12px;
+  background: var(--mp-warn-tint);
+  color: #78350f;
+  border-radius: var(--mp-r-card);
 }
 .dup-pickup-text {
   margin: 0 0 6px;
@@ -1927,7 +1932,7 @@ button.link:hover {
   align-items: center;
 }
 .dup-pickup-actions .link {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* ---- S4.3: Progress tab step rows ---- */
@@ -1970,7 +1975,8 @@ button.link:hover {
 /* ---- S4.4: a partial/unsent submission outcome (never styled as success) ---- */
 .submit-status.partial,
 #submit-status.partial {
-  color: #92400e;
+  color: #78350f;
+  background: var(--mp-warn-tint);
 }
 
 /* ---- S5.4: capture ---- */
@@ -2073,7 +2079,7 @@ button.link:hover {
 }
 .capture-editor-selector {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--mp-ink-secondary);
   overflow-wrap: anywhere;
 }

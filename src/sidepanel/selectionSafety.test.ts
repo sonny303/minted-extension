@@ -41,6 +41,7 @@ function fillClickHarness(options: {
   pageUrl?: string;
   selectedGroupId?: string | null;
   holdGroupWrite?: boolean;
+  aiEnabled?: boolean;
 } = {}) {
   const dom = new JSDOM('<button id="fill"></button><div id="fill-note" hidden></div>');
   const fillBtn = dom.window.document.querySelector<HTMLButtonElement>("#fill")!;
@@ -58,6 +59,7 @@ function fillClickHarness(options: {
   let releaseGroupWrite!: () => void;
   const groupWriteGate = new Promise<void>((resolve) => { releaseGroupWrite = resolve; });
   const queryActiveTab = vi.fn(async () => ({ id: tabId, url: pageUrl }));
+  const canUseNano = vi.fn(async () => true);
   const sendToBackground = vi.fn(async (request: Record<string, unknown>) => {
     requests.push(request);
     if (request.type === "SET_SELECTED_GROUP") {
@@ -102,7 +104,9 @@ function fillClickHarness(options: {
       : null,
     portalRows: [],
     updateFillReady: vi.fn(), refreshCoverage: vi.fn(),
-    canUseNano: async () => true,
+    // AI is off in 0.1.8 (AI_FILL_ENABLED); its code path stays covered here.
+    AI_FILL_ENABLED: options.aiEnabled ?? true,
+    canUseNano,
     NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
     isCurrent: () => true,
     sendToBackground, renderFillSummary: vi.fn(),
@@ -111,7 +115,7 @@ function fillClickHarness(options: {
     "invalidateFillSelection", "syncSelectedGroup", "activeWorkRecordForTab", "matchedActiveWorkPortal",
   ], ["fillBtn"]), scope);
   return {
-    dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted,
+    dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted, canUseNano,
     finishGroupWrite: releaseGroupWrite,
     setActiveTab: (nextTabId: number, nextPageUrl: string) => {
       tabId = nextTabId;
@@ -357,6 +361,19 @@ describe("fill selection safety", () => {
     expect(harness.requests.find((request) => request.type === "FILL")).toMatchObject({ groupId: "legacy-group" });
   });
 
+  it("skips the AI model check and page scan when AI is off", async () => {
+    const harness = fillClickHarness({ aiEnabled: false });
+
+    harness.fillBtn.click();
+    await vi.waitFor(() => expect(harness.requests.some((request) => request.type === "FILL")).toBe(true));
+
+    expect(harness.canUseNano).not.toHaveBeenCalled();
+    expect(harness.requests.some((request) => request.type === "PREPARE_AI_FILL")).toBe(false);
+    const fill = harness.requests.find((request) => request.type === "FILL")!;
+    expect(fill).not.toHaveProperty("aiStatus");
+    expect(fill).not.toHaveProperty("aiScanId");
+  });
+
   it("re-reads the active tab after delayed legacy group persistence", async () => {
     const harness = fillClickHarness({ selectedGroupId: "legacy-group", holdGroupWrite: true });
 
@@ -394,7 +411,7 @@ describe("fill selection safety", () => {
       queryActiveTab: async () => ({ id: 7, url: "https://portal.example/form" }),
       matchPortalByUrl: () => ({ key: "portal" }), portalRows: [],
       updateFillReady: vi.fn(), refreshCoverage: vi.fn(), setError: vi.fn(),
-      mainError: {}, clearFillResults, fillNote: {}, canUseNano: async () => false,
+      mainError: {}, clearFillResults, fillNote: {}, AI_FILL_ENABLED: false, canUseNano: async () => false,
       isCurrent: (generation: number) => generation === scope.loadGeneration,
       sendToBackground, renderFillSummary,
     });
@@ -462,7 +479,7 @@ describe("fill selection safety", () => {
       queryActiveTab: async () => ({ id: 7, url: "https://portal.example/form/step?session=1" }),
       matchPortalByUrl, portalRows,
       updateFillReady: vi.fn(), refreshCoverage: vi.fn(), setError: vi.fn(),
-      mainError: {}, fillNote: {}, canUseNano: async () => true,
+      mainError: {}, fillNote: {}, AI_FILL_ENABLED: true, canUseNano: async () => true,
       NANO_LIMITS: { maxControls: 40 }, matchUnmappedFields: async () => [],
       isCurrent: (generation: number) => generation === scope.loadGeneration,
       sendToBackground, renderFillSummary: vi.fn(),

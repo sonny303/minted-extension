@@ -46,7 +46,7 @@ import type {
   PortalRegistryRow,
 } from "../shared/apiTypes";
 import { matchPortalTasks } from "../shared/submission";
-import { API_BASE_URL } from "../shared/config";
+import { AI_FILL_ENABLED, API_BASE_URL } from "../shared/config";
 import { activeCaseReceiptKey, type ActiveCaseRecord } from "../shared/handoff";
 import {
   isActiveWorkExpired,
@@ -2178,7 +2178,7 @@ function renderFillSummary(
 ): void {
   fillResults.hidden = false;
   fillReportTime.hidden = restored == null;
-  lastAiReview = summary.aiReview ?? null;
+  lastAiReview = AI_FILL_ENABLED ? (summary.aiReview ?? null) : null;
   if (restored)
     fillReportTime.textContent = `Fill report from ${fmtReportTime(restored.completedAt)}.`;
   const staticFilled = summary.staticFilled ?? summary.filled;
@@ -2217,7 +2217,7 @@ function renderFillSummary(
     fieldList(fillAttemptedBox, "Attempted but not verified:", []);
     fieldList(fillNotCheckedBox, "Not checked:", []);
   }
-  renderAiReview(summary.aiReview ?? null, restored ?? null);
+  renderAiReview(AI_FILL_ENABLED ? (summary.aiReview ?? null) : null, restored ?? null);
   fieldList(fillSkippedBox, "Not filled:", summary.skipped);
   // Manual/gap bucket shows fix-it links, scoped to the
   // fill that actually ran (lastFill), not whatever is selected now.
@@ -3581,9 +3581,11 @@ fillBtn.addEventListener("click", () => {
       let aiScanId: string | undefined;
       let aiMatches: Array<{ selector: string; token: string; confidence: number }> = [];
       let aiStatus: "unavailable" | "no-matches" | "error" | undefined;
-      const nanoReady = await canUseNano();
+      const nanoReady = AI_FILL_ENABLED ? await canUseNano() : false;
       if (!isFillCurrent()) return;
-      if (!nanoReady) {
+      if (!AI_FILL_ENABLED) {
+        // AI is off: no scan, no status, so the fill reports no AI review.
+      } else if (!nanoReady) {
         aiStatus = "unavailable";
       } else {
         const prepared = await sendToBackground({
