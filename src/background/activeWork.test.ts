@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
-import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabRemoved, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
+import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_CASE_OBSERVATION_KEY, ACTIVE_WORK_KEY, advanceActiveWorkContextVersion, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, noteRecordedWorkFill, onActiveWorkTabActivated, onActiveWorkTabRemoved, onActiveWorkTabUpdated, readActiveWorkCaseObservation, reconcileActiveWorkTab, recordActiveWorkCaseObservation, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
@@ -690,5 +690,116 @@ describe("why a Work link ended (D5)", () => {
       stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, block);
       expect((await getActiveWorkState()).status).toBe("none");
     }
+  });
+});
+
+describe("the one context-version bump a recorded first fill causes", () => {
+  const ORIGIN = "https://portal.example.com";
+  const receipt = message.launchReceiptId;
+  const OTHER_RECEIPT = "99999999-9999-4999-8999-999999999999";
+
+  function seedLaunch(contextVersion = message.contextVersion, lastActivityAt = new Date().toISOString()) {
+    stub.sessionStore.set(ACTIVE_WORK_KEY, {
+      tuple: { ...tupleFromSetActiveWorkMessage(message), contextVersion },
+      boundTabId: 41,
+      formOrigin: ORIGIN,
+      formPath: "/enroll",
+      caseType: "enrollment",
+      createdAt: lastActivityAt,
+      lastActivityAt,
+    });
+  }
+
+  const storedVersion = () =>
+    (stub.sessionStore.get(ACTIVE_WORK_KEY) as { tuple: { contextVersion: number } }).tuple.contextVersion;
+
+  it("advances only the stored launch at the exact receipt and version (compare-and-set)", async () => {
+    seedLaunch(4);
+    const before = stub.sessionStore.get(ACTIVE_WORK_KEY);
+
+    // A stale receipt or a stale version writes nothing.
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: OTHER_RECEIPT, fromVersion: 4 })).toBe(false);
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 3 })).toBe(false);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toEqual(before);
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(false);
+
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(true);
+    expect(storedVersion()).toBe(5);
+    // Identity is untouched, so the panel keeps the same launch on screen.
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({
+      boundTabId: 41,
+      tuple: { launchReceiptId: receipt, ownerId: message.ownerId },
+    });
+    expect((await getActiveWorkState()).status).toBe("active");
+    expect(await readActiveWorkCaseObservation()).toEqual({
+      launchReceiptId: receipt,
+      contextVersion: 5,
+      caseStatus: "in_progress",
+    });
+
+    // A repeat from the old version can never double-bump.
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(5);
+  });
+
+  it("does not advance an expired or ended launch", async () => {
+    seedLaunch(4, new Date(Date.now() - 61 * 60_000).toISOString());
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    seedLaunch(4);
+    stub.sessionStore.set(ACTIVE_WORK_BLOCK_KEY, { orgId: message.orgId, reason: "ended" });
+    expect(await advanceActiveWorkContextVersion({ launchReceiptId: receipt, fromVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+  });
+
+  it("observes only the launched case at the launch's own version", async () => {
+    seedLaunch(4);
+    expect(await recordActiveWorkCaseObservation("22222222-2222-4222-8222-22222222222f", {
+      contextVersion: 4, caseStatus: "not_started",
+    })).toBeNull();
+    expect(await recordActiveWorkCaseObservation(message.ownerId, {
+      contextVersion: 5, caseStatus: "in_progress",
+    })).toBeNull();
+    expect(await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4 })).toBeNull();
+    expect(await readActiveWorkCaseObservation()).toBeNull();
+
+    expect(await recordActiveWorkCaseObservation(message.ownerId, {
+      contextVersion: 4, caseStatus: "not_started",
+    })).toEqual({ launchReceiptId: receipt, contextVersion: 4, caseStatus: "not_started" });
+  });
+
+  it("bumps after a recorded fill only when the case was observed Not Started at that version", async () => {
+    seedLaunch(4);
+    // No observation: nothing is inferred.
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    // Observed In Progress: the fill started nothing.
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "in_progress" });
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "not_started" });
+    // A fill recorded under another launch or version proves nothing here.
+    expect(await noteRecordedWorkFill({ launchReceiptId: OTHER_RECEIPT, contextVersion: 4 })).toBe(false);
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 3 })).toBe(false);
+    expect(storedVersion()).toBe(4);
+
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(true);
+    expect(storedVersion()).toBe(5);
+    // The next page's fill at the new version starts nothing, and the old
+    // fact cannot be applied twice.
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 5 })).toBe(false);
+    expect(await noteRecordedWorkFill({ launchReceiptId: receipt, contextVersion: 4 })).toBe(false);
+    expect(storedVersion()).toBe(5);
+  });
+
+  it("drops the observation when the link ends", async () => {
+    seedLaunch(4);
+    await recordActiveWorkCaseObservation(message.ownerId, { contextVersion: 4, caseStatus: "not_started" });
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(true);
+    await clearActiveWork();
+    expect(stub.sessionStore.has(ACTIVE_WORK_CASE_OBSERVATION_KEY)).toBe(false);
   });
 });
