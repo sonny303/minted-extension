@@ -91,6 +91,8 @@ function harness(options: {
       if (options.loaded?.cases) scope.cases = options.loaded.cases;
     }),
     refreshActiveCase: vi.fn(async () => {}),
+    // B1 "opening the case" wrapper: runs the reload as-is here.
+    whileWorkOpens: async (work: () => Promise<void>) => work(),
     detectPortal: vi.fn(async () => {}),
     updateFillReady: vi.fn(),
   });
