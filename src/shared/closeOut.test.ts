@@ -109,11 +109,31 @@ describe("afterLogView", () => {
 });
 
 describe("logFailureView", () => {
+  const OFFLINE = "Could not reach Minted Panel - check your connection.";
+  const RETRY_CONFLICT =
+    "This submission may already be recorded. Retry with the original payer reference and note, or review the case activity before logging another submission.";
+  const LAUNCH_ENDED = "This Work launch ended. Open the task in Minted Panel and click Work in portal again.";
+
   it("E9: offline or server down keeps the entries and offers Try again", () => {
-    for (const code of [undefined, 0, 500, 503]) {
+    for (const code of [500, 503]) {
       expect(logFailureView(code, "x", "work")).toMatchObject({ retry: true, link: null });
     }
-    expect(logFailureView(undefined, "x", "work").text).toBe("Not logged yet. Your entries are kept. Try again.");
+    for (const code of [undefined, null, 0]) {
+      for (const message of [OFFLINE, "Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource.",
+        "The request timed out.", "Request timeout", "You are offline", "", "   "]) {
+        expect(logFailureView(code, message, "work"), `${String(code)} ${message}`).toMatchObject({ retry: true, link: null });
+      }
+    }
+    expect(logFailureView(undefined, OFFLINE, "work").text).toBe("Not logged yet. Your entries are kept. Try again.");
+  });
+
+  it("a worker error with no code says what happened and never offers a retry", () => {
+    for (const code of [undefined, null, 0]) {
+      expect(logFailureView(code, "The work context changed before learning could start.", "work")).toEqual({
+        text: "Not logged. The work context changed before learning could start.",
+        retry: false, link: "case", tone: "danger",
+      });
+    }
   });
 
   it("E10: a changed task never offers a retry that repeats the 409", () => {
@@ -121,6 +141,15 @@ describe("logFailureView", () => {
       text: "This task changed in Minted Panel. Open it to check.", retry: false, link: "task", tone: "danger",
     });
     expect(logFailureView(409, "x", "manual").link).toBe("case");
+  });
+
+  it("shows the worker's own 409 when it already says what to do", () => {
+    for (const message of [RETRY_CONFLICT, LAUNCH_ENDED]) {
+      expect(logFailureView(409, message, "work")).toEqual({ text: message, retry: false, link: "task", tone: "danger" });
+      expect(logFailureView(409, message, "manual")).toEqual({ text: message, retry: false, link: "case", tone: "danger" });
+    }
+    // Matched by phrase, whatever the case.
+    expect(logFailureView(409, "this work LAUNCH ENDED.", "work").text).toBe("this work LAUNCH ENDED.");
   });
 
   it("E11: a typed case picked in the panel goes back through Work in portal", () => {

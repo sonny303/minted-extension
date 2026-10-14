@@ -134,14 +134,31 @@ export interface LogFailureView {
 /** The panel's typed-case refusal (manual mode on a typed case). */
 const TYPED_CASE_NEEDS_WORK = /exact work context is required/i;
 
+/** The worker's own 409s that already say what to do, matched by a stable
+ * phrase: a retry whose entries changed (the submission may already be
+ * recorded), and a Work launch that ended before the log. Their text beats
+ * the generic changed-task line. */
+const WORKER_CONFLICTS = [/may already be recorded/i, /launch ended/i];
+
+/** A failure that never reached Minted Panel: no connection, or it timed
+ * out. Only these can succeed on Try again. */
+const NETWORK_FAILURE = /failed to fetch|could not reach|network|timed? ?out|offline|load failed/i;
+
 /** One plain line and one way forward for a failed log (E9 to E11).
  * `code` is the HTTP status when the failure came from Minted Panel. */
 export function logFailureView(
-  code: number | undefined,
+  code: number | undefined | null,
   message: string,
   mode: "work" | "manual",
 ): LogFailureView {
-  if (code == null || code === 0 || code >= 500) {
+  const detail = message.trim();
+  if (code == null || code === 0) {
+    if (detail === "" || NETWORK_FAILURE.test(detail)) {
+      return { text: "Not logged yet. Your entries are kept. Try again.", retry: true, link: null, tone: "danger" };
+    }
+    return { text: `Not logged. ${detail}`, retry: false, link: "case", tone: "danger" };
+  }
+  if (code >= 500) {
     return { text: "Not logged yet. Your entries are kept. Try again.", retry: true, link: null, tone: "danger" };
   }
   if (code === 401) {
@@ -154,8 +171,9 @@ export function logFailureView(
     };
   }
   if (code === 409) {
+    const own = WORKER_CONFLICTS.some((phrase) => phrase.test(detail));
     return {
-      text: "This task changed in Minted Panel. Open it to check.",
+      text: own ? detail : "This task changed in Minted Panel. Open it to check.",
       retry: false, link: mode === "work" ? "task" : "case", tone: "danger",
     };
   }
@@ -165,7 +183,7 @@ export function logFailureView(
       retry: false, link: "case", tone: "warn",
     };
   }
-  return { text: `Not logged. ${message}`, retry: false, link: "case", tone: "danger" };
+  return { text: `Not logged. ${detail}`, retry: false, link: "case", tone: "danger" };
 }
 
 /** A short code a specialist can paste to support. Ids are cut to 8
