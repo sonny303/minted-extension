@@ -44,7 +44,7 @@ export async function ensureContentScript(tabId: number): Promise<void> {
 
   if (!chrome.scripting) {
     if (anyAlive) return;
-    throw new Error("Could not reach the enrollment form — reload the page and retry.");
+    throw new Error("Could not reach the enrollment form. Reload the page and try again.");
   }
 
   let injectedAny = false;
@@ -89,8 +89,8 @@ export async function ensureContentScript(tabId: number): Promise<void> {
 
   throw new Error(
     injectedAny
-      ? "Could not reach the enrollment form — reload the page and retry."
-      : "Could not load the capture helper into this page — grant access to this site and reload the portal page, then retry.",
+      ? "Could not reach the enrollment form. Reload the page and try again."
+      : "Could not load the capture helper into this page. Grant access to this site, reload the portal page, and try again.",
     { cause: lastError },
   );
 }

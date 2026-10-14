@@ -188,7 +188,7 @@ export function captureLibraryCounts(
  */
 export function captureLibrarySummary(counts: CaptureLibraryCounts): string {
   if (counts.total === 0) {
-    return "Nothing in the shared library for this form yet — capture it to propose its fields.";
+    return "Nothing in the shared library for this form yet. Capture it to propose its fields.";
   }
   const parts: string[] = [
     `${counts.mapped} of ${counts.total} fill from the shared library`,

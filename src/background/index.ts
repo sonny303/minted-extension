@@ -12,7 +12,7 @@ import type {
 } from "../shared/messages";
 import type { FillReportRecord } from "../shared/fill";
 import type { AiLearningSummary } from "../shared/fill";
-import type { CaseTouchBody, PortalMappingMetadata, QuickCardCatalogField } from "../shared/apiTypes";
+import type { CaseContext, CaseTouchBody, PortalMappingMetadata, QuickCardCatalogField } from "../shared/apiTypes";
 import {
   portalKeyEligibleForUrl,
   portalMappingState,
@@ -114,8 +114,10 @@ import {
   currentActiveWorkEpoch,
   getActiveWorkState,
   getWorkPortalPermissionTarget,
+  noteRecordedWorkFill,
   profileOptionsForActiveWork,
   readActiveWorkRecord,
+  recordActiveWorkCaseObservation,
   registerActiveWorkListeners,
   registerValidatedWorkSelectionCommitter,
   registerWorkSwitchInvalidator,
@@ -948,6 +950,76 @@ async function readFillReportForSession(
     .find((record) => record.providerId === providerId && record.summary.fillSessionId === fillSessionId) ?? null;
 }
 
+/** The panel forgets its fill when the portal moves to another page, so a log
+ * from the next page arrives with no fill id. The worker's own report still
+ * names it. Recover it only when it is exactly this live launch's recorded,
+ * unlogged fill for this case and form; anything else is a no-fill log. */
+async function recoverLaunchFillSessionId(request: {
+  providerId: string;
+  caseId: string;
+  portalKey: string;
+}): Promise<string | null> {
+  const launch = await readActiveWorkRecord();
+  // Only an Enrollment case launch logs from here; anything else keeps the
+  // no-fill path and its own answer (Contract and recredentialing Work).
+  if (launch == null || isActiveWorkExpired(launch, Date.now()) ||
+      launch.tuple.ownerKind !== "case" || launch.caseType !== "enrollment") return null;
+  const key = fillReportKey(request.providerId, request.portalKey);
+  const record = (await chrome.storage.session.get(key))[key];
+  if (!isFillReportRecord(record) || record.submitted || record.caseId !== request.caseId) return null;
+  const summary = record.summary;
+  if (summary.eventRecorded !== true || typeof summary.fillSessionId !== "string" || summary.fillSessionId === "" ||
+      summary.workCaseType !== "enrollment") {
+    return null;
+  }
+  const tuple = parseCanonicalWorkContextTuple(summary.workContext);
+  if (tuple == null || tuple.launchReceiptId !== launch.tuple.launchReceiptId) return null;
+  return summary.fillSessionId;
+}
+
+/** A recorded typed fill may have auto-started its case (see activeWork.ts,
+ * noteRecordedWorkFill). Best-effort: a failure leaves the tuple as it was. */
+async function noteWorkFillRecorded(summary: FillReportRecord["summary"]): Promise<void> {
+  const tuple = summary.eventRecorded === true ? parseCanonicalWorkContextTuple(summary.workContext) : null;
+  if (tuple == null || tuple.ownerKind !== "case") return;
+  await noteRecordedWorkFill({
+    launchReceiptId: tuple.launchReceiptId,
+    contextVersion: tuple.contextVersion,
+  }).catch(() => false);
+}
+
+/** Keep what the case-context read said about the launched case. When the
+ * launch's fill was already recorded at that version (the read was in flight
+ * during the fill), apply the same one-step inference the fill would have. */
+async function observeLaunchedCase(caseId: string, context: CaseContext): Promise<void> {
+  const observation = await recordActiveWorkCaseObservation(caseId, context);
+  if (observation == null) return;
+  const launch = await readActiveWorkRecord();
+  if (launch == null || launch.tuple.launchReceiptId !== observation.launchReceiptId) return;
+  const key = fillReportKey(launch.tuple.providerId, launch.tuple.portalKey);
+  const record = (await chrome.storage.session.get(key))[key];
+  if (!isFillReportRecord(record)) return;
+  const tuple = parseCanonicalWorkContextTuple(record.summary.workContext);
+  if (tuple?.launchReceiptId !== observation.launchReceiptId ||
+      tuple.contextVersion !== observation.contextVersion) return;
+  await noteWorkFillRecorded(record.summary);
+}
+
+/** A touch the server definitely refused was never recorded, so its
+ * idempotency id and body digest must not outlive it: a corrected retry is a
+ * new attempt. A network failure, a 5xx, a timeout (408) or a rate limit
+ * (429) may have landed or may be retried as-is, so those keep the id and
+ * the retry replays it. */
+function isDefiniteTouchRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 &&
+    error.status !== 408 && error.status !== 429;
+}
+
+async function releaseSubmissionAttempt(idKey: string, hashKey: string): Promise<void> {
+  typedSubmissionBodies.delete(idKey);
+  await chrome.storage.session.remove([idKey, hashKey]).catch(() => undefined);
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value != null && typeof value === "object") {
@@ -1374,11 +1446,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       }
       return results;
     }
-    case "GET_CASE_CONTEXT":
+    case "GET_CASE_CONTEXT": {
       // Read-only case context (Epic 3d + E4.3 TE-2). Org-scoped —
       // getCaseContext goes through the same guarded, x-org-id-attaching
       // apiFetch as the case list.
-      return getCaseContext(request.caseId);
+      const context = await getCaseContext(request.caseId);
+      // The launched case's status at the launch's version is what lets a
+      // recorded first fill advance the tuple past its own auto-start bump.
+      await observeLaunchedCase(request.caseId, context).catch(() => undefined);
+      return context;
+    }
     case "GET_ACTIVE_CASE":
       return getActiveCaseState();
     case "GET_ACTIVE_WORK":
@@ -1896,18 +1973,16 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // providers otherwise leave them unresolved behind meta.needs_facility).
       // When state is set (B1.1), license.* resolves for that state instead
       // of staying ambiguous over several state licenses.
+      // A live launch scopes this read to its own tuple. The read writes
+      // nothing to a page, so it does not need the bound tab in front or on
+      // the form: the link survives a tab switch and the payer's other pages
+      // (PM, Oct 14, Q3), and the panel still needs its cards there. Fill
+      // keeps its exact-tab check (requireActiveWorkForTab).
       const workState = await getActiveWorkState();
       if (workState.status === "blocked" || workState.status === "expired") {
         throw new Error("The exact Work context is unavailable. Reopen the task from Minted Panel.");
       }
-      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const activeTabId = activeTabs[0]?.id;
-      const work = workState.status === "active" && activeTabId != null
-        ? await requireActiveWorkForTab(activeTabId)
-        : null;
-      if (workState.status === "active" && work == null) {
-        throw new Error("The exact Work context is unavailable. Reopen the task from Minted Panel.");
-      }
+      const work = workState.status === "active" ? workState.record : null;
       let profileOptions: ProviderProfileRequestOptions = {
         facilityId: request.facilityId,
         state: request.state,
@@ -1919,7 +1994,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
             (request.facilityId ?? null) !== work.tuple.facilityId) {
           throw new Error("The provider or facility does not match the exact Work context.");
         }
-        await revalidateActiveWork(work, currentActiveWorkEpoch());
+        await revalidateActiveWork(work, currentActiveWorkEpoch(), { requireBoundFormPage: false });
         if (work.tuple.ownerKind === "contract") {
           profileOptions = {
             contractContext: {
@@ -2083,17 +2158,26 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           workCaseType: guard.work.record.caseType,
         } : {}),
       });
+      // A recorded typed fill may have auto-started its case on the server;
+      // that is a fact about the server whatever happened to the selection.
+      const noteRecorded = () => guard.work ? noteWorkFillRecorded(summary) : Promise.resolve();
       // Context invalidation can race the awaited content apply or fill-event
       // request. A canceled operation may return a static-only summary, but it
       // must never replace the newer selection's persisted review/report.
-      if (attemptRevision !== fillSelectionRevision) return summary;
+      if (attemptRevision !== fillSelectionRevision) {
+        await noteRecorded();
+        return summary;
+      }
       // The fill is this case's binding moment for an in-panel selection
       // (TE-17): the portal tab it ran in becomes the bound tab, and the
       // activity resets the idle clock.
       if (request.caseId) {
         await bindFillTab(request.caseId, request.tabId);
       }
-      if (attemptRevision !== fillSelectionRevision) return summary;
+      if (attemptRevision !== fillSelectionRevision) {
+        await noteRecorded();
+        return summary;
+      }
       // Persist the review state so reopening the panel restores it. A
       // storage failure must not un-report a successful fill.
       try {
@@ -2113,6 +2197,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       } catch {
         // best-effort — the fill itself succeeded
       }
+      // After the report, so a case-context read landing meanwhile finds it.
+      await noteRecorded();
       return summary;
     }
     case "ACCEPT_AI_FILL": {
@@ -2229,8 +2315,13 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
     case "MARK_SUBMITTED": {
       // A M56 fill is submitted from its value-free report tuple. The panel's
       // current selection and portal key never supply owner or step identity.
-      const fillReport = request.fillSessionId
-        ? await readFillReportForSession(request.providerId, request.fillSessionId)
+      // A Work log that arrives without a fill (the portal moved to another
+      // page and the panel let go of its result) names this launch's recorded
+      // fill when the worker still holds it, exactly as if the panel had.
+      const loggedFillSessionId = request.fillSessionId ??
+        (request.isWorkFill ? await recoverLaunchFillSessionId(request) : null);
+      const fillReport = loggedFillSessionId
+        ? await readFillReportForSession(request.providerId, loggedFillSessionId)
         : null;
       const summary = fillReport?.summary as (FillReportRecord["summary"] & Record<string, unknown>) | undefined;
       const workContextPresent = summary != null && Object.prototype.hasOwnProperty.call(summary, "workContext");
@@ -2268,8 +2359,8 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           request.providerId === typedEnrollment.providerId &&
           request.portalKey === typedEnrollment.portalKey;
         const reportMatches = fromLaunch || (
-          request.fillSessionId != null && fillReport != null &&
-          summary?.fillSessionId === request.fillSessionId &&
+          loggedFillSessionId != null && fillReport != null &&
+          summary?.fillSessionId === loggedFillSessionId &&
           summary.workCaseType === "enrollment" &&
           fillReport.providerId === typedEnrollment.providerId &&
           fillReport.caseId === typedEnrollment.ownerId &&
@@ -2285,18 +2376,23 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
       // Name it only when Minted Panel actually holds it: the panel answers an
       // unknown fill id with 404, and a fill whose record failed to save
       // must still be loggable.
-      const fillSessionId = request.fillSessionId != null && !fromLaunch &&
+      const fillSessionId = loggedFillSessionId != null && !fromLaunch &&
         summary?.eventRecorded === true
-        ? request.fillSessionId
+        ? loggedFillSessionId
         : null;
       // One idempotency id per (case, fill session), remembered for the
       // browser session. Typed Work additionally binds one normalized request
       // digest to this ID so retries cannot change the payload.
       await assertCaseWriteMatchesActiveCase(caseId);
       // Keyed by the fill attempt when there was one, so retries of the same
-      // log replay rather than double-log. A log with no fill uses "none" and
-      // is released after success, so a later deliberate log is a new touch.
-      const attemptKey = request.fillSessionId ?? "none";
+      // log replay rather than double-log. A Work log with no fill is keyed by
+      // its launch, so a relaunch starts a fresh attempt; a manual log with
+      // no fill uses "none". Both are released after success, so a later
+      // deliberate log is a new touch.
+      const noFillAttempt = fromLaunch || loggedFillSessionId == null;
+      const attemptKey = fromLaunch && workContext != null
+        ? `launch.${workContext.launchReceiptId}`
+        : loggedFillSessionId ?? "none";
       const idKey = `${SUBMIT_TOUCH_ID_PREFIX}${caseId}.${attemptKey}`;
       let idempotencyId = await readSessionString(idKey);
       let createdIdThisAttempt = false;
@@ -2331,16 +2427,23 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
           createdIdThisAttempt,
         );
       }
-      const { touch, statusBump } = await postSubmissionTouch(caseId, submissionBody);
+      // Only the POST's own answer decides whether this id is spent. The
+      // local retry conflict above never reaches here, so it can never free
+      // the id for a changed payload.
+      let posted: Awaited<ReturnType<typeof postSubmissionTouch>>;
+      try {
+        posted = await postSubmissionTouch(caseId, submissionBody);
+      } catch (error) {
+        if (isDefiniteTouchRefusal(error)) await releaseSubmissionAttempt(idKey, hashKey);
+        throw error;
+      }
+      const { touch, statusBump } = posted;
       if (typedEnrollment && (touch.id !== idempotencyId || touch.caseId !== caseId ||
         (touch.fillSessionId ?? null) !== fillSessionId)) {
         throw new ApiError(502, "Minted Panel returned a submission receipt that does not match this Work fill.");
       }
-      if (request.fillSessionId == null) {
-        // The log is durable; a later deliberate log gets a fresh id.
-        typedSubmissionBodies.delete(idKey);
-        await chrome.storage.session.remove([idKey, hashKey]).catch(() => undefined);
-      }
+      // The log is durable; a later deliberate log gets a fresh id.
+      if (noFillAttempt) await releaseSubmissionAttempt(idKey, hashKey);
       // Logging the submission is user activity on the case — reset the
       // active-case idle clock.
       await touchActiveCaseActivity().catch(() => undefined);
@@ -2360,14 +2463,14 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         // best-effort — the touch itself was logged
       }
       const receipt = await readAcceptedAiFillReceipt().catch(() => null);
-      const matchingReceipt = receipt != null && receipt.fillSessionId === request.fillSessionId &&
+      const matchingReceipt = receipt != null && receipt.fillSessionId === loggedFillSessionId &&
         receipt.providerId === request.providerId && receipt.caseId === request.caseId &&
         receipt.portalKey === request.portalKey
         ? receipt
         : null;
       const tabId = matchingReceipt?.tabId ?? reportTabId;
-      if (request.fillSessionId && tabId != null) {
-        await finalizeAiFillAcrossFrames(tabId, request.fillSessionId).catch(() => undefined);
+      if (loggedFillSessionId && tabId != null) {
+        await finalizeAiFillAcrossFrames(tabId, loggedFillSessionId).catch(() => undefined);
       }
 
       let learning: AiLearningSummary | null = null;
@@ -2377,7 +2480,7 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
             caseId: request.caseId,
             providerId: request.providerId,
             portalKey: request.portalKey,
-            fillSessionId: request.fillSessionId ?? "",
+            fillSessionId: loggedFillSessionId ?? "",
           }))) {
             await writeAcceptedAiFillReceipt(null);
             learning = {

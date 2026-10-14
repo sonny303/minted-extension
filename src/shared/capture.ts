@@ -278,7 +278,7 @@ export function restoredSummary(session: CaptureSession): string {
   const parts = [`${counts.total} ${counts.total === 1 ? "field" : "fields"} restored`];
   if (decided > 0) parts.push(`${decided} already mapped`);
   if (counts.sent > 0) parts.push(`${counts.sent} already sent`);
-  return `${parts.join(" · ")}. Field names only — no values are ever stored.`;
+  return `${parts.join(" · ")}. Field names only; no values are ever stored.`;
 }
 
 /** Diff a fresh scan against an existing capture on the same portal (S5.4
