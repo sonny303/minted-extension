@@ -153,6 +153,45 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     }
   });
 
+  it("renders test mode results inside the test-mode bar (G4/G5)", () => {
+    // The result is shown inside #sandbox-bar, so it hides with the bar when
+    // test mode ends. It must also sit outside #case-fill, which test mode
+    // hides wholesale.
+    const bar = doc.getElementById("sandbox-bar")!;
+    const result = doc.getElementById("sandbox-result");
+    expect(result, "#sandbox-result").not.toBeNull();
+    expect(bar.contains(result)).toBe(true);
+    expect(doc.getElementById("case-fill")!.contains(result)).toBe(false);
+    expect(referencedIds()).toContain("sandbox-result");
+    // Same notice renderer as a real fill, and Copy support code on errors.
+    const code = codeOf(MAIN);
+    const sandbox = code.slice(code.indexOf("function setSandboxResult("), code.indexOf("function clearSandboxOnRealSelection("));
+    expect(sandbox).toContain("fillNotice(box, tone, lines, extra)");
+    expect(sandbox).toContain('supportButton(code, null, "danger")');
+    // Clear form and Leave test mode stay in the bar beside the result.
+    for (const id of ["sandbox-clear", "sandbox-exit"]) {
+      expect(bar.contains(doc.getElementById(id)), `#${id} inside #sandbox-bar`).toBe(true);
+    }
+  });
+
+  it("says test profile and test mode, never sandbox or an emoji, on screen (G1/G3)", () => {
+    const entry = doc.getElementById("sandbox-entry")!;
+    expect(entry.contains(doc.getElementById("sandbox-entry-title"))).toBe(true);
+    expect(referencedIds()).toContain("sandbox-entry-title");
+    for (const id of ["sandbox-entry", "sandbox-bar"]) {
+      const text = doc.getElementById(id)!.textContent ?? "";
+      expect(text, `#${id}`).not.toMatch(/sandbox/i);
+      expect(text, `#${id}`).not.toMatch(/\p{Extended_Pictographic}/u);
+      expect(text, `#${id}`).not.toContain("—");
+    }
+    expect(doc.getElementById("sandbox-bar")!.textContent).toContain(
+      "Test mode. Nothing is saved to a case.",
+    );
+    expect(doc.getElementById("sandbox-fill")!.textContent).toContain("Run test fill");
+    expect(doc.getElementById("sandbox-clear")!.textContent).toContain("Clear form");
+    expect(doc.getElementById("sandbox-exit")!.textContent).toContain("Leave test mode");
+  });
+
   it("keeps every case-scoped surface inside #case-fill, and portal status OUT of it", () => {
     // renderSandboxBar hides #case-fill wholesale in the sandbox, which has no
     // case by design. Portal recognition is deliberately outside: a sandbox

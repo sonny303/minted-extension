@@ -215,8 +215,8 @@
               Type at least 2 characters. Pick a result to open it in Work
               cases.
             </p>
-            <!-- US-5.1: the sandbox is pinned above results and does not
-                 depend on a query — it is a permanent way in, not a search
+            <!-- US-5.1 / G1: the test profile is pinned above results and does
+                 not depend on a query — it is a permanent way in, not a search
                  hit. Hidden when the org has designated no test provider. -->
             <button
               id="sandbox-entry"
@@ -224,8 +224,8 @@
               type="button"
               hidden
             >
-              <span class="search-row-title">🧪 Sandbox test profile</span>
-              <span id="sandbox-entry-meta" class="search-row-meta"></span>
+              <span id="sandbox-entry-title" class="search-row-title">Test profile</span>
+              <span id="sandbox-entry-meta" class="search-row-meta">No case needed.</span>
             </button>
             <p id="sandbox-unavailable" class="btn-note" hidden></p>
             <div id="search-results" class="search-results" hidden></div>
@@ -284,7 +284,11 @@
                  coordinator's real typing. -->
             <div id="sandbox-bar" class="sandbox-bar" hidden>
               <p class="sandbox-bar-title">Test mode. Nothing is saved to a case.</p>
-              <p id="sandbox-bar-note" class="btn-note"></p>
+              <p id="sandbox-bar-note" class="sandbox-bar-note"></p>
+              <!-- G4/G5: the test fill and Clear form results, in the same
+                   notice look as a real fill. Run and clear errors land here
+                   too, as a red notice with Copy support code. -->
+              <div id="sandbox-result" class="sandbox-result" hidden></div>
               <div class="sandbox-actions">
                 <button id="sandbox-fill" class="primary" type="button">
                   Run test fill
@@ -296,7 +300,6 @@
                   Leave test mode
                 </button>
               </div>
-              <p id="sandbox-status" class="btn-note" hidden></p>
             </div>
 
             <!-- Everything case-scoped. Hidden wholesale in test mode, which
