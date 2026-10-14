@@ -503,8 +503,10 @@ type SubmitPhase = "idle" | "form" | "logging" | "done" | "failed";
 let submitPhase: SubmitPhase = "idle";
 let lastLogFailure: LogFailureView | null = null;
 let lastLogMoved = false;
-// The case a "done" log belongs to; a different case starts fresh.
-let loggedCaseId: string | null = null;
+// The case and Work launch the log form, its entries and its result belong
+// to (logScopeKey). A page change inside it keeps them; a different case or a
+// new launch starts fresh. Null while nothing is being logged.
+let logScope: string | null = null;
 // The fill result on screen (null = none). Drives the pill and Details.
 let lastSummary: FillSummary | null = null;
 let fillRunning = false;
@@ -512,6 +514,9 @@ let fillRunning = false;
 let workAccessDenied = false;
 // The attention state the task card last opened itself for (5a).
 let taskAttentionKey: string | null = null;
+// The state Provider details last opened itself for (fill by hand, access
+// not allowed). It opens once per state, so closing it sticks.
+let providerAttentionKey: string | null = null;
 // The last coverage read, so the offer can be hidden and shown again.
 let lastCoverage: FillCoverage | null = null;
 // The tab the panel last detected, so a Work launch can tell "another tab"
@@ -1622,17 +1627,42 @@ function workTupleForSelectedCase(): CanonicalWorkContextTuple | null {
   return lastFill?.isWorkFill && lastFill.caseId === caseId ? lastFill.workContext : null;
 }
 
-// Contract and recredentialing Work have no case submission (D7).
+// Only enrollment case Work has a case submission. Contract,
+// recredentialing and unknown case types log in Minted Panel (D7); the
+// worker refuses anything else.
 function workIsLoggable(): boolean {
   const record = workRecordForSelectedCase();
   if (record != null) {
-    return record.tuple.ownerKind === "case" && (record.caseType === "enrollment" || record.caseType == null);
+    return record.tuple.ownerKind === "case" && record.caseType === "enrollment";
   }
   const caseId = selectedCaseId();
   if (lastFill?.isWorkFill && lastFill.caseId === caseId) {
-    return lastFill.workContext?.ownerKind === "case" && lastFill.workCaseType !== "recredentialing";
+    return lastFill.workContext?.ownerKind === "case" && lastFill.workCaseType === "enrollment";
   }
   return activeWorkState.status === "none" || activeWorkState.status === "blocked";
+}
+
+// The Work launch the selected case is under, live or timed out, else null.
+// A timed-out launch keeps its id, so its log result stays readable.
+function launchIdForSelectedCase(): string | null {
+  if (activeWorkState.status !== "active" && activeWorkState.status !== "expired") return null;
+  const tuple = activeWorkState.record.tuple;
+  return tuple.ownerKind === "case" && tuple.ownerId === selectedCaseId() ? tuple.launchReceiptId : null;
+}
+
+// What a log belongs to: the case plus its Work launch ("manual" without
+// one). Null when no case is picked.
+function logScopeKey(): string | null {
+  const caseId = selectedCaseId();
+  return caseId == null ? null : `${caseId}|${launchIdForSelectedCase() ?? "manual"}`;
+}
+
+// Keeps the log form, its entries and its result through a page change in
+// the same scope. A different case or a new launch starts fresh.
+function dropLogStateOutsideScope(): void {
+  if (submitPhase === "idle" || logScope === logScopeKey()) return;
+  resetLogState();
+  resetSubmitInputs();
 }
 
 function payerLabel(): string {
@@ -1724,8 +1754,9 @@ function computeTaskCardState(): TaskCardState {
   if (!workPortalAccess.hidden) return workAccessDenied ? { kind: "denied" } : { kind: "access" };
   if (submitPhase === "logging") return { kind: "logging" };
   if (submitPhase === "done") return { kind: "logged", submitted: lastLogMoved };
-  if (submitPhase === "failed") return { kind: "logFailed" };
-  if (submitPhase === "form") return { kind: "log" };
+  // A held log form shows only where it can be sent (renderLogControls).
+  if (submitPhase === "failed" && (lastLogFailure?.retry !== true || canLogSubmission())) return { kind: "logFailed" };
+  if (submitPhase === "form" && canLogSubmission()) return { kind: "log" };
   if (fillRunning) return { kind: "filling" };
   if (!fillProblem.hidden) return { kind: "failed" };
   if (lastSummary != null && !fillResults.hidden) {
@@ -1748,58 +1779,94 @@ function noticeButton(label: string, className: "primary" | "secondary", onClick
   return button;
 }
 
+// Brings the launched tab forward, and its window too: the tab may sit in
+// another window. Best effort; a closed tab ends the link anyway.
+async function focusTab(tabId: number): Promise<void> {
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    const windowId = tab?.windowId ?? (await chrome.tabs.get(tabId)).windowId;
+    await chrome.windows.update(windowId, { focused: true });
+  } catch {
+    // The tab or window is gone; the worker ends the link.
+  }
+}
+
+// What the task notice says now. A render with the same notice leaves the
+// live region alone, so a screen reader doesn't read it again.
+let taskNoticeKey: string | null = null;
+
+function showTaskNotice(
+  tone: NoticeTone,
+  lines: readonly NoticeLine[],
+  extra: readonly HTMLElement[] = [],
+  salt = "",
+): void {
+  const key = JSON.stringify([tone, lines, extra.map((node) => node.outerHTML), salt]);
+  if (!taskNotice.hidden && key === taskNoticeKey) return;
+  taskNoticeKey = key;
+  fillNotice(taskNotice, tone, lines, extra);
+}
+
 // The one notice for states where Fill is not the next step: view only,
 // link timed out, wrong tab, and Work that logs in Minted Panel (D7).
-function renderTaskNotice(state: TaskCardState, task: CaseContextTask | null): void {
+// Returns true when it asks her to fill this page by hand.
+function renderTaskNotice(state: TaskCardState, task: CaseContextTask | null): boolean {
   const payer = payerLabel();
   if (state.kind === "readOnly") {
-    fillNotice(taskNotice, "neutral", [
+    showTaskNotice("neutral", [
       { text: "Your account can view this case but not fill it.", strong: true },
       "Ask an admin to change your role. You can still copy values from Provider details.",
     ]);
-    return;
+    return false;
   }
   if (state.kind === "timedOut" && activeWorkState.status === "expired") {
     const caseId = activeWorkState.record.tuple.ownerKind === "case" ? activeWorkState.record.tuple.ownerId : null;
-    fillNotice(taskNotice, "neutral", [
+    showTaskNotice("neutral", [
       { text: "This link timed out after 60 minutes.", strong: true },
       "To keep provider data safe, Minted unlinks idle tabs. Open the case and click Work in portal again.",
     ], caseId == null ? [] : [externalLink("Back to case ↗", caseUrl(caseId), "secondary button-link")]);
-    return;
+    return false;
   }
   if (state.kind === "wrongTab" && activeWorkState.status === "active") {
     const tabId = activeWorkState.record.boundTabId;
-    fillNotice(taskNotice, "warn", [`You're on a different tab. Switch to the ${payer} tab to fill.`], [
+    // A log form she opened waits for her on the launched tab.
+    const next = submitPhase === "form" || submitPhase === "failed" ? "log it" : "fill";
+    showTaskNotice("warn", [`You're on a different tab. Switch to the ${payer} tab to ${next}.`], [
       noticeButton(`Go to ${payer} tab`, "primary", () => {
-        void chrome.tabs.update(tabId, { active: true }).catch(() => undefined);
+        void focusTab(tabId);
       }),
-    ]);
-    return;
+    ], String(tabId));
+    return false;
   }
   if (workOffForm() && submitPhase === "idle") {
-    fillNotice(taskNotice, "neutral", [
+    showTaskNotice("neutral", [
       "Minted hasn't learned this page yet. Fill it by hand. Provider details are open below.",
     ]);
-    setSectionOpen("provider", true);
-    return;
+    return true;
   }
   if (selectedCaseId() != null && !workIsLoggable() && activeWorkState.status === "active") {
-    fillNotice(taskNotice, "neutral", ["Log this work in Minted Panel."],
+    showTaskNotice("neutral", ["Log this work in Minted Panel."],
       task == null ? [] : [externalLink("Open task ↗", taskUrl(task.id), "link")]);
-    return;
+    return false;
   }
   taskNotice.hidden = true;
+  taskNoticeKey = null;
+  return false;
 }
 
 // Log it, the log form, and the result of logging. Pure DOM state; the
-// handlers set submitPhase and call renderTaskCard.
+// handlers set submitPhase and call renderTaskCard. The form shows only
+// where it can be sent; elsewhere it is held, entries and all.
 function renderLogControls(state: TaskCardState): void {
   const payer = payerLabel();
-  logLink.textContent = `Submitted on ${payer}? Log it`;
-  logLink.hidden = !(canLogSubmission() && submitPhase === "idle" && !fillRunning &&
-    state.kind !== "access" && state.kind !== "denied");
+  const canLog = canLogSubmission();
   const retrying = submitPhase === "failed" && lastLogFailure?.retry === true;
-  const formOpen = submitPhase === "form" || retrying;
+  // A refusal Try again can't fix still leaves a way to log once she checked.
+  const refused = submitPhase === "failed" && !retrying;
+  logLink.textContent = `Submitted on ${payer}? Log it`;
+  logLink.hidden = !(canLog && (submitPhase === "idle" || refused) && !fillRunning &&
+    state.kind !== "access" && state.kind !== "denied");
+  const formOpen = (submitPhase === "form" || retrying) && canLog;
   submitDetails.hidden = !formOpen;
   submitTitle.textContent = `Did you submit on ${payer}?`;
   payerRefLabel.textContent = `${payer} confirmation number (optional)`;
@@ -1811,19 +1878,27 @@ function renderLogControls(state: TaskCardState): void {
     : retrying
       ? "Try again"
       : dupConfirmPending ? "Log again" : "Log submission";
-  dupWarn.hidden = !(dupConfirmPending && submitPhase === "form");
+  dupWarn.hidden = !(dupConfirmPending && submitPhase === "form" && canLog);
   dupCancelBtn.hidden = dupWarn.hidden;
-  submitBackBtn.hidden = submitPhase !== "form" || dupConfirmPending;
+  submitBackBtn.hidden = submitPhase !== "form" || dupConfirmPending || !canLog;
   if (formOpen) {
     taskLinkSingle.textContent = submissionPlanLine(currentPlan());
     submitMoves.textContent = MOVES_TO_SUBMITTED_LINE;
     submitMoves.hidden = !logMovesToSubmitted(caseStatusNow());
     taskLink.hidden = false;
   }
-  if (submitPhase === "idle" || submitPhase === "form" || submitPhase === "logging") {
-    submitStatus.hidden = true;
-    submitNext.hidden = true;
-  }
+  // The result of logging. A failure Try again can fix waits with its form.
+  const resultShown = submitPhase === "done" || refused || (retrying && canLog);
+  submitStatus.hidden = !resultShown;
+  submitNext.hidden = !resultShown || submitNext.childElementCount === 0;
+}
+
+// Provider details opens itself once per state that needs values typed by
+// hand: each page Minted hasn't learned, and site access not allowed. Closing
+// it then sticks until the state changes. Null: no such state.
+function openProviderDetailsOnce(attention: string | null): void {
+  if (attention != null && attention !== providerAttentionKey) setSectionOpen("provider", true);
+  providerAttentionKey = attention;
 }
 
 // The task card: title, one pill, subtitle, provenance, and which of its
@@ -1836,9 +1911,10 @@ function renderTaskCard(): void {
   if (taskCard.hidden) {
     portalStatus.hidden = false;
     taskAttentionKey = null;
+    openProviderDetailsOnce(null);
     return;
   }
-  if (submitPhase === "done" && loggedCaseId !== caseId) resetLogState();
+  dropLogStateOutsideScope();
   const state = computeTaskCardState();
   const task = adHoc ? null : taskForCard();
   const caseItem = cases.find((c) => c.id === caseId);
@@ -1871,7 +1947,7 @@ function renderTaskCard(): void {
   taskOrigin.hidden = !launched;
   if (launched && caseId != null) taskBack.href = caseUrl(caseId);
 
-  renderTaskNotice(state, task);
+  const byHand = renderTaskNotice(state, task);
 
   const parked = ["readOnly", "timedOut", "wrongTab", "access", "denied", "log", "logging", "logged", "logFailed"]
     .includes(state.kind);
@@ -1889,7 +1965,9 @@ function renderTaskCard(): void {
   readyTitle.textContent = state.kind === "adHoc"
     ? "Ad hoc fill. Nothing is logged to a case."
     : `${caseItem ? payer : (portal?.label ?? "Payer")} form found on this tab.`;
-  if (state.kind === "denied") setSectionOpen("provider", true);
+  openProviderDetailsOnce(state.kind === "denied"
+    ? "denied"
+    : byHand ? `byHand:${detectedPageUrl ?? ""}` : null);
   portalStatus.hidden = portal != null || state.kind === "timedOut" || state.kind === "wrongTab" || workOffForm();
 
   renderLogControls(state);
@@ -2051,14 +2129,16 @@ function clearFillResults(): void {
   gapFlag.hidden = true;
   lastSummary = null;
   lastFill = null;
-  // A logged submission stays on screen through a page change (the payer's
-  // confirmation page) on the same case. Anything else starts fresh.
-  if (submitPhase !== "done" || loggedCaseId !== selectedCaseId()) resetLogState();
+  // The log form, its entries and its result stay through a page change (the
+  // payer's confirmation page, a tab switch) in the same case and launch.
+  // A different case or a new launch starts fresh.
+  dropLogStateOutsideScope();
 }
 
 // Back to "nothing logged yet": the log form closed, no result, no warning.
 function resetLogState(): void {
   submitPhase = "idle";
+  logScope = null;
   lastLogFailure = null;
   lastLogMoved = false;
   dupConfirmPending = false;
@@ -2073,6 +2153,7 @@ function resetLogState(): void {
   markSubmittedBtn.textContent = "Log submission";
   submitStatus.hidden = true;
   submitNext.hidden = true;
+  submitNext.replaceChildren();
   nbaSection.hidden = true;
   nbaSection.replaceChildren();
 }
@@ -2466,21 +2547,29 @@ function fmtReportTime(iso: string): string {
     : `${formatDisplayDate(iso)}, ${time}`;
 }
 
-// After a fill, the log state starts fresh; a restored report that was
-// already logged shows as logged.
+// After a fill, the log state starts fresh. A restored report that was
+// already logged shows as logged, in the current case and launch; one logged
+// under an earlier launch of this case leaves the new launch to log fresh.
 function renderSubmissionActions(
   restored?: { completedAt: string; submitted: boolean },
 ): void {
+  if (restored == null) {
+    resetLogState();
+    return;
+  }
+  const caseId = selectedCaseId();
+  if (restored.submitted !== true || lastFill?.caseId == null || lastFill.caseId !== caseId) return;
+  const liveLaunch = launchIdForSelectedCase();
+  if (liveLaunch != null && lastFill.workContext?.launchReceiptId !== liveLaunch) return;
+  submitPhase = "done";
+  logScope = logScopeKey();
   dupConfirmPending = false;
   lastLogFailure = null;
-  if (restored?.submitted === true && lastFill?.caseId != null) {
-    submitPhase = "done";
-    lastLogMoved = false;
-    fillNotice(submitStatus, "ok", [{ text: "Logged to the case.", strong: true }]);
-    submitNext.hidden = true;
-  } else {
-    submitPhase = "idle";
-  }
+  lastLogMoved = false;
+  setLiveRole(submitStatus, "status");
+  fillNotice(submitStatus, "ok", [{ text: "Logged to the case.", strong: true }]);
+  submitNext.replaceChildren();
+  submitNext.hidden = true;
 }
 
 // Fields on this form that need the coordinator: missing data, uploads, and
@@ -3762,6 +3851,10 @@ signoutBtn.addEventListener("click", () => {
   void (async () => {
     await sendToBackground({ type: "SIGN_OUT" });
     resetPanelSession();
+    // A held log form and its entries never carry over to the next person.
+    resetLogState();
+    payerRefInput.value = "";
+    wipNoteInput.value = "";
     showSignin();
   })();
 });
@@ -4193,26 +4286,42 @@ async function refreshCasesAfterSubmit(providerId: string): Promise<void> {
   renderTaskCard();
 }
 
-// "Submitted on {payer}? Log it": works with or without a fill (B2).
+// Moves focus to the first of these that shows, once the control she used
+// has hidden, so keyboard and screen reader users keep their place.
+function focusFirstShown(...targets: HTMLElement[]): void {
+  const target = targets.find((node) => node.isConnected && node.closest("[hidden]") == null);
+  target?.focus({ preventScroll: true });
+}
+
+// A log failure interrupts; everything else waits its turn.
+function setLiveRole(box: HTMLElement, role: "status" | "alert"): void {
+  box.setAttribute("role", role);
+  box.setAttribute("aria-live", role === "alert" ? "assertive" : "polite");
+}
+
+// "Submitted on {payer}? Log it": works with or without a fill (B2). After a
+// refusal it opens the form again with her entries.
 logLink.addEventListener("click", () => {
   if (!canLogSubmission()) return;
-  resetSubmitInputs();
+  if (submitPhase !== "failed") resetSubmitInputs();
   dupConfirmPending = false;
   lastLogFailure = null;
   submitPhase = "form";
+  logScope = logScopeKey();
   renderTaskCard();
-  payerRefInput.focus();
+  focusFirstShown(payerRefInput, markSubmittedBtn);
 });
 
-submitBackBtn.addEventListener("click", () => {
+// Closing the form puts focus back on Log it, or on the task title.
+function closeLogForm(): void {
   resetLogState();
   renderTaskCard();
-});
+  focusFirstShown(logLink, taskToggle);
+}
 
-dupCancelBtn.addEventListener("click", () => {
-  resetLogState();
-  renderTaskCard();
-});
+submitBackBtn.addEventListener("click", closeLogForm);
+
+dupCancelBtn.addEventListener("click", closeLogForm);
 
 fillAgainBtn.addEventListener("click", () => {
   fillBtn.click();
@@ -4256,8 +4365,10 @@ markSubmittedBtn.addEventListener("click", () => {
   const portalKey = work?.tuple.portalKey ?? fill?.portalKey ?? portal?.key ?? null;
   if (portalKey == null) return;
   const generation = loadGeneration;
+  const scope = logScopeKey();
 
   submitPhase = "logging";
+  logScope = scope;
   renderTaskCard();
   void (async () => {
     setError(mainError, null);
@@ -4275,18 +4386,21 @@ markSubmittedBtn.addEventListener("click", () => {
       // Every submission log moves a Not Started or In Progress case.
       bumpStatus: true,
     });
-    if (!isCurrent(generation) || selectedCaseId() !== caseId) return;
+    // A different case or a new launch dropped this log's state already.
+    if (!isCurrent(generation) || selectedCaseId() !== caseId || logScopeKey() !== scope) return;
     if (!response.ok) {
       // Entries stay in the form. Only a request that never landed offers
       // Try again; a refusal points where it can be fixed (E9 to E11).
       const view = logFailureView(response.code, response.error, isWork ? "work" : "manual");
       submitPhase = "failed";
       lastLogFailure = view;
+      setLiveRole(submitStatus, "alert");
       fillNotice(submitStatus, view.tone, [view.text], [supportButton(response.code ?? "offline", fill?.fillSessionId ?? null)]);
       const next = logNextLink(view.link, caseId, linkTaskId);
       submitNext.replaceChildren(...next);
       submitNext.hidden = next.length === 0;
       renderTaskCard();
+      focusFirstShown(submitStatus, taskToggle);
       return;
     }
     const view: AfterLogView = afterLogView({
@@ -4297,15 +4411,17 @@ markSubmittedBtn.addEventListener("click", () => {
     });
     if (fill && lastFill === fill) lastFill = { ...fill, submitted: true };
     submitPhase = "done";
-    loggedCaseId = caseId;
+    logScope = scope;
     lastLogFailure = null;
     lastLogMoved = response.data.statusBump?.applied === true;
     dupConfirmPending = false;
+    setLiveRole(submitStatus, "status");
     fillNotice(submitStatus, "ok", [{ text: view.headline, strong: true }, ...view.lines]);
     const next = logNextLink(view.link, caseId, linkTaskId);
     submitNext.replaceChildren(...next);
     submitNext.hidden = next.length === 0;
     renderTaskCard();
+    focusFirstShown(submitStatus, taskToggle);
     // The status, last touch and task list changed on the server.
     void refreshCasesAfterSubmit(providerId);
     caseContextCaseId = null;

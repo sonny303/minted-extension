@@ -2245,6 +2245,17 @@ a.link:focus-visible {
   outline-offset: 2px;
 }
 
+/* The log result takes focus after logging so a screen reader reads it.
+   It is not a control: no ring after a click, the usual one from a key. */
+#submit-status:focus {
+  outline: none;
+}
+
+#submit-status:focus-visible {
+  outline: 2px solid var(--mp-info);
+  outline-offset: 2px;
+}
+
 .acc-title {
   min-width: 0;
   overflow: hidden;
