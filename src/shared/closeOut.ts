@@ -199,6 +199,7 @@ export type TaskCardState =
   | { kind: "nothing" }
   | { kind: "failed" }
   | { kind: "noForm" }
+  | { kind: "byHand" }
   | { kind: "log" }
   | { kind: "logging" }
   | { kind: "logged"; submitted: boolean }
@@ -225,6 +226,7 @@ export function taskCardPill(state: TaskCardState): { text: string; tone: PillTo
     case "nothing": return { text: "Nothing filled", tone: "danger" };
     case "failed": return { text: "Fill did not finish", tone: "danger" };
     case "noForm": return { text: "No form here", tone: "neutral" };
+    case "byHand": return { text: "Fill by hand", tone: "neutral" };
     case "log": return { text: "Ready to log", tone: "tint" };
     case "logging": return { text: "Logging submission", tone: "neutral" };
     case "logged": return state.submitted

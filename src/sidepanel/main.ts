@@ -1263,7 +1263,7 @@ function renderDuplicateGuard(): void {
 
   const text = document.createElement("p");
   text.className = "dup-pickup-text";
-  text.textContent = `This case was marked submitted ${phrase}. Someone may already have done this work.`;
+  text.textContent = `This case was logged as submitted ${phrase}. Check before you work it again.`;
   dupPickup.append(text);
 
   const actions = document.createElement("div");
@@ -1271,7 +1271,7 @@ function renderDuplicateGuard(): void {
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "link";
-  dismiss.textContent = "Continue anyway";
+  dismiss.textContent = "Continue";
   dismiss.addEventListener("click", () => {
     dismissedDupCaseIds.add(caseId);
     renderDuplicateGuard();
@@ -1283,7 +1283,7 @@ function renderDuplicateGuard(): void {
   link.href = `${API_BASE_URL}/cases/${caseId}`;
   link.target = "_blank";
   link.rel = "noreferrer";
-  link.textContent = "See the touchlog ↗";
+  link.textContent = "Open case ↗";
   actions.append(link);
   dupPickup.append(actions);
 }
@@ -1628,7 +1628,13 @@ function currentPlan(): SubmissionPlan {
 // this case that uses this form.
 function taskForCard(): CaseContextTask | null {
   const tasks = caseContextData?.openTasks ?? [];
-  const tuple = workTupleForSelectedCase();
+  // A timed-out launch still names its task, so the card keeps its title.
+  const expired = activeWorkState.status === "expired" &&
+    activeWorkState.record.tuple.ownerKind === "case" &&
+    activeWorkState.record.tuple.ownerId === selectedCaseId()
+    ? activeWorkState.record.tuple
+    : null;
+  const tuple = workTupleForSelectedCase() ?? expired;
   if (tuple != null && tuple.ownerKind === "case") {
     return tasks.find((t) => t.id === tuple.taskId) ?? null;
   }
@@ -1675,6 +1681,7 @@ function computeTaskCardState(): TaskCardState {
       ? { kind: "filled", filled: lastSummary.filled, needYou: needsYou(lastSummary).length }
       : { kind: "nothing" };
   }
+  if (workOffForm()) return { kind: "byHand" };
   if (portal == null) return { kind: "noForm" };
   if (caseSelect.value === AD_HOC_CASE_SELECTION) return { kind: "adHoc" };
   return { kind: "ready" };
@@ -1818,7 +1825,9 @@ function renderTaskCard(): void {
     .includes(state.kind);
   const showingResult = lastSummary != null && !fillResults.hidden;
   fillResults.classList.toggle("is-parked", submitPhase !== "idle");
-  fillBtn.hidden = parked || showingResult;
+  // The pickup warning has done its job once she is logging (E3 asks again).
+  dupPickup.classList.toggle("is-parked", submitPhase !== "idle");
+  fillBtn.hidden = parked || showingResult || portal == null;
   fillNote.hidden = fillBtn.hidden;
   fillNote.textContent = fillRunning
     ? "Some questions only appear after others are answered. Minted waits for them. Stay on this tab."
@@ -1833,7 +1842,8 @@ function renderTaskCard(): void {
 
   renderLogControls(state);
 
-  openTaskLink.hidden = caseId == null || caseContextBox.hidden;
+  // One "Open task" link at a time: a log result may already carry it.
+  openTaskLink.hidden = caseId == null || caseContextBox.hidden || !submitNext.hidden;
   if (caseId != null) {
     openTaskLink.textContent = task ? "Open task in Minted Panel ↗" : "Open case in Minted Panel ↗";
     openTaskLink.href = task ? taskUrl(task.id) : caseUrl(caseId);
@@ -3276,6 +3286,13 @@ async function detectPortal(): Promise<void> {
 // stays hidden. Reads the registry we already fetched, so it needs no host
 // permission to decide what to ask for.
 async function refreshPortalAccessPrompt(): Promise<void> {
+  const revision = await updatePortalAccessPrompt();
+  // The ask sits in Fill's spot, so the task card follows whatever the
+  // latest check decided (a stale check leaves it to the newer one).
+  if (revision === portalAccessPromptRevision) renderTaskCard();
+}
+
+async function updatePortalAccessPrompt(): Promise<number> {
   const revision = ++portalAccessPromptRevision;
   portalAccess.hidden = true;
   workPortalAccess.hidden = true;
@@ -3296,7 +3313,7 @@ async function refreshPortalAccessPrompt(): Promise<void> {
       (!portalRegistryLoaded || workPortalAbsentFromRegistry(record, portalRows))
     ) {
       const targetResponse = await sendToBackground({ type: "GET_WORK_PORTAL_PERMISSION_TARGET" });
-      if (revision !== portalAccessPromptRevision) return;
+      if (revision !== portalAccessPromptRevision) return revision;
       const target = targetResponse.ok ? targetResponse.data : null;
       const pattern = target == null ? null : workPortalPermissionPattern(target.origin);
       if (
@@ -3304,7 +3321,7 @@ async function refreshPortalAccessPrompt(): Promise<void> {
         workPortalGrantTargetMatches(target, record, tab?.id ?? null)
       ) {
         const alreadyGranted = await hasOriginPermissions([pattern]);
-        if (revision !== portalAccessPromptRevision) return;
+        if (revision !== portalAccessPromptRevision) return revision;
         if (!alreadyGranted) {
           workPortalAccessCandidate = { ...target, pattern };
           const payer = payerLabel();
@@ -3322,13 +3339,12 @@ async function refreshPortalAccessPrompt(): Promise<void> {
         } else {
           workAccessDenied = false;
         }
-        renderTaskCard();
-        return;
+        return revision;
       }
     }
   }
 
-  if (portal != null) return;
+  if (portal != null) return revision;
   // The origins to ask for come from whichever registry this job works
   // against: the org's in case mode, the shared library's while training.
   const patterns = portalOriginPatterns(
@@ -3336,9 +3352,10 @@ async function refreshPortalAccessPrompt(): Promise<void> {
   );
   if (patterns.length === 0) {
     portalAccess.hidden = true;
-    return;
+    return revision;
   }
   portalAccess.hidden = await hasOriginPermissions(patterns);
+  return revision;
 }
 
 function workPortalPermissionPattern(origin: string): string | null {

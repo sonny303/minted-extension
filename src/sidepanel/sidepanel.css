@@ -1674,9 +1674,9 @@ a.link:focus-visible {
 
 /* ---- next best action (F4.3.4/TE-6) ---- */
 .nba {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mp-line-200);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .nba-clear {
@@ -1694,7 +1694,7 @@ a.link:focus-visible {
 
 .nba-title {
   margin: 0 0 2px;
-  font: 700 13px/1.4 var(--mp-font);
+  font: 600 13px/1.4 var(--mp-font);
   color: var(--mp-ink-900);
 }
 
@@ -1722,14 +1722,10 @@ a.link:focus-visible {
 
 .nba-actions {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 10px;
-}
-
-.nba-work {
-  width: auto;
-  padding: 6px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .nba-link {
@@ -2489,8 +2485,9 @@ a.link:focus-visible {
   gap: 8px;
 }
 
-#fill-results.is-parked {
-  display: none;
+#fill-results.is-parked,
+.is-parked {
+  display: none !important;
 }
 
 .submit-form {

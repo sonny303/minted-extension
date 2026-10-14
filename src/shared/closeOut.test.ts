@@ -155,6 +155,7 @@ describe("task card pill and auto-open", () => {
     expect(taskCardPill({ kind: "filled", filled: 14, needYou: 0 })).toEqual({ text: "Filled 14 · your turn", tone: "ok" });
     expect(taskCardPill({ kind: "filled", filled: 12, needYou: 3 })).toEqual({ text: "Filled 12 · 3 need you", tone: "warn" });
     expect(taskCardPill({ kind: "logged", submitted: true })?.text).toBe("Done · Submitted");
+    expect(taskCardPill({ kind: "byHand" })?.text).toBe("Fill by hand");
     expect(taskCardPill({ kind: "none" })).toBeNull();
   });
 

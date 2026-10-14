@@ -601,7 +601,7 @@ describe("Work portal host permission prompt", () => {
     runInContext(code([
       "activeWorkRecordForTab", "activePageUrlForTab", "workPortalAbsentFromRegistry",
       "workPortalPermissionPattern", "workPortalGrantTargetMatches", "hasOriginPermissions",
-      "refreshPortalAccessPrompt",
+      "refreshPortalAccessPrompt", "updatePortalAccessPrompt",
     ]), scope);
     return { dom, scope, portalAccess, workPortalAccess, permissionContains, sendToBackground };
   }
