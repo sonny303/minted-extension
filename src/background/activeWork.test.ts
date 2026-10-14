@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stub } from "../harness/chromeStub";
-import { ACTIVE_WORK_BLOCK_KEY, ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
+import { ACTIVE_WORK_KEY, clearActiveWork, getActiveWorkState, getWorkPortalPermissionTarget, handleExternalSetActiveWork, onActiveWorkTabActivated, onActiveWorkTabUpdated, reconcileActiveWorkTab, registerValidatedWorkSelectionCommitter, requireActiveWorkForTab } from "./activeWork";
 import { validateWorkContext } from "./api";
 import { canonicalizeWorkContextTuple, tupleFromSetActiveWorkMessage, type CanonicalWorkContextTuple, type SetActiveWorkMessage } from "../shared/workContext";
 
@@ -469,7 +469,7 @@ describe("exact tab lifecycle", () => {
     expect(stub.tabQueries).toHaveLength(0);
   });
 
-  it("switching away from the bound tab revokes the context", async () => {
+  it("keeps the link through a tab switch, but Fill runs only on the launched tab (Q3)", async () => {
     stub.setQueryTabs([
       { id: 53, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab,
       { id: 54, windowId: 1, url: "https://other.example.com", active: false } as chrome.tabs.Tab,
@@ -484,16 +484,17 @@ describe("exact tab lifecycle", () => {
       lastActivityAt: new Date().toISOString(),
     });
     await onActiveWorkTabActivated(54);
-    expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
-    expect(stub.sessionStore.get(ACTIVE_WORK_BLOCK_KEY)).toEqual({ orgId: message.orgId });
-    expect((await getActiveWorkState()).status).toBe("blocked");
-    await expect(requireActiveWorkForTab(54)).rejects.toThrow(/exact Work context ended/);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+    expect((await getActiveWorkState()).status).toBe("active");
+    await expect(requireActiveWorkForTab(54)).rejects.toThrow(/Switch to the form's tab/);
+    // Nothing was revoked by the refusal: coming back resumes the same link.
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
     await clearActiveWork({ allowLegacyFallback: true });
     expect((await getActiveWorkState()).status).toBe("none");
     await expect(requireActiveWorkForTab(54)).resolves.toBeNull();
   });
 
-  it("revokes same-origin navigation outside the selected form path", async () => {
+  it("keeps the link on same-site pages outside the form, and revokes on leaving the site", async () => {
     stub.setQueryTabs([
       { id: 53, windowId: 1, url: message.portalUrl, active: true } as chrome.tabs.Tab,
     ]);
@@ -506,7 +507,17 @@ describe("exact tab lifecycle", () => {
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
     });
+    // A confirmation page on the payer's own site keeps the link, so the
+    // coordinator can still log the submission from it.
     await onActiveWorkTabUpdated(53, "https://portal.example.com/admin");
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+    expect((await getActiveWorkState()).status).toBe("active");
+    // Fill is still refused off the form's own pages, without ending the link.
+    navigationHarness.frames.set(53, "https://portal.example.com/admin");
+    await expect(requireActiveWorkForTab(53)).rejects.toThrow(/isn't part of the form/);
+    expect(stub.sessionStore.get(ACTIVE_WORK_KEY)).toMatchObject({ boundTabId: 53 });
+
+    await onActiveWorkTabUpdated(53, "https://elsewhere.example.net/page");
     expect(stub.sessionStore.has(ACTIVE_WORK_KEY)).toBe(false);
     expect((await getActiveWorkState()).status).toBe("blocked");
   });

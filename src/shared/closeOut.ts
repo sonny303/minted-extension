@@ -56,7 +56,7 @@ export function submissionPlanLine(plan: SubmissionPlan): string {
 /** What the panel learned back from the server about the status move. */
 export interface BumpReport {
   applied: boolean;
-  reason?: string;
+  reason?: string | null;
 }
 
 export type LogLink = "task" | "case" | null;

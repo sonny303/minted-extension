@@ -262,11 +262,12 @@ describe("MINT-64 — integrated exact Work owner/config guard", () => {
       mappingGeneration: tupleA.mappingGeneration,
       facilityId: tupleA.facilityId,
       state: "KS",
-    })).rejects.toThrow(/different portal tab|exact Work context/i);
+    })).rejects.toThrow(/Switch to the form's tab|exact Work context/i);
     expect(applied).toEqual([]);
 
-    // Reopen B after the stale-tab attempt (which deliberately revokes the
-    // singleton authorization), then execute B's own two-control config.
+    // Reopen B after the stale-tab attempt (refused without revoking: the
+    // link survives a tab switch since 0.1.8), then execute B's own
+    // two-control config.
     const launchBRetry = await externalWorkLaunch(launchMessage(tupleB));
     expect(launchBRetry).toMatchObject({ ok: true, tabId: 702 });
     const result = await handleRequest({

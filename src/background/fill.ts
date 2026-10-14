@@ -1267,6 +1267,7 @@ export async function fillPortal(
     // Only reference the session when the server actually stored it — the
     // touches route validates fill_session_id and 404s an unknown id.
     fillSessionId: eventRecorded ? fillSessionId : null,
+    attemptId: fillSessionId,
     pageFields: pageResult.pageFields,
     fieldsAttempted: localAttempted,
     fieldsVerified: localVerified,

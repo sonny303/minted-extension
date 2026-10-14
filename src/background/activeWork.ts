@@ -550,8 +550,9 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
     throw new Error("This Work context expired. Reopen the task from Minted Panel.");
   }
   if (record.boundTabId !== tabId) {
-    await clearActiveWork();
-    throw new Error("This Work context is bound to a different portal tab.");
+    // The link survives a tab switch (PM, Oct 14, Q3); Fill still runs only
+    // on the launched tab.
+    throw new Error("Switch to the form's tab, then click Fill this page again.");
   }
   try {
     await chrome.tabs.get(record.boundTabId);
@@ -559,9 +560,13 @@ export async function requireActiveWorkForTab(tabId: number): Promise<ActiveWork
     await clearActiveWork();
     throw new Error("The bound Work tab closed. Reopen the task from Minted Panel.");
   }
-  if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) {
-    await clearActiveWork();
-    throw new Error("The bound Work tab changed pages. Reopen the task from Minted Panel.");
+  const pageUrl = await getMainFrameUrl(record.boundTabId);
+  if (!workFormUrlMatchesPage(pageUrl, record.formOrigin, record.formPath)) {
+    if (!sameOrigin(pageUrl, record.formOrigin)) {
+      await clearActiveWork();
+      throw new Error("The bound Work tab left the payer's site. Reopen the task from Minted Panel.");
+    }
+    throw new Error("This page isn't part of the form you opened. Go back to the form to fill it.");
   }
   await touchActiveWork(tabId);
   return record;
@@ -666,29 +671,36 @@ export async function touchActiveWork(tabId: number): Promise<void> {
   });
 }
 
+// The Work link stays through a tab switch and through pages on the same
+// payer site in the launched tab (PM, Oct 14: Q3 answer B), so a coordinator
+// can check Minted Panel, come back, and log the submission from the
+// payer's confirmation page. Fill stays bound to the form's own pages on the
+// launched tab. Closing the tab, leaving the payer's site, or 60 minutes idle
+// still end it.
 export async function onActiveWorkTabActivated(tabId: number): Promise<void> {
   const record = await readActiveWorkRecord();
-  if (record == null) return;
-  if (record.boundTabId !== tabId) {
-    await clearActiveWork();
-    return;
-  }
+  if (record == null || record.boundTabId !== tabId) return;
   await touchActiveWork(tabId);
 }
 
 export async function onActiveWorkTabUpdated(tabId: number, url: string | undefined): Promise<void> {
   const record = await readActiveWorkRecord();
   if (record == null || record.boundTabId !== tabId || !url) return;
-  try {
-    if (!workFormUrlMatchesPage(url, record.formOrigin, record.formPath)) {
-      await clearActiveWork();
-      return;
-    }
-  } catch {
+  if (!sameOrigin(url, record.formOrigin)) {
     await clearActiveWork();
     return;
   }
   await touchActiveWork(tabId);
+}
+
+function sameOrigin(url: string | null | undefined, origin: string): boolean {
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.origin === origin;
+  } catch {
+    return false;
+  }
 }
 
 export async function onActiveWorkTabRemoved(tabId: number): Promise<void> {
@@ -712,7 +724,7 @@ export async function reconcileActiveWorkTab(): Promise<void> {
   }
   try {
     await chrome.tabs.get(record.boundTabId);
-    if (!workFormUrlMatchesPage(await getMainFrameUrl(record.boundTabId), record.formOrigin, record.formPath)) await clearActiveWork();
+    if (!sameOrigin(await getMainFrameUrl(record.boundTabId), record.formOrigin)) await clearActiveWork();
   } catch {
     await clearActiveWork();
   }

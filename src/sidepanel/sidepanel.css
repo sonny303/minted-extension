@@ -1651,11 +1651,6 @@ a.link:focus-visible {
 }
 
 /* ---- structured touch form (F4.3.4) ---- */
-.touch-section {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mp-line-200);
-}
 
 .touch-grid {
   display: grid;
@@ -2214,4 +2209,361 @@ a.link:focus-visible {
 .mode-btn:focus-visible {
   outline: 2px solid rgba(27, 77, 62, 0.35);
   outline-offset: -2px;
+}
+
+/* ---- 0.1.8: three collapsible sections and the task card ----
+   One size per job (UX review 9.4): 36px section header, 12px card padding,
+   6px radius, 12px between blocks, 8px inside them. */
+
+.acc-card {
+  margin-bottom: 12px;
+  background: var(--mp-card);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-r-card);
+}
+
+.acc-head {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--mp-r-card);
+  font: 600 13px var(--mp-font);
+  color: var(--mp-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.acc-head:hover {
+  background: var(--mp-app);
+}
+
+.acc-head:focus-visible {
+  outline: 2px solid var(--mp-info);
+  outline-offset: 2px;
+}
+
+.acc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acc-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--mp-ink-secondary);
+}
+
+.acc-chevron {
+  transition: transform 0.12s ease;
+}
+
+.acc-head[aria-expanded="false"] .acc-chevron {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acc-chevron {
+    transition: none;
+  }
+}
+
+.acc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+/* The fields inside a section space themselves with the section's gap. */
+.acc-body > .field,
+.acc-body > .touch-grid .field {
+  margin-bottom: 0;
+}
+
+.acc-body > button.primary,
+.acc-body > button.secondary,
+.acc-body > .error,
+.acc-body > .logged,
+.acc-body > .card,
+.acc-body > .dup-pickup,
+.acc-body > .offer-card,
+.acc-body > .gap-flag {
+  margin: 0;
+}
+
+.task-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--mp-border);
+}
+
+.task-sub {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink);
+}
+
+.task-origin {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--mp-ink-secondary);
+}
+
+.task-origin .link {
+  font-size: 11px;
+}
+
+.task-line-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--mp-ink);
+}
+
+.task-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--mp-ink);
+}
+
+.lbl {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mp-ink-secondary);
+}
+
+.access-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.access-ask .btn-note {
+  margin: 0;
+}
+
+.acc-body .btn-note {
+  margin: -4px 0 0;
+}
+
+/* Notices: one size, four tones (token tints only). */
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--mp-r-card);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.notice-ok {
+  background: var(--mp-ok-tint);
+  color: var(--mp-grn-700);
+}
+
+.notice-warn {
+  background: var(--mp-warn-tint);
+  color: #78350f;
+}
+
+.notice-danger {
+  background: var(--mp-danger-tint);
+  color: var(--mp-red-800);
+}
+
+.notice-neutral {
+  background: var(--mp-neutral-tint);
+  color: #374151;
+}
+
+.notice-headline {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notice button.primary,
+.notice button.secondary,
+.notice .button-link {
+  margin-top: 4px;
+}
+
+.notice .link,
+.notice .support-code {
+  align-self: flex-start;
+  color: inherit;
+}
+
+.status-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mp-ink);
+}
+
+.status-line .link {
+  align-self: flex-start;
+}
+
+.need-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 8px;
+}
+
+/* An <a> that should look like the 36px secondary button. */
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--mp-primary);
+  border-radius: var(--mp-radius-control);
+  background: var(--mp-card);
+  font: 500 13px var(--mp-font);
+  color: var(--mp-primary);
+  text-decoration: none;
+}
+
+.button-link:hover {
+  background: var(--mp-primary-tint);
+}
+
+/* Task card pill tones. */
+.pill-tone-ok {
+  background: var(--mp-ok-tint);
+  color: var(--mp-grn-700);
+}
+
+.pill-tone-warn {
+  background: var(--mp-warn-tint);
+  color: #78350f;
+}
+
+.pill-tone-danger {
+  background: var(--mp-danger-tint);
+  color: var(--mp-red-800);
+}
+
+.pill-tone-neutral {
+  background: var(--mp-neutral-tint);
+  color: #374151;
+}
+
+.pill-tone-tint {
+  background: var(--mp-primary-tint);
+  color: var(--mp-primary);
+}
+
+/* The fill result stays in memory while the log form is up. */
+#fill-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#fill-results.is-parked {
+  display: none;
+}
+
+.submit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.submit-form .field {
+  margin-bottom: 0;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+/* Admin-only Details: engineer detail behind one quiet disclosure. */
+.admin-details > summary {
+  cursor: pointer;
+  font: 500 12px var(--mp-font);
+  color: var(--mp-ink-secondary);
+  padding: 4px 0;
+}
+
+.admin-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #374151;
+}
+
+.admin-details-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-details-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.admin-details-links .link {
+  font-size: 11px;
+}
+
+/* Case details: a two-column grid of label and value. */
+.case-details {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--mp-border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.case-context-value {
+  color: var(--mp-ink);
+  overflow-wrap: anywhere;
+}
+
+.case-context-value.mono {
+  font-family: var(--mp-mono);
+}
+
+/* The A6 org prompt sits above the org picker. */
+#org-switch {
+  margin-bottom: 12px;
 }

@@ -186,6 +186,10 @@
           </div>
         </section>
 
+        <!-- A6: a launch for another org the account belongs to. It sits
+             ABOVE the org picker, never inside #case-work, which stays hidden
+             until an org resolves (the prompt used to be unreachable there). -->
+        <div id="org-switch" class="handoff-banner banner-warn" hidden></div>
         <div id="org-field" class="field">
           <label for="org-select">Organization</label>
           <select id="org-select"></select>
@@ -245,78 +249,6 @@
               Change
             </button>
           </div>
-          <div id="provider-card" class="card qc" hidden>
-            <div class="card-head">
-              <div>
-                <div id="provider-name" class="provider-name"></div>
-                <div id="provider-dob" class="provider-dob" hidden></div>
-              </div>
-              <div class="card-head-actions">
-                <a
-                  id="open-in-panel"
-                  class="open-link"
-                  target="_blank"
-                  rel="noreferrer"
-                  hidden
-                  >Open in Minted Panel ↗</a
-                >
-                <button
-                  id="view-settings-btn"
-                  class="gear-btn"
-                  type="button"
-                  aria-label="Edit layout"
-                  title="Edit layout"
-                  hidden
-                >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                  >
-                    <circle cx="12" cy="12" r="3"></circle>
-                    <path
-                      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-                    ></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div id="provider-ids" class="detail-sections" hidden></div>
-            <div id="group-card" class="qc-type2" hidden>
-              <div id="group-name" class="qc-group-name"></div>
-              <div id="group-ids" class="detail-sections" hidden></div>
-            </div>
-            <div id="view-settings" class="view-settings" hidden>
-              <p class="view-settings-title">Edit layout</p>
-              <input
-                id="view-settings-search"
-                class="view-settings-search"
-                type="search"
-                placeholder="Search fields"
-                aria-label="Search fields"
-              />
-              <p class="view-settings-hint">
-                Pick the ID fields to show on the cards — swap the defaults or add
-                up to 3 more. Saved to your account.
-              </p>
-              <div id="view-settings-fields" class="view-settings-fields"></div>
-              <div id="view-settings-error" class="error" hidden></div>
-              <div class="view-settings-actions">
-                <button id="view-settings-save" class="primary" type="button">
-                  Save layout
-                </button>
-                <button id="view-settings-cancel" class="link" type="button">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
           <div id="active-cases" class="active-cases" hidden>
             <p class="section-title active-cases-heading">Open cases</p>
             <div id="active-cases-list"></div>
@@ -332,48 +264,43 @@
               <label for="facility-select">Location</label>
               <select id="facility-select"></select>
               <p id="facility-hint" class="blocked-hint" hidden>
-                Pick a location first.
+                Pick the location for this form.
               </p>
               <div id="facility-address" class="facility-address" hidden></div>
               <!-- E1.5: every location the selected CASE has on file, primary
                    badged. facility-select above stays the ONE fill-target
                    picker; this is read-only context beside it, and stays
-                   hidden with 0-1 case location (no new chrome for the common
-                   case). -->
+                   hidden with 0-1 case location. -->
               <ul id="case-locations-list" class="case-locations-list" hidden></ul>
             </div>
 
             <!-- Portal recognition is NOT case-scoped, so it sits above the
-                 case block: a sandbox fill needs to know whether this page is
-                 a portal every bit as much as a real fill does. -->
+                 case block: a test fill needs to know whether this page is a
+                 form every bit as much as a real fill does. -->
             <p id="portal-status" class="banner"></p>
 
-            <!-- US-5: sandbox chrome, beside the location picker it shares
-                 with a real fill. Only rendered while the sandbox profile is
-                 active, which is also the only way to reach Clear portal
-                 form — on a live case it would wipe real typing. -->
+            <!-- Test mode: the designated test provider, no case. The only
+                 way to reach Clear form, which on a live case would wipe a
+                 coordinator's real typing. -->
             <div id="sandbox-bar" class="sandbox-bar" hidden>
-              <p class="sandbox-bar-title">
-                🧪 Sandbox — no case, nothing logged to a case
-              </p>
+              <p class="sandbox-bar-title">Test mode. Nothing is saved to a case.</p>
               <p id="sandbox-bar-note" class="btn-note"></p>
               <div class="sandbox-actions">
                 <button id="sandbox-fill" class="primary" type="button">
-                  Run sandbox fill
+                  Run test fill
                 </button>
                 <button id="sandbox-clear" class="secondary" type="button">
-                  Clear portal form
+                  Clear form
                 </button>
                 <button id="sandbox-exit" class="link" type="button">
-                  Leave sandbox
+                  Leave test mode
                 </button>
               </div>
               <p id="sandbox-status" class="btn-note" hidden></p>
             </div>
 
-            <!-- Everything case-scoped. Hidden wholesale in the sandbox, which
-                 has no case by design — the same one-container rule
-                 renderModeSurfaces uses, for the same reason. -->
+            <!-- Everything case-scoped. Hidden wholesale in test mode, which
+                 has no case by design. -->
             <div id="case-fill">
             <div class="field">
               <div class="label-row">
@@ -384,126 +311,274 @@
               <p id="case-note" class="case-note" hidden></p>
             </div>
 
-            <div id="case-context" class="case-context" hidden></div>
-
-            <!-- S4.2: the duplicate-work guard fires on PICKUP, above the offer
-                 — never blocking, dismissible, with a link into the touchlog. -->
-            <div id="dup-pickup" class="dup-pickup" hidden></div>
-
-            <!-- S4.1: the fill offer card. Dark surface; count + skip reasons
-                 are stated BEFORE the run. -->
-            <div id="coverage-panel" class="coverage offer-card" hidden>
-              <div class="offer-head">
-                <p id="coverage-count" class="coverage-count"></p>
-                <span id="proven-chip" class="pill proven-chip" hidden
-                  >PROVEN</span
-                >
-              </div>
-              <div id="drift-strip" class="drift-strip" hidden></div>
-              <p id="unproven-note" class="offer-note" hidden></p>
-              <ul id="coverage-gaps" class="coverage-gaps"></ul>
-              <button
-                id="refresh-maps-btn"
-                class="link refresh-maps"
-                type="button"
-                hidden
-              >
-                I fixed a mapping — refresh and re-check
+            <!-- 0.1.8: the task card. One collapsible section for the current
+                 task only: fill, the result, logging the submission, and the
+                 case details. It opens on its own when it needs the
+                 coordinator (PM decision 5a). -->
+            <section id="task-card" class="acc-card" aria-labelledby="task-title">
+              <button id="task-toggle" class="acc-head" type="button" aria-expanded="true" aria-controls="task-body">
+                <span id="task-title" class="acc-title">Fill this form</span>
+                <span class="acc-meta">
+                  <span id="task-pill" class="pill" hidden></span>
+                  <svg class="acc-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                </span>
               </button>
-            </div>
+              <div id="task-body" class="acc-body">
+                <div class="task-head">
+                  <p id="task-sub" class="task-sub" hidden></p>
+                  <p id="task-origin" class="task-origin" hidden>
+                    Opened from Minted Panel ·
+                    <a id="task-back" class="link" target="_blank" rel="noreferrer">Back to case ↗</a>
+                  </p>
+                </div>
 
-            <button id="fill-btn" class="primary" type="button" disabled>
-              Fill this page
-            </button>
+                <!-- S4.2: the duplicate-work guard fires on PICKUP, above the
+                     offer, never blocking. -->
+                <div id="dup-pickup" class="dup-pickup" hidden></div>
 
-            <!-- S6.2: CAQH push — the offer + attestation. The S6.3 exception
-                 strip (pull) is QUARANTINED; see the note in sidepanel/main.ts. -->
-            <div id="caqh-section" class="caqh" hidden>
-              <div class="caqh-head">
-                <p id="caqh-headline" class="caqh-headline"></p>
-                <span id="caqh-attested" class="caqh-attested"></span>
-              </div>
-              <div class="caqh-actions">
-                <button id="caqh-attest" class="secondary" type="button">
-                  Record attestation
+                <!-- The one-time site access ask sits in Fill's spot: Fill
+                     cannot do anything on a site Chrome has not allowed. -->
+                <div id="work-portal-access" class="access-ask" hidden>
+                  <p id="work-access-title" class="task-line-title">One-time setup for this site</p>
+                  <p class="task-line">
+                    Chrome needs your OK before Minted can fill forms here. You
+                    only do this once per site.
+                  </p>
+                  <button id="work-portal-access-grant" class="primary" type="button">
+                    Allow Minted on this site
+                  </button>
+                  <p id="work-access-note" class="btn-note">Chrome will ask. Click Allow.</p>
+                </div>
+
+                <!-- Wrong tab, link timed out, read-only, case-only work: one
+                     notice and at most one way forward. -->
+                <div id="task-notice" class="notice" hidden></div>
+
+                <!-- S4.1: the fill offer card, light. Count and test-run state
+                     are stated BEFORE the run. -->
+                <div id="coverage-panel" class="coverage offer-card" hidden>
+                  <div class="offer-head">
+                    <p id="coverage-count" class="coverage-count"></p>
+                    <span id="proven-chip" class="pill proven-chip" hidden>Tested</span>
+                  </div>
+                  <div id="drift-strip" class="drift-strip" hidden></div>
+                  <p id="unproven-note" class="offer-note" hidden></p>
+                  <ul id="coverage-gaps" class="coverage-gaps" hidden></ul>
+                  <button id="refresh-maps-btn" class="link refresh-maps" type="button" hidden>
+                    I fixed a mapping. Check again
+                  </button>
+                </div>
+
+                <p id="ready-title" class="task-line-title" hidden></p>
+                <button id="fill-btn" class="primary" type="button" disabled>
+                  Fill this page
                 </button>
-              </div>
-              <p id="caqh-status" class="caqh-status" hidden></p>
-            </div>
+                <p id="fill-note" class="btn-note">
+                  You click Continue and Submit. Minted never submits.
+                </p>
+                <div id="fill-problem" class="notice notice-danger" hidden></div>
 
-            <p id="fill-note" class="btn-note" hidden>
-              Keep this tab open while filling.
-            </p>
+                <!-- S6.2: CAQH push — the offer + attestation. -->
+                <div id="caqh-section" class="caqh" hidden>
+                  <div class="caqh-head">
+                    <p id="caqh-headline" class="caqh-headline"></p>
+                    <span id="caqh-attested" class="caqh-attested"></span>
+                  </div>
+                  <div class="caqh-actions">
+                    <button id="caqh-attest" class="secondary" type="button">
+                      Record attestation
+                    </button>
+                  </div>
+                  <p id="caqh-status" class="caqh-status" hidden></p>
+                </div>
 
-            <div id="fill-results" hidden>
-              <div class="report-card">
-                <p id="fill-report-time" class="report-time" hidden></p>
-                <div id="fill-summary" class="bucket bucket-filled"></div>
-                <div id="fill-attempted" class="bucket bucket-skipped" hidden></div>
-                <div id="fill-not-checked" class="bucket bucket-skipped" hidden></div>
-                <div id="fill-ai-review" class="ai-review" hidden>
-                  <p id="fill-ai-status" class="ai-review-status"></p>
-                  <div class="ai-review-actions">
-                    <button id="fill-ai-accept" class="secondary" type="button">Accept all</button>
-                    <button id="fill-ai-clear" class="secondary" type="button">Clear suggestions</button>
-                    <button id="fill-ai-retry" class="secondary" type="button" hidden>Retry Good Catch</button>
+                <div id="fill-results" hidden>
+                  <p id="fill-report-time" class="lbl" hidden></p>
+                  <div id="fill-summary" class="notice notice-ok"></div>
+                  <div id="fill-manual" class="notice notice-warn" hidden></div>
+                  <div id="fill-your-turn" class="notice notice-neutral" hidden></div>
+                  <p id="fill-event-warn" class="status-line" hidden></p>
+                  <div id="gap-flag" class="gap-flag" hidden></div>
+                  <button id="fill-again" class="secondary" type="button">
+                    Fill this page again
+                  </button>
+                  <!-- Engineer detail and the work-context line: admins of the
+                       CURRENT org only (not canTrainForms, which is any org). -->
+                  <details id="fill-details" class="admin-details" hidden>
+                    <summary>Details (admins only)</summary>
+                    <div id="fill-details-body" class="admin-details-body"></div>
+                    <div id="fill-attempted" class="bucket bucket-skipped" hidden></div>
+                    <div id="fill-not-checked" class="bucket bucket-skipped" hidden></div>
+                    <div id="fill-skipped" class="bucket bucket-skipped" hidden></div>
+                    <!-- AI is off in 0.1.8 (AI_FILL_ENABLED); kept for its return. -->
+                    <div id="fill-ai-review" class="ai-review" hidden>
+                      <p id="fill-ai-status" class="ai-review-status"></p>
+                      <div class="ai-review-actions">
+                        <button id="fill-ai-accept" class="secondary" type="button">Accept all</button>
+                        <button id="fill-ai-clear" class="secondary" type="button">Clear suggestions</button>
+                        <button id="fill-ai-retry" class="secondary" type="button" hidden>Retry Good Catch</button>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+
+                <!-- Log it works with or without a fill (B2). -->
+                <button id="log-link" class="link" type="button" hidden>
+                  Submitted? Log it
+                </button>
+
+                <div id="submit-details" class="submit-form" hidden>
+                  <p id="submit-title" class="task-line-title">Did you submit the form?</p>
+                  <div class="field submit-field">
+                    <label id="payer-ref-label" for="payer-ref-input">Confirmation number (optional)</label>
+                    <input
+                      id="payer-ref-input"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="e.g. RFP-204871"
+                    />
+                  </div>
+                  <div class="field submit-field">
+                    <label for="wip-note-input">Note (optional)</label>
+                    <textarea
+                      id="wip-note-input"
+                      rows="2"
+                      placeholder="What happened?"
+                    ></textarea>
+                  </div>
+                  <!-- The plan: what logging will do. Replaces the old
+                       Checklist task picker (PM, Oct 14). -->
+                  <div id="task-link" class="notice notice-neutral" hidden>
+                    <span id="task-link-single"></span>
+                    <span id="submit-moves" hidden>Logging moves this case to Submitted.</span>
                   </div>
                 </div>
-                <div id="fill-skipped" class="bucket bucket-skipped" hidden></div>
-                <div id="fill-manual" class="bucket bucket-manual" hidden></div>
-              </div>
-              <div id="fill-event-warn" class="error" hidden></div>
-              <div id="gap-flag" class="gap-flag" hidden></div>
-              <div id="submit-details" hidden>
-                <div class="field submit-field">
-                  <label for="payer-ref-input"
-                    >Payer reference / submission ID</label
-                  >
-                  <input
-                    id="payer-ref-input"
-                    type="text"
-                    autocomplete="off"
-                    placeholder="Optional - confirmation or tracking #"
-                  />
-                </div>
-                <div class="field submit-field">
-                  <label for="wip-note-input">Note</label>
-                  <textarea
-                    id="wip-note-input"
-                    rows="2"
-                    placeholder="Optional - anything worth logging with this submission"
-                  ></textarea>
-                </div>
-                <div id="task-link" class="field submit-field" hidden>
-                  <label id="task-link-label" for="task-select">Checklist task</label>
-                  <p id="task-link-single" class="task-link-single" hidden></p>
-                  <select id="task-select" hidden></select>
-                </div>
-              </div>
-              <p id="submit-hint" class="btn-note" hidden>
-                Submit the form on the portal yourself, then log it to the case:
-              </p>
-              <div id="dup-warn" class="dup-warn" hidden></div>
-              <button id="mark-submitted" class="secondary" type="button" hidden>
-                Mark submitted
-              </button>
-              <div id="submit-status" class="logged" hidden></div>
-            </div>
+                <div id="dup-warn" class="notice notice-warn" hidden></div>
+                <button id="mark-submitted" class="primary" type="button" hidden>
+                  Log submission
+                </button>
+                <button id="dup-cancel" class="secondary" type="button" hidden>
+                  Cancel
+                </button>
+                <button id="submit-back" class="link" type="button" hidden>
+                  Not yet. Back to filling
+                </button>
+                <div id="submit-status" class="logged" hidden></div>
+                <div id="submit-next" class="task-actions" hidden></div>
 
-            <div id="touch-section" class="touch-section" hidden>
-              <p class="section-title">Log a touch</p>
+                <div id="nba-section" class="nba" hidden></div>
+
+                <div id="case-context" class="case-details" hidden></div>
+                <a id="open-task-link" class="link" target="_blank" rel="noreferrer" hidden>
+                  Open task in Minted Panel ↗
+                </a>
+              </div>
+            </section>
+            </div>
+            <!-- /#case-fill -->
+          </div>
+
+          <section id="provider-card" class="acc-card qc" aria-label="Provider details" hidden>
+            <button id="provider-toggle" class="acc-head" type="button" aria-expanded="false" aria-controls="provider-body">
+              <span class="acc-title">Provider details</span>
+              <span class="acc-meta">
+                <svg class="acc-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+              </span>
+            </button>
+            <div id="provider-body" class="acc-body" hidden>
+              <div class="card-head">
+                <div>
+                  <div id="provider-name" class="provider-name"></div>
+                  <div id="provider-dob" class="provider-dob" hidden></div>
+                </div>
+                <div class="card-head-actions">
+                  <a
+                    id="open-in-panel"
+                    class="open-link"
+                    target="_blank"
+                    rel="noreferrer"
+                    hidden
+                    >Open in Minted Panel ↗</a
+                  >
+                  <button
+                    id="view-settings-btn"
+                    class="gear-btn"
+                    type="button"
+                    aria-label="Edit layout"
+                    title="Edit layout"
+                    hidden
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path
+                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                      ></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div id="provider-ids" class="detail-sections" hidden></div>
+              <div id="group-card" class="qc-type2" hidden>
+                <div id="group-name" class="qc-group-name"></div>
+                <div id="group-ids" class="detail-sections" hidden></div>
+              </div>
+              <div id="view-settings" class="view-settings" hidden>
+                <p class="view-settings-title">Edit layout</p>
+                <input
+                  id="view-settings-search"
+                  class="view-settings-search"
+                  type="search"
+                  placeholder="Search fields"
+                  aria-label="Search fields"
+                />
+                <p class="view-settings-hint">
+                  Pick the fields to show here. Swap the defaults or add up to
+                  3 more. Saved to your account.
+                </p>
+                <div id="view-settings-fields" class="view-settings-fields"></div>
+                <div id="view-settings-error" class="error" hidden></div>
+                <div class="view-settings-actions">
+                  <button id="view-settings-save" class="primary" type="button">
+                    Save layout
+                  </button>
+                  <button id="view-settings-cancel" class="link" type="button">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="touch-section" class="acc-card touch-section" aria-label="Log a call, email, or note" hidden>
+            <button id="touch-toggle" class="acc-head" type="button" aria-expanded="false" aria-controls="touch-body">
+              <span class="acc-title">Log a call, email, or note</span>
+              <span class="acc-meta">
+                <svg class="acc-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+              </span>
+            </button>
+            <div id="touch-body" class="acc-body" hidden>
               <div class="field">
                 <label for="touch-type">Type</label>
                 <select id="touch-type"></select>
               </div>
               <div class="field">
-                <label for="touch-note">Context</label>
+                <label for="touch-note">What happened?</label>
                 <input
                   id="touch-note"
                   type="text"
                   autocomplete="off"
                   maxlength="300"
-                  placeholder="One line — what happened?"
+                  placeholder="One line is enough"
                 />
               </div>
               <div class="touch-grid">
@@ -512,12 +587,12 @@
                   <select id="touch-outcome"></select>
                 </div>
                 <div class="field">
-                  <label for="touch-followup">Follow-up</label>
+                  <label for="touch-followup">Follow-up date</label>
                   <input id="touch-followup" type="date" />
                 </div>
               </div>
               <details id="touch-more" class="touch-more">
-                <summary>Recipient &amp; tracking ID</summary>
+                <summary>Recipient and tracking ID</summary>
                 <div class="field">
                   <label for="touch-recipient-name">Recipient name</label>
                   <input
@@ -540,21 +615,17 @@
                     id="touch-tracking"
                     type="text"
                     autocomplete="off"
-                    placeholder="Payer reference / submission ID"
+                    placeholder="Payer reference or submission ID"
                   />
                 </div>
               </details>
               <div id="touch-error" class="error" hidden></div>
               <button id="touch-save" class="secondary" type="button">
-                Log touch
+                Log it
               </button>
               <div id="touch-status" class="logged" hidden></div>
             </div>
-
-            <div id="nba-section" class="nba" hidden></div>
-            </div>
-            <!-- /#case-fill -->
-          </div>
+          </section>
         </div>
         <!-- /#case-work -->
         <!-- Empty portal registry: not the same as "page not recognized". -->
@@ -581,14 +652,6 @@
           </button>
         </div>
 
-        <div id="work-portal-access" class="capture" hidden>
-          <p class="capture-summary">
-            Minted needs access to the selected Work form's site to read and fill this validated page.
-          </p>
-          <button id="work-portal-access-grant" class="secondary" type="button">
-            Grant access to this Work site
-          </button>
-        </div>
       </section>
     </main>
     <footer id="panel-footer" class="panel-footer">

@@ -52,7 +52,7 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect([...counts].filter(([, n]) => n > 1).map(([id]) => id)).toEqual([]);
   });
 
-  it("exposes two-tone AI review with explicit accept and clear actions", () => {
+  it("keeps the two-tone AI review behind AI_FILL_ENABLED (off in 0.1.8)", () => {
     expect(doc.getElementById("fill-ai-review")).not.toBeNull();
     expect(doc.getElementById("fill-ai-status")).not.toBeNull();
     expect(doc.getElementById("fill-ai-accept")?.textContent).toContain("Accept all");
@@ -61,7 +61,9 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     const code = codeOf(MAIN);
     expect(code).toContain('type: "ACCEPT_AI_FILL"');
     expect(code).toContain('type: "CLEAR_AI_FILL"');
-    expect(code).toContain('Confirmed static: ${staticFilled} · AI suggestions: ${aiFilled}');
+    expect(code).toContain("AI_FILL_ENABLED ? (summary.aiReview ?? null) : null");
+    // The review card lives inside the admin Details, never on the result.
+    expect(doc.getElementById("fill-details")?.contains(doc.getElementById("fill-ai-review"))).toBe(true);
     expect(code).toContain("await matchUnmappedFields(boundedControls, prepared.data.tokenCatalog)");
   });
 
@@ -256,16 +258,53 @@ describe("sidepanel markup ↔ main.ts wiring", () => {
     expect(readiness).toContain("!currentSelectionAllowsCaseWork()");
     expect(readiness).toContain("renderHandoffBanner()");
 
-    const banner = codeOf(
-      MAIN.slice(MAIN.indexOf("function renderHandoffBanner("), MAIN.indexOf("async function switchOrgForHandoff(")),
+    // 0.1.8: provenance is the task card's "Opened from Minted Panel" line,
+    // still gated on the exact applied selection.
+    const card = codeOf(
+      MAIN.slice(MAIN.indexOf("function renderTaskCard("), MAIN.indexOf("// Back to \"nothing logged yet\"")),
     );
-    expect(banner).toContain("currentHandoffSelectionIsApplied(record)");
+    expect(card).toContain("currentHandoffSelectionIsApplied()");
+    expect(card).toContain("taskOrigin.hidden = !launched");
 
     const apply = codeOf(
       MAIN.slice(MAIN.indexOf("async function maybeApplyHandoff("), MAIN.indexOf("async function refreshActiveCase(")),
     );
     expect(apply).toContain("const committedSelection");
     expect(apply).toContain("appliedHandoffSelection = committedSelection");
+  });
+
+  it("lays Work cases out as three collapsible sections (0.1.8)", () => {
+    for (const [section, toggle, body] of [
+      ["task-card", "task-toggle", "task-body"],
+      ["provider-card", "provider-toggle", "provider-body"],
+      ["touch-section", "touch-toggle", "touch-body"],
+    ] as const) {
+      const button = doc.getElementById(toggle)!;
+      expect(doc.getElementById(section)!.contains(button), `#${toggle} in #${section}`).toBe(true);
+      expect(button.getAttribute("aria-controls")).toBe(body);
+      expect(button.hasAttribute("aria-expanded")).toBe(true);
+    }
+    // Provider details keeps its layout editor (PM no-regression rule).
+    const providerBody = doc.getElementById("provider-body")!;
+    for (const id of ["view-settings-btn", "view-settings", "provider-ids", "group-card", "open-in-panel"]) {
+      expect(providerBody.contains(doc.getElementById(id)), `#${id} in Provider details`).toBe(true);
+    }
+  });
+
+  it("puts the site access ask in Fill's spot and drops the task picker", () => {
+    const taskBody = doc.getElementById("task-body")!;
+    for (const id of ["work-portal-access", "fill-btn", "log-link", "submit-details", "case-context", "open-task-link"]) {
+      expect(taskBody.contains(doc.getElementById(id)), `#${id} in the task card`).toBe(true);
+    }
+    expect(doc.getElementById("task-select")).toBeNull();
+    expect(codeOf(MAIN)).not.toContain('"COMPLETE_TASK_STEP"');
+  });
+
+  it("shows the A6 org prompt above the org picker, outside #case-work", () => {
+    const prompt = doc.getElementById("org-switch")!;
+    const orgField = doc.getElementById("org-field")!;
+    expect(doc.getElementById("case-work")!.contains(prompt)).toBe(false);
+    expect(prompt.compareDocumentPosition(orgField) & 4).toBe(4);
   });
 
   it("has retired the Browse-providers dropdown", () => {

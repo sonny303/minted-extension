@@ -21,6 +21,25 @@ function code(names: string[], listenerTargets: string[] = []) {
   return ts.transpileModule(selected, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 }
 
+const FILL_TAB_MOVED = "The form's tab is no longer the active tab. Switch back to it, then click Fill this page again.";
+
+// 0.1.8: the click handler reports problems on the task card and re-renders
+// it. These are display-only, so the safety oracles stub them.
+function fillUiStubs() {
+  return {
+    showFillProblem: vi.fn(),
+    renderTaskCard: vi.fn(),
+    fillRunning: false,
+    fillSelectionKey: () => "selection",
+    fillLostPageText: () => "Minted lost touch with the page.",
+    FILL_TAB_MOVED,
+    FILL_PAGE_CHANGED: "page changed",
+    FILL_PAGE_MOVED_ON: "page moved on",
+    FILL_SELECTION_CHANGED: "selection changed",
+    FILL_FAILED: "fill failed",
+  };
+}
+
 interface WorkFillHarnessRecord {
   tuple: {
     ownerKind: string;
@@ -83,7 +102,9 @@ function fillClickHarness(options: {
     }
     return { ok: true, data: null };
   });
+  const ui = fillUiStubs();
   const scope: Context = createContext({
+    ...ui,
     fillBtn, fillNote, mainError, setError, requests,
     groupSelectionWrite: Promise.resolve(),
     selectedGroupId,
@@ -116,6 +137,7 @@ function fillClickHarness(options: {
   ], ["fillBtn"]), scope);
   return {
     dom, scope, fillBtn, requests, setError, mainError, queryActiveTab, groupWriteStarted, canUseNano,
+    showFillProblem: ui.showFillProblem,
     finishGroupWrite: releaseGroupWrite,
     setActiveTab: (nextTabId: number, nextPageUrl: string) => {
       tabId = nextTabId;
@@ -154,7 +176,7 @@ describe("fill selection safety", () => {
       workFormUrlMatchesPage,
       portalRows: [], sharedPortalRows: [],
       portal: null, portalTabId: null,
-      detectedPageUrl: null, detectedPortalIdentity: null,
+      detectedPageUrl: null, detectedPortalIdentity: null, detectedTabId: null,
       invalidateFillSelection: vi.fn(),
       updateFillReady: vi.fn(), renderActiveCases: vi.fn(), renderCapture: vi.fn(),
       renderCaqh: vi.fn(), refreshPortalAccessPrompt: vi.fn(),
@@ -339,10 +361,7 @@ describe("fill selection safety", () => {
     });
 
     harness.fillBtn.click();
-    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalledWith(
-      harness.mainError,
-      "The enrollment form is no longer the active tab - switch back to it and try again.",
-    ));
+    await vi.waitFor(() => expect(harness.showFillProblem).toHaveBeenCalledWith(FILL_TAB_MOVED, "tab"));
 
     expect(harness.requests).toEqual([]);
   });
@@ -381,7 +400,7 @@ describe("fill selection safety", () => {
     await harness.groupWriteStarted;
     harness.setActiveTab(8, "https://other.example/form");
     harness.finishGroupWrite();
-    await vi.waitFor(() => expect(harness.setError).toHaveBeenCalled());
+    await vi.waitFor(() => expect(harness.showFillProblem).toHaveBeenCalled());
 
     expect(harness.queryActiveTab).toHaveBeenCalledTimes(2);
     expect(harness.requests.some((request) => request.type === "PREPARE_AI_FILL")).toBe(false);
@@ -398,6 +417,7 @@ describe("fill selection safety", () => {
     const renderFillSummary = vi.fn();
     const clearFillResults = vi.fn();
     const scope: Context = createContext({
+      ...fillUiStubs(),
       groupSelect, fillBtn, selectedGroupId: "A", loadGeneration: 1, fillSelectionRevision: 0,
       isFillReady: () => true, syncSelectedGroup: async () => {},
       renderQuickCards: vi.fn(), refreshFacilityCards: vi.fn(),
@@ -467,6 +487,7 @@ describe("fill selection safety", () => {
       return { ok: true, data: null };
     });
     const scope: Context = createContext({
+      ...fillUiStubs(),
       fillBtn, selectedGroupId: "group", loadGeneration: 1, fillSelectionRevision: 0,
       isFillReady: () => true, syncSelectedGroup: async () => {}, clearFillResults: vi.fn(),
       portal: null, portalTabId: null, lastFill: null, lastFillTabId: null, lastFillPageUrl: null,
@@ -565,6 +586,9 @@ describe("Work portal host permission prompt", () => {
         permissions: { contains: permissionContains } },
       portalAccess, workPortalAccess, workPortalAccessGrant,
       workPortalAccessCandidate: null, portalAccessPromptRevision: 0,
+      // 0.1.8 copy for the access ask in Fill's spot.
+      workAccessDenied: false, workAccessTitle: {}, workAccessNote: {},
+      payerLabel: () => "Aetna", fillNotice: vi.fn(), renderTaskCard: vi.fn(),
       portalRegistryLoaded: options.registryLoaded ?? true, portalRows: options.rows ?? [],
       portal: { portalId: workRecord.tuple.portalId, key: workRecord.tuple.portalKey },
       portalTabId: 7, panelMode: "case",
@@ -662,6 +686,7 @@ describe("Work portal host permission prompt", () => {
       chrome: { permissions: { request, remove } },
       workPortalAccess, workPortalAccessGrant: grantButton,
       workPortalAccessCandidate: { ...target, pattern: "https://payer.test/*" },
+      workAccessDenied: false,
       activeWorkState: { status: "active", record: workRecord },
       portalTabId: 7, portalRows: [], portalRegistryLoaded: false, panelMode: "case",
       sendToBackground, refreshActiveWork, refreshPortalAccessPrompt,

@@ -69,14 +69,14 @@ export type StructuredTouchValidation =
  * YYYY-MM-DD. */
 export function validateStructuredTouch(draft: StructuredTouchDraft): StructuredTouchValidation {
   if (!TOUCH_TYPE_VALUES.has(draft.touchType)) {
-    return { ok: false, message: "Pick a touch type." };
+    return { ok: false, message: "Pick a type." };
   }
   const outcome = cleanText(draft.outcome);
   if (outcome != null && !DISPOSITION_VALUES.has(outcome)) {
     return { ok: false, message: "Pick a valid outcome." };
   }
   if (outcome === "other" && cleanText(draft.note) == null) {
-    return { ok: false, message: 'Outcome "Other" needs a one-line context.' };
+    return { ok: false, message: "Add one line about what happened." };
   }
   const followUp = cleanText(draft.followUpDate);
   if (followUp != null && !ISO_DATE_RE.test(followUp)) {
