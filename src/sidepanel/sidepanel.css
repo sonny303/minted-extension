@@ -1977,17 +1977,21 @@ a.link:focus-visible {
   border: 1px solid var(--mp-border);
   border-radius: var(--mp-radius-sm);
 }
+/* Both rows wrap: four actions (Re-capture, next page, add field, import)
+   don't fit beside the summary in a narrow side panel. */
 .capture-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
 }
 .capture-head-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 4px 10px;
+  min-width: 0;
 }
 .capture-summary {
   margin: 0;
@@ -2029,7 +2033,9 @@ a.link:focus-visible {
 }
 .capture-row-label {
   font-size: 12px;
-  flex: 1;
+  /* A basis, so a long payer label pushes the library note and chips to the
+     next line instead of being squeezed to one character per line. */
+  flex: 1 1 160px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -2041,6 +2047,10 @@ a.link:focus-visible {
   flex-basis: 100%;
   font-size: 11px;
   color: var(--mp-primary);
+}
+/* A row the last send held back (option list over the panel's cap). */
+.capture-row-evidence.capture-row-held {
+  color: #92400e;
 }
 /* 2026-08-19 manual mapping: the inline per-row correction panel, the pick
    status line, and the "added by hand" affordances. */

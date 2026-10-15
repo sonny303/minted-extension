@@ -258,10 +258,10 @@ Rules that bite:
 ```
 
 `sortOrder` restarts at 0 on each page (it's the position within the page).
-`options` hold the **full** vocabulary — the probe is uncapped. The extension's
-own capture and the panel's write boundary still cap lists at 50
-(`CONTROL_OPTIONS_CAP`, a longer list is rejected), so note any row over 50
-when handing a capture to the trainer.
+`options` hold the **full** vocabulary — the probe is uncapped. The panel's
+write boundary rejects a list over its cap (50 until sonny303/mintedpanel#518
+deploys); after an import, Send for approval holds such a row with the reason
+and sends the rest, so note any row over 50 when handing a capture over.
 Selectors are the probe's, verbatim — the scanner's selector IS the row's key.
 `advance` is `null` only on the final (submit) page. On a page you couldn't get
 past, keep `advance` with its `requires` and a route with `leadsTo: null` — the
@@ -287,6 +287,11 @@ readiness exactly as computed.
 Tell the user: pages walked, fields found, how many have a high-confidence
 suggestion, the `human`/`undecided` rows they need to look at, and anything you
 couldn't reach (cross-origin frames, unanswered branches, closed shadow DOM).
-Point them at the panel trainer
-(`/admin/payer-admin/setup/{payerId}?tab=templates`) for approval — that is
-where a suggestion becomes a fill.
+Then the hand-off: in the extension, **Train forms** → select the payer and
+the form (it must be registered in the panel's `portals` table; a provisional
+key that differs from the registered one is fine, the import asks) → open the
+form → **Import file** → review → **Send for approval**. That proposes the rows
+to the shared library; approval happens in the panel trainer
+(`/admin/payer-admin/setup/{payerId}?tab=templates`) — that is where a
+suggestion becomes a fill. Claude's suggestions show on each row in the
+extension but are never sent.

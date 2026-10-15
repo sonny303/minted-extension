@@ -141,6 +141,12 @@ import {
   type CaptureRow,
   type CaptureSession,
 } from "../shared/capture";
+import {
+  isOptionListCapRefusal,
+  optionListHeldReason,
+  parseCaptureFile,
+  planCaptureImport,
+} from "../shared/captureImport";
 import { assignSortOrder } from "../shared/trainForms";
 import { browseableProviders } from "../shared/browseProviders";
 import { isSandboxProvider } from "../shared/sandbox";
@@ -1830,6 +1836,17 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
             control_options: row.options,
           });
         } catch (error) {
+          // An option list longer than the panel's cap is refused for THAT
+          // row alone (a 422 naming control_options). Hold the row with the
+          // reason and send the rest; every other failure still stops the
+          // send. The next send retries it, so a raised cap needs no re-import.
+          if (error instanceof ApiError && isOptionListCapRefusal(error.status, error.message)) {
+            rows.push({
+              ...row,
+              heldReason: optionListHeldReason(row.options?.length ?? 0, error.message),
+            });
+            continue;
+          }
           await throwWithStaleTrainCaptureInvalidated(error, targetRequest);
         }
         await exactTrainPortal(targetRequest);
@@ -1837,10 +1854,42 @@ export async function handleRequest(request: BgRequest): Promise<unknown> {
         // suggestions are org-scoped memory (field_dictionary) and training
         // has no org. Nothing to fold back; the trainer decides in the
         // editor, which is where the whole registry now lives.
-        rows.push({ ...row, sent: true });
+        rows.push({ ...row, sent: true, heldReason: null });
       }
       const next: CaptureSession = { ...current, rows };
       return commitCaptureForCurrentTarget(targetRequest, next);
+    }
+    case "IMPORT_CAPTURE": {
+      // A Claude-written capture file becomes the selected form's capture,
+      // ready for the same review and the same propose-only send as a scan.
+      // It touches no page (nothing is scanned, so no tab check) and writes
+      // nothing to the panel; the registry check below is what requires the
+      // form to be registered at its current generation.
+      const targetRequest: VersionedTrainTarget = {
+        portalKey: request.portalKey,
+        mappingGeneration: request.mappingGeneration,
+        targetRevision: request.targetRevision,
+      };
+      const parsed = parseCaptureFile(request.fileText);
+      if (!parsed.ok) throw new Error(parsed.reason);
+      await exactTrainPortal(targetRequest);
+      return serializeCaptureMutation(async () => {
+        const target = await assertCurrentTrainTarget(targetRequest);
+        if (target.portalKey == null || target.mappingGeneration == null) {
+          throw new Error("Select a form configuration before importing a capture file.");
+        }
+        const previous = await readCaptureSession();
+        const plan = planCaptureImport({
+          file: parsed.file,
+          target: { portalKey: target.portalKey, mappingGeneration: target.mappingGeneration },
+          existing: captureSessionMatchesTarget(previous, target) ? previous : null,
+          replaceExisting: request.replaceExisting === true,
+          acceptPortalKey: request.acceptPortalKey ?? null,
+        });
+        if (!plan.ok) throw new Error(plan.reason);
+        await writeCaptureSession(plan.session);
+        return { session: plan.session, summary: plan.summary };
+      });
     }
     case "LIST_SHARED_PORTALS": {
       if ((await readPanelMode()) !== "train") {

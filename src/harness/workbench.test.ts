@@ -14,6 +14,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { readFileSync } from "node:fs";
 // @ts-expect-error — the mock server is an untyped .mjs harness module,
 // deliberately outside the typechecked tree (it mirrors the panel repo's own
 // scripts/mock-api-server.mjs pattern).
@@ -2513,6 +2514,247 @@ describe("BITE-CAP-05 — identify page after scan (multi-page session)", () => 
         captureMode: "auto",
       }),
     ).rejects.toThrow(/Train forms/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IMPORT_CAPTURE — a Claude-written capture file (form-captures/) loaded into
+// Train forms, then proposed through the SAME shared propose-only path a scan
+// uses. Driven with the real BlueKC file against the mock panel, with the
+// panel's 50-option cap simulated at the fetch boundary (the cap the deployed
+// panel enforces until sonny303/mintedpanel#518 raises it).
+// ---------------------------------------------------------------------------
+describe("IMPORT_CAPTURE — Claude capture file → Train forms → shared proposals", () => {
+  const BLUEKC_TEXT = readFileSync(
+    new URL("../../form-captures/bluekc-network-interest-form.capture.json", import.meta.url),
+    "utf8",
+  );
+  const BLUEKC = JSON.parse(BLUEKC_TEXT) as {
+    rows: Array<{ selector: string; pageStep: string; sortOrder: number; options?: unknown[] }>;
+  };
+  const bluekcRow = {
+    id: "shared-bluekc-network-interest",
+    orgId: null,
+    portalKey: "bluekc-network-interest-form",
+    name: "Blue KC network interest form",
+    payerId: null,
+    payerName: "Blue KC",
+    caseType: "enrollment",
+    mappingGeneration: 2,
+    requiresExplicitSelection: true,
+    formUrl: "https://bluekc.az1.qualtrics.com/jfe/form/SV_3jAoF5MwXJB7yKO",
+    isVerified: false,
+    lastVerifiedAt: null,
+    provenAt: null,
+    urlChangedAt: null,
+    createdAt: "2026-10-14T00:00:00Z",
+    updatedAt: "2026-10-14T00:00:00Z",
+  } satisfies PortalRegistryRow;
+  let target: { portalKey: string; mappingGeneration: number; targetRevision: number };
+  let fetchBefore: typeof fetch;
+  let proposals: Array<Record<string, unknown>>;
+  let panelOptionsCap: number;
+
+  beforeAll(async () => {
+    await import("../background/index");
+  });
+
+  beforeEach(async () => {
+    stub.reset();
+    mock.state.sharedProposed.clear();
+    mock.state.sharedPortals.push(bluekcRow);
+    proposals = [];
+    panelOptionsCap = 50;
+    fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === "/api/shared-field-maps" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        proposals.push(body);
+        // The deployed panel's write boundary: a longer list is REJECTED.
+        const options = body.control_options;
+        if (Array.isArray(options) && options.length > panelOptionsCap) {
+          return new Response(JSON.stringify({
+            data: null,
+            error: `control_options cannot exceed ${panelOptionsCap} entries`,
+            meta: null,
+          }), { status: 422, headers: { "content-type": "application/json" } });
+        }
+      }
+      return fetchBefore(input, init);
+    }) as typeof fetch;
+    await writePanelMode("train");
+    const { handleRequest } = await import("../background/index");
+    const state = await handleRequest({
+      type: "SET_TRAIN_TARGET",
+      portalKey: bluekcRow.portalKey,
+      mappingGeneration: bluekcRow.mappingGeneration,
+    }) as import("../shared/trainTarget").TrainTargetState;
+    target = {
+      portalKey: bluekcRow.portalKey,
+      mappingGeneration: bluekcRow.mappingGeneration,
+      targetRevision: state.revision,
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = fetchBefore;
+    mock.state.sharedProposed.clear();
+    const index = mock.state.sharedPortals.indexOf(bluekcRow);
+    if (index >= 0) mock.state.sharedPortals.splice(index, 1);
+  });
+
+  it("imports the BlueKC file as the selected form's capture, proposing nothing", async () => {
+    const { handleRequest } = await import("../background/index");
+    const imported = await handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT }) as {
+      session: import("../shared/capture").CaptureSession;
+      summary: import("../shared/captureImport").CaptureImportSummary;
+    };
+
+    expect(imported.summary).toMatchObject({
+      fields: BLUEKC.rows.length,
+      pages: new Set(BLUEKC.rows.map((r) => r.pageStep)).size,
+      replaced: 0,
+      importedFrom: null,
+    });
+    // The Train target's generation, not the file's (it carries none).
+    expect(imported.session).toMatchObject({ portalKey: target.portalKey, mappingGeneration: 2 });
+    expect(imported.session.rows.map((r) => [r.selector, r.pageStep, r.sortOrder])).toEqual(
+      BLUEKC.rows.map((r) => [r.selector, r.pageStep, r.sortOrder]),
+    );
+    expect(proposals).toEqual([]);
+    expect(mock.state.sharedProposed.size).toBe(0);
+
+    // It is the ordinary capture now: restored by GET_CAPTURE like a scan.
+    expect(await handleRequest({ type: "GET_CAPTURE", ...target })).toEqual(imported.session);
+  });
+
+  it("sends every row but the over-cap lists, holds those with the reason, then sends them once the cap rises", async () => {
+    const { handleRequest } = await import("../background/index");
+    const { captureCounts } = await import("../shared/capture");
+    await handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT });
+
+    const overCap = BLUEKC.rows.filter((r) => (r.options?.length ?? 0) > 50).map((r) => r.selector);
+    expect(overCap).toHaveLength(2);
+
+    const first = await handleRequest({ type: "SEND_CAPTURE", ...target }) as import("../shared/capture").CaptureSession;
+    expect(captureCounts(first)).toMatchObject({
+      total: BLUEKC.rows.length,
+      sent: BLUEKC.rows.length - 2,
+      held: 2,
+    });
+    for (const selector of overCap) {
+      expect(first.rows.find((r) => r.selector === selector)).toMatchObject({
+        sent: false,
+        heldReason: "Not sent: Minted Panel accepts up to 50 options per field and this one has 146. Send again once the panel takes longer lists.",
+      });
+    }
+    expect(mock.state.sharedProposed.size).toBe(BLUEKC.rows.length - 2);
+
+    // Shape only, propose only: the file's page model rides along; no token,
+    // decision, suggestion or value key is ever in a proposal.
+    const bySelector = new Map(BLUEKC.rows.map((r) => [r.selector, r]));
+    expect(proposals).toHaveLength(BLUEKC.rows.length);
+    for (const body of proposals) {
+      const fileRow = bySelector.get(String(body.selector))!;
+      expect(body).toMatchObject({
+        portal_key: target.portalKey,
+        expected_mapping_generation: 2,
+        page_step: fileRow.pageStep,
+        sort_order: fileRow.sortOrder,
+      });
+      for (const key of Object.keys(body)) {
+        expect([
+          "portal_key", "expected_mapping_generation", "selector", "field_label", "form_section",
+          "page_step", "field_type", "sort_order", "control_options",
+        ]).toContain(key);
+      }
+    }
+    for (const map of mock.state.sharedProposed.values()) {
+      expect(map).toMatchObject({ orgId: null, status: "proposed", token: null });
+    }
+
+    // The panel deploys the 1000 cap: the next send retries ONLY the held rows.
+    panelOptionsCap = 1000;
+    proposals = [];
+    const second = await handleRequest({ type: "SEND_CAPTURE", ...target }) as import("../shared/capture").CaptureSession;
+    expect(proposals.map((p) => p.selector).sort()).toEqual([...overCap].sort());
+    expect((proposals[0]?.control_options as unknown[]).length).toBe(146);
+    expect(captureCounts(second)).toMatchObject({ sent: BLUEKC.rows.length, held: 0 });
+    expect(second.rows.every((r) => r.heldReason == null)).toBe(true);
+    expect(mock.state.sharedProposed.size).toBe(BLUEKC.rows.length);
+  });
+
+  it("still fails the whole send on any other refusal", async () => {
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT });
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname === "/api/shared-field-maps" && init?.method === "POST") {
+        return new Response(JSON.stringify({ data: null, error: "field_type must be one of text", meta: null }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+    await expect(handleRequest({ type: "SEND_CAPTURE", ...target })).rejects.toThrow(/field_type/);
+  });
+
+  it("asks before importing under another key or over an existing capture", async () => {
+    const { handleRequest } = await import("../background/index");
+    const renamed = BLUEKC_TEXT.replace(
+      '"portalKey": "bluekc-network-interest-form"',
+      '"portalKey": "bluekc-provisional"',
+    );
+    await expect(handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: renamed })).rejects.toThrow(
+      /captured for "bluekc-provisional", not the selected form "bluekc-network-interest-form"/,
+    );
+    const accepted = await handleRequest({
+      type: "IMPORT_CAPTURE",
+      ...target,
+      fileText: renamed,
+      acceptPortalKey: "bluekc-provisional",
+    }) as { session: import("../shared/capture").CaptureSession; summary: { importedFrom: string | null } };
+    expect(accepted.session.portalKey).toBe(target.portalKey);
+    expect(accepted.summary.importedFrom).toBe("bluekc-provisional");
+
+    await expect(handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT })).rejects.toThrow(
+      /already has a capture/,
+    );
+    const replaced = await handleRequest({
+      type: "IMPORT_CAPTURE",
+      ...target,
+      fileText: BLUEKC_TEXT,
+      replaceExisting: true,
+    }) as { summary: { replaced: number } };
+    expect(replaced.summary.replaced).toBe(BLUEKC.rows.length);
+  });
+
+  it("refuses outside Train forms, for a stale target, and for a form the registry lacks", async () => {
+    const { handleRequest } = await import("../background/index");
+    await expect(
+      handleRequest({ type: "IMPORT_CAPTURE", ...target, targetRevision: target.targetRevision + 1, fileText: BLUEKC_TEXT }),
+    ).rejects.toThrow(/selected form configuration changed/);
+
+    const index = mock.state.sharedPortals.indexOf(bluekcRow);
+    mock.state.sharedPortals.splice(index, 1);
+    // An unregistered key is the registry's own 404 (the mock mirrors it).
+    await expect(handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT })).rejects.toThrow(
+      /not found|no longer available/,
+    );
+    mock.state.sharedPortals.push(bluekcRow);
+
+    await expect(handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: "{}" })).rejects.toThrow(
+      /form capture this version reads/,
+    );
+
+    await writePanelMode("case");
+    await expect(handleRequest({ type: "IMPORT_CAPTURE", ...target, fileText: BLUEKC_TEXT })).rejects.toThrow(
+      /Train forms/,
+    );
+    expect(stub.sessionStore.get("capture.session") ?? null).toBeNull();
   });
 });
 
