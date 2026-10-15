@@ -160,6 +160,9 @@ export interface FillProbeResult {
   radioGroup: boolean;
   pageFields: number;
   resolvedPage?: string | null;
+  /** Set when a "Page N" map's page was proven by its own trained selectors
+   * (DYN-PAGE-03, `applySequencePageEvidence`) rather than by the URL. */
+  pageEvidence?: "fingerprint";
 }
 
 export interface SandboxFillSummary {

@@ -503,6 +503,132 @@ describe("applyFillAcrossFrames public probe/apply boundary", () => {
     expect(result.fieldOutcomes?.[0]?.outcome).not.toBe("page_unknown");
   });
 
+  // DYN-PAGE-03. Production `humana-tricare`: every approved map is on
+  // "Page 2" and the URL tail is `index`. The content probe proves the bucket
+  // by its own selectors (pinned in fillEngine.test.ts) and marks each found
+  // control `pageEvidence: "fingerprint"`; a missing one comes back page_unknown.
+  describe("a Page N bucket proven by its own selectors (Humana Tricare)", () => {
+    const HUMANA_URL = "https://infocenter.humana-military.com/hgbprovider/providercertification/home/index?ProviderType=PT";
+    const humanaMaps = ["#firstname", "#lastname", "#npi", "#dob"].map((selector, index): FillInstruction => ({
+      ...instruction,
+      mapId: `4f0d6e10-4f6f-4a7d-8d80-5a3a16ea4e7${index}`,
+      label: selector,
+      selector,
+      pageStep: "Page 2",
+    }));
+    type FrameRows = Record<string, Record<string, unknown>>;
+
+    function installHumana(
+      rowsByFrame: Record<number, FrameRows>,
+      pageFieldsByFrame: Record<number, number> = {},
+    ): { applied: Array<{ frameId: number; instruction: FillInstruction }> } {
+      const applied: Array<{ frameId: number; instruction: FillInstruction }> = [];
+      vi.stubGlobal("chrome", {
+        webNavigation: {
+          getAllFrames: vi.fn().mockResolvedValue(Object.keys(rowsByFrame).map((frameId) => ({
+            frameId: Number(frameId),
+            url: Number(frameId) === 0 ? HUMANA_URL : "about:blank",
+          }))),
+        },
+        tabs: {
+          sendMessage: vi.fn(async (_: number, message: ContentRequest, options: { frameId: number }) => {
+            if (message.type === "PROBE_FILL") {
+              const rows = rowsByFrame[options.frameId] ?? {};
+              return {
+                ok: true,
+                data: message.instructions.map((row) => probeRow({
+                  mapId: row.mapId,
+                  pageFields: pageFieldsByFrame[options.frameId] ?? 4,
+                  ...(rows[row.selector] ?? { pageStatus: "page_unknown", targetStatus: "missing" }),
+                })),
+              };
+            }
+            if (message.type === "APPLY_FILL") {
+              const routed = message.instructions[0]!;
+              applied.push({ frameId: options.frameId, instruction: routed });
+              return {
+                ok: true,
+                data: {
+                  filled: [routed.label],
+                  attemptedLabels: [routed.label],
+                  skipped: [],
+                  pageFields: 4,
+                  fieldOutcomes: [{
+                    mapId: routed.mapId,
+                    targetKey: routed.telemetry!.targetKey,
+                    frameKey: routed.telemetry!.frameKey,
+                    stepKey: routed.telemetry!.stepKey,
+                    attempted: true,
+                    outcome: "verified",
+                    reasonCode: null,
+                  }],
+                },
+              };
+            }
+            throw new Error(`unexpected ${message.type}`);
+          }),
+        },
+      });
+      return { applied };
+    }
+
+    const proven = (targetStatus: string) => ({ pageStatus: "eligible", targetStatus, pageEvidence: "fingerprint" });
+
+    it("writes each proven unique control, reports a hidden one as hidden, and a missing one as page_unknown", async () => {
+      const { applied } = installHumana({
+        0: { "#firstname": proven("unique"), "#lastname": proven("unique"), "#npi": proven("hidden") },
+      });
+      const result = await applyFillAcrossFrames(1, humanaMaps, { captureV2: true });
+      expect(applied.map(({ frameId, instruction: routed }) => [frameId, routed.selector, routed.resolvedPage, routed.telemetry?.stepKey])).toEqual([
+        [0, "#firstname", null, null],
+        [0, "#lastname", null, null],
+      ]);
+      expect(result.filled).toEqual(["#firstname", "#lastname"]);
+      expect(result.fieldOutcomes?.map((row) => [row.outcome, row.reasonCode])).toEqual([
+        ["verified", null],
+        ["verified", null],
+        ["hidden", "field_hidden"],
+        ["page_unknown", "page_unknown"],
+      ]);
+      expect(result.skipped).toEqual([
+        { label: "#npi", reason: "field is hidden on this page", mapId: humanaMaps[2]!.mapId, kind: "hidden" },
+        { label: "#dob", reason: "current wizard page could not be confirmed", mapId: humanaMaps[3]!.mapId, kind: "page_unknown" },
+      ]);
+      // Absence on a sequence page is never drift.
+      expect(result.fieldOutcomes?.some((row) => row.outcome === "not_found")).toBe(false);
+    });
+
+    it("writes nothing when the probe could not prove the bucket", async () => {
+      const { applied } = installHumana({ 0: {} });
+      const result = await applyFillAcrossFrames(1, humanaMaps, { captureV2: true });
+      expect(applied).toEqual([]);
+      expect(result.filled).toEqual([]);
+      expect(result.fieldOutcomes?.map((row) => [row.outcome, row.reasonCode])).toEqual(
+        humanaMaps.map(() => ["page_unknown", "page_unknown"]),
+      );
+    });
+
+    it("lets another frame with fields that could not place the map veto a proven write", async () => {
+      const { applied } = installHumana({
+        0: { "#firstname": proven("unique"), "#lastname": proven("unique"), "#npi": proven("unique") },
+        3: {},
+      });
+      const result = await applyFillAcrossFrames(1, humanaMaps, { captureV2: true });
+      expect(applied).toEqual([]);
+      expect(result.fieldOutcomes?.every((row) => row.outcome === "page_unknown")).toBe(true);
+    });
+
+    it("ignores an unproven frame with no fields, as it does for an exact page", async () => {
+      const { applied } = installHumana({
+        0: { "#firstname": proven("unique"), "#lastname": proven("unique"), "#npi": proven("unique") },
+        5: {},
+      }, { 5: 0 });
+      const result = await applyFillAcrossFrames(1, humanaMaps, { captureV2: true });
+      expect(applied.map(({ instruction: routed }) => routed.selector)).toEqual(["#firstname", "#lastname", "#npi"]);
+      expect(result.fieldOutcomes?.at(-1)).toMatchObject({ outcome: "page_unknown" });
+    });
+  });
+
   it("keeps page_unknown when another frame reports fields that could contain the target", async () => {
     let applied = false;
     installFrames((message, frameId) => {
