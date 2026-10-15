@@ -439,18 +439,16 @@ panel, and nothing else would catch it.
   (`primeFacesListItems`), and the fill refuses a list whose items' text
   doesn't match its options.
 - **Capture is shape-only, never values** — labels, selectors, control types,
-  and option vocabularies. Option lists are capped at 50 by default
-  (`CONTROL_OPTIONS_CAP`, `captureScan.ts`) because the panel's write boundary
-  rejects longer lists; that truncates real dropdowns (US states, BlueKC's 146
-  specialties). Only the capture probe, which never proposes, scans uncapped
-  (`scanCapturableFields({ optionsCap: Infinity })`). Structured controls record `{value,label}[]` for
+  and option vocabularies. Structured controls record `{value,label}[]` for
   `<select>`, radio groups, and valued checkboxes; `selected`/`checked`/typed
   values are never read. Empty option lists are ignored on re-capture.
   A vocabulary is kept up to 1000 entries (`CONTROL_OPTIONS_CAP`,
   `src/content/captureScan.ts`) — the panel's own write-boundary cap, which
   **rejects** (422) a longer list rather than truncating it. That covers a
   US-state dropdown, a 146-entry specialty list, an 856-entry taxonomy menu.
-  The cap is a locked contract: raise it panel-first, never one-sided.
+  The cap is a locked contract: raise it panel-first, never one-sided. Only
+  the capture probe, which never proposes, scans uncapped
+  (`scanCapturableFields({ optionsCap: Infinity })`).
 - **Manual field mapping exists because a scan only sees what is rendered AND
   wired at that moment.** A field a portal reveals after an earlier answer is
   legitimately missed. `+ Add field` enters pick mode

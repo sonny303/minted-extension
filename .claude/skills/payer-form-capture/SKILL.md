@@ -258,10 +258,12 @@ Rules that bite:
 ```
 
 `sortOrder` restarts at 0 on each page (it's the position within the page).
-`options` hold the **full** vocabulary — the probe is uncapped. The panel's
-write boundary rejects a list over its cap (50 until sonny303/mintedpanel#518
-deploys); after an import, Send for approval holds such a row with the reason
-and sends the rest, so note any row over 50 when handing a capture over.
+`options` hold the **full** vocabulary — the probe is uncapped. The extension's
+own capture and the panel's write boundary cap lists at 1000
+(`CONTROL_OPTIONS_CAP`; production enforces 50 until sonny303/mintedpanel#518 is
+deployed). After an import, Send for approval holds any row the panel refuses
+for its live cap, with the reason, and sends the rest; the next send retries it,
+so a raised cap needs no re-import.
 Selectors are the probe's, verbatim — the scanner's selector IS the row's key.
 `advance` is `null` only on the final (submit) page. On a page you couldn't get
 past, keep `advance` with its `requires` and a route with `leadsTo: null` — the
