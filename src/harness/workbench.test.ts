@@ -1760,6 +1760,37 @@ describe("E6.9 Train forms — the org-free shared tier", () => {
     expect(mock.state.sharedProposed.size).toBe(1);
   });
 
+  it("TS-158b — a long vocabulary proposes whole up to the shared 1000 cap; past it is a 422", async () => {
+    await writePanelMode("train");
+    // BlueKC's specialty list: Physical Therapist is #121 of 146, which the
+    // old 50 cap cut. The scanner and the panel now share a 1000 cap.
+    const specialties = Array.from({ length: 146 }, (_, i) => ({
+      value: String(i + 1),
+      label: i === 120 ? "Physical Therapist" : `Specialty ${i + 1}`,
+    }));
+    const map = await proposeSharedFieldMap({
+      portal_key: "national_join",
+      selector: "#specialty",
+      field_label: "Specialty",
+      field_type: "select",
+      control_options: specialties,
+    });
+    expect(map.controlOptions).toHaveLength(146);
+    expect(map.controlOptions?.[120]).toEqual({ value: "121", label: "Physical Therapist" });
+
+    const tooLong = Array.from({ length: 1001 }, (_, i) => ({ value: `v${i}`, label: `v${i}` }));
+    await expect(
+      proposeSharedFieldMap({
+        portal_key: "national_join",
+        selector: "#taxonomy",
+        field_label: "Taxonomy",
+        field_type: "select",
+        control_options: tooLong,
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(mock.state.sharedProposed.size).toBe(1);
+  });
+
   it("TS-153 — a known form is recognized with what it already has; a new one is greeted", async () => {
     await writePanelMode("train");
     const registry = await listSharedPortals();

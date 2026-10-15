@@ -1110,6 +1110,11 @@ export async function createMockPanelApi(options = {}) {
       if (typeof body.selector !== "string" || !body.selector.trim()) {
         return envelope(res, 422, null, "selector is required");
       }
+      // Mirrors the panel's CONTROL_OPTIONS_CAP: a longer list is rejected,
+      // never truncated.
+      if (Array.isArray(body.control_options) && body.control_options.length > 1000) {
+        return envelope(res, 422, null, "control_options cannot exceed 1000 entries");
+      }
       const key = `${body.portal_key}:${body.selector}`;
       let map = state.sharedProposed.get(key);
       const created = map == null;
