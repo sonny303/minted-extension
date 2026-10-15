@@ -1,0 +1,5550 @@
+{
+  "format": "minted.form-capture/v1",
+  "portalKey": "humana-tricare",
+  "portalKeyStatus": "registered",
+  "templateStepId": null,
+  "startedAt": "2026-10-15T03:17:00.000Z",
+  "payer": "Humana Military (TRICARE East)",
+  "formUrl": "https://infocenter.humana-military.com/hgbprovider/providercertification/home/index",
+  "platform": null,
+  "capturedWith": {
+    "probeVersion": 3,
+    "browser": "chrome"
+  },
+  "walkStatus": "complete through the final step (Attestation). Not submitted — submitting is the user's action.",
+  "pages": [
+    {
+      "pageStep": "Conflict of interest statement",
+      "heading": "Provider certification application",
+      "reachedBy": "Opened at /hgbprovider/providercertification/home/index?ProviderType=PT (step 1 of 4 is open on arrival)",
+      "fingerprint": {
+        "keys": [
+          "#ConflictofInterest",
+          "#IsSalaried",
+          "#IsTeaching",
+          "#IsinTraining"
+        ],
+        "hash": "e6dedbdf"
+      },
+      "navigation": [
+        {
+          "kind": "advance",
+          "caption": "Continue",
+          "selector": "#\\31  > div:nth-child(2) > a:nth-child(3)",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#\\31  > div:nth-child(2) > a:nth-child(3)",
+        "requires": [
+          {
+            "selector": "#ConflictofInterest",
+            "question": null,
+            "kind": "answer",
+            "message": "Please choose either Yes or No."
+          },
+          {
+            "selector": "#IsSalaried",
+            "question": null,
+            "kind": "answer",
+            "message": "Please choose either Yes or No."
+          },
+          {
+            "selector": "#IsinTraining",
+            "question": null,
+            "kind": "answer",
+            "message": "Please choose either Yes or No."
+          },
+          {
+            "selector": "#IsTeaching",
+            "question": null,
+            "kind": "answer",
+            "message": "Please choose either Yes or No."
+          }
+        ],
+        "routes": [
+          {
+            "branch": [
+              {
+                "selector": "#ConflictofInterest",
+                "option": "No"
+              },
+              {
+                "selector": "#IsSalaried",
+                "option": "No"
+              },
+              {
+                "selector": "#IsinTraining",
+                "option": "No"
+              },
+              {
+                "selector": "#IsTeaching",
+                "option": "No"
+              }
+            ],
+            "leadsTo": "d31be487",
+            "condition": "All four answered No (Claude clicked No with the user's OK). Any Yes is refused on this page ('Not authorized to proceed with certification.' / 'Unable to continue with application…') — a dead end, not a second route."
+          }
+        ]
+      },
+      "interstitials": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Are you employed by the US Government?: medium confidence",
+        "Are you hospital-salaried/employed?: medium confidence",
+        "Do you fit into one of the outlined categories? (in training / intern / resident / fellow / restricted or temporary license): medium confidence",
+        "Are you a teaching-setting physician?: medium confidence"
+      ],
+      "uncapturedQuestions": []
+    },
+    {
+      "pageStep": "Demographic information",
+      "heading": "Provider certification application",
+      "reachedBy": "Conflict of interest statement → Continue with all four questions answered No",
+      "fingerprint": {
+        "keys": [
+          "#CorrespondenceAddress",
+          "#CorrespondenceAddress2",
+          "#CorrespondenceCity",
+          "#CorrespondenceEmail",
+          "#CorrespondenceName",
+          "#CorrespondencePhone",
+          "#CorrespondenceState",
+          "#CorrespondenceZip",
+          "#MedicareNumber",
+          "#Suffix",
+          "#TelehealthCapabilities",
+          "#dob",
+          "#emailaddress",
+          "#firstname",
+          "#gender",
+          "#lastname",
+          "#mi",
+          "#npi",
+          "#providertype",
+          "#ssn"
+        ],
+        "hash": "d31be487"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#\\32  > div:nth-child(2) > a:nth-child(3)",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Continue",
+          "selector": "#\\32  > div:nth-child(2) > a:nth-child(4)",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#\\32  > div:nth-child(2) > a:nth-child(4)",
+        "requires": [
+          {
+            "selector": "#Selectedspecialty",
+            "question": null,
+            "kind": "answer",
+            "message": "Please select Primary specialty."
+          },
+          {
+            "selector": "#TelehealthCapabilities",
+            "question": null,
+            "kind": "answer",
+            "message": "Please choose either Yes or No."
+          },
+          {
+            "selector": "#CorrespondenceName",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Please enter Correspondence Name"
+          },
+          {
+            "selector": "#CorrespondenceEmail",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Please enter an Correspondence Email"
+          },
+          {
+            "selector": "#npi",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Practitioner NPI is invalid"
+          },
+          {
+            "selector": "#CorrespondenceZip",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Correspondence address ZIP code is invalid for selected State"
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "0a966732",
+            "condition": "The user filled the step. It passes only after Humana's server checks: the NPI as a practitioner NPI (CheckifValidNpi), the point-of-contact ZIP against its state (CheckifValidZip), an active-duty check (ActiveDutyCheck) and the Medicare # format when one is entered."
+          }
+        ]
+      },
+      "interstitials": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Point of contact name: medium confidence",
+        "Point of contact email: medium confidence",
+        "Social Security Number (SSN): human",
+        "Point of contact phone: medium confidence",
+        "Point of contact street address: medium confidence",
+        "Gender: medium confidence",
+        "Suffix: medium confidence",
+        "Point of contact apt/suite: medium confidence",
+        "Point of contact city: medium confidence",
+        "Point of contact state: medium confidence",
+        "Point of contact ZIP: medium confidence",
+        "Telehealth capabilities: undecided",
+        "Medicare number: human",
+        "Primary specialty: medium confidence"
+      ],
+      "uncapturedQuestions": []
+    },
+    {
+      "pageStep": "Location and state license/certificate information",
+      "heading": "Provider certification application",
+      "reachedBy": "Demographic information → Continue (user-filled; passed the NPI/ZIP checks on the third try)",
+      "fingerprint": {
+        "keys": [
+          "#AcceptingNewPatients",
+          "#IsBillAddSameasPhysical",
+          "#LicAnyDiscplinaryAction",
+          "#LicenseEffDate",
+          "#LicenseExpDate",
+          "#LicenseState",
+          "#Licensenum",
+          "#MaxAge",
+          "#MinAge",
+          "#NoLocfax_cd",
+          "#PractBillingAddress",
+          "#PractBillingAddress2",
+          "#PractBillingCity",
+          "#PractBillingState",
+          "#PractBillingZip",
+          "#PractPhysicalAddress",
+          "#PractPhysicalAddress2",
+          "#PractPhysicalCity",
+          "#PractPhysicalState",
+          "#PractPhysicalZip",
+          "#PracticeFax",
+          "#PracticeLegalName",
+          "#PracticePhone",
+          "#PractitionerNPI",
+          "#PractitionerName",
+          "#PractitionerTin",
+          "#RestrictedLic",
+          "#friddl",
+          "#monddl",
+          "#saturddl",
+          "#sunddl",
+          "#thursddl",
+          "#tuesddl",
+          "#wedddl"
+        ],
+        "hash": "0a966732"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#\\33  > div:nth-child(2) > a:nth-child(8)",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Continue",
+          "selector": "#\\33  > div:nth-child(2) > a:nth-child(9)",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#\\33  > div:nth-child(2) > a:nth-child(9)",
+        "requires": [
+          {
+            "selector": "#PractPhysicalState",
+            "question": null,
+            "kind": "answer",
+            "message": "Please select State."
+          },
+          {
+            "selector": "#PractitionerNPI",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Group/Organizational NPI is invalid"
+          },
+          {
+            "selector": "#MaxAge",
+            "question": null,
+            "kind": "answer",
+            "message": "Please select a Maximum Age."
+          },
+          {
+            "selector": "#PracticePhone",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Please enter Location Phone"
+          },
+          {
+            "selector": "#PracticeFax",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "You must either provide a fax number or indicate that you do not have one"
+          },
+          {
+            "selector": "#PracticeLegalName",
+            "question": null,
+            "kind": "nonEmpty",
+            "message": "Please enter Location Legal Name"
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "03063bad",
+            "condition": "After Humana's location checks (billing ZIP vs state, location NPI as Type 1 = the provider's own or Type 2 with TIN ≠ SSN, duplicate-practitioner check) and the address-verification popup is resolved, Continue POSTs the location to /Home/AddLocation and opens Attestation. The walk did this with the user's OK."
+          }
+        ]
+      },
+      "interstitials": [
+        {
+          "text": "Address verification popup (#AddressReveal, content from /Home/ValidateAddress): use the suggested address or keep the one entered; Continue must be clicked again after.",
+          "dismissSelector": "#AddressReveal [onclick*='CancelAddress']"
+        }
+      ],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Group practice DBA name: medium confidence",
+        "I do not have a fax number: human",
+        "Hours of operation: Sunday status: undecided",
+        "Hours of operation: Monday status: undecided",
+        "Hours of operation: Monday opens: undecided",
+        "Hours of operation: Monday closes: undecided",
+        "Hours of operation: Tuesday status: undecided",
+        "Hours of operation: Tuesday opens: undecided",
+        "Hours of operation: Tuesday closes: undecided",
+        "Hours of operation: Wednesday status: undecided",
+        "Hours of operation: Wednesday opens: undecided",
+        "Hours of operation: Wednesday closes: undecided",
+        "Hours of operation: Thursday status: undecided",
+        "Hours of operation: Thursday opens: undecided",
+        "Hours of operation: Thursday closes: undecided",
+        "Is billing address same as physical address: medium confidence",
+        "Hours of operation: Friday status: undecided",
+        "Hours of operation: Friday opens: undecided",
+        "Hours of operation: Friday closes: undecided",
+        "Hours of operation: Saturday status: undecided",
+        "Temporary/Limited license: medium confidence",
+        "Ages served: minimum age: undecided",
+        "Ages served: maximum age: undecided",
+        "License effective date: medium confidence",
+        "Accepting new patients: medium confidence",
+        "Any disciplinary action: human",
+        "address-verification popup needs a person's choice (suggested vs entered address)"
+      ],
+      "uncapturedQuestions": [
+        {
+          "question": "UploadLicense",
+          "kind": "file",
+          "required": false,
+          "text": "Upload license — a hidden <input type=file id=UploadLicense> opened by the 'Upload license' button (#filelabel). Never clicked; not required on this walk."
+        }
+      ]
+    },
+    {
+      "pageStep": "Attestation",
+      "heading": "Provider certification application",
+      "reachedBy": "Location and state license/certificate information → address popup resolved → Continue",
+      "fingerprint": {
+        "keys": [
+          "#AttestedDate",
+          "#Electronicsignature"
+        ],
+        "hash": "03063bad"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#\\34  > div:nth-child(2) > a:nth-child(4)",
+          "disabled": false
+        },
+        {
+          "kind": "submit",
+          "caption": "Submit",
+          "selector": "#certApp--form__submit",
+          "disabled": false
+        }
+      ],
+      "advance": null,
+      "interstitials": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "final page: the only way on is Submit — the human submits",
+        "Electronic signature: human",
+        "Attested date: human"
+      ],
+      "uncapturedQuestions": []
+    }
+  ],
+  "notes": [
+    "Registered portal: the global portal 'humana-tricare' (form_url …/home/index?ProviderType=PT — this exact PT form) is what template e842e237 'Humana Tricare' v3 action 1 fills; its library holds the extension's one-page capture of the same 60 controls (all on page_step 'Page 2'). See humana-tricare.template-diff.md.",
+    "The form is opened as …/home/index?ProviderType=PT; formUrl stays query-free per the contract. Without the parameter the page says 'Provider Type invalid.' Fetched with ProviderType=OT the markup is identical except #Selectedspecialty's options (OT taxonomy codes) and the script's provtype — so other ProviderType values keep the same rows but change the specialty vocabulary and the provider-type-keyed rules (step 1's required questions and the hidden #IsStudent question for other types; MFT adds a home address; BA/ABA/BT add board certification; facility types use the BH*/Fac*/ACSP sections that sit hidden in the same DOM). Capture each provider type as its own portal key.",
+    "One URL, four steps. The page keeps all four steps laid out and collapses the closed ones to height:0 / overflow:hidden, so nothing is positively hidden: probe v2 saw all 60 controls on every step and gave every step the same fingerprint. Probe v3 (this branch) leaves clipped-away controls out of a page (counted in offPage). The extension's own scanner and fill still see every step at once — a fill from step 1 would write all four steps — and DYN-PAGE-01 never splits these pageSteps (the URL's last segment is 'index', which matches no step name).",
+    "pageStep = the open step's legend; the page h1 ('Provider certification application') is the same on every step.",
+    "Continue / Back / Submit are <a> links (a.certApp--form__NB / __PB, Submit = #certApp--form__submit), not buttons — probe v3 reads links as navigation when their caption reads as an action. The anchors have no ids, so the advance selectors are nth-child chains under the step's fieldset id (#\\31 … #\\34 ).",
+    "Validation messages are <label class=\"required\"> elements the page inserts after the question. The probe's error selector doesn't read them (that class is also how many forms mark required captions), so every gate here was read from those labels by hand. Also: the primary-specialty message is inserted after #specialityerror, next to #providertype — it belongs to #Selectedspecialty.",
+    "Validation is staged: a blank Continue shows only some messages (step 2 listed specialty, telehealth and point-of-contact name/email first, then NPI, Medicare # and ZIP once those were filled). Per the page script step 2 also validates first/middle/last name, gender, email, DOB, SSN, the point-of-contact address/city/state/phone, and a server-side active-duty check; step 3 validates every address part, both ZIPs, the age range (min ≤ max), hours and the license block. Only the messages actually seen are recorded as gates.",
+    "Step 1: for a PT all four questions are required and any 'Yes' is refused ('Not authorized to proceed with certification.' / 'Unable to continue with application as … not independently certified.'). #IsStudent (hidden for PT) is asked of other provider types.",
+    "#Selectedspecialty (primary specialty) is a select2 widget: the native <select> is aria-hidden=\"true\" and 1×0 with the visible .select2-container beside it. The scanner skips it (zero box), so it was added by hand (origin user_mapped). The extension's fill would also skip it today — isHiddenControl treats aria-hidden as hidden (DYN-PAGE-02) — so it needs select2 support in the scanner and the fill before it can be filled. Its option values are NUCC taxonomy codes.",
+    "#MedicareNumber is optional but format-checked when filled ('Medicare number is invalid.'); it is not recorded as a gate because blank passes.",
+    "Step 3's Continue POSTs the location to /Home/AddLocation (and 'Add another practice location', #addLocation, POSTs it and clears the block for the next one — never clicked). Several locations = the step 3 block repeated, one AddLocation per location.",
+    "Address verification: after the fields pass, Continue opens a popup (#AddressReveal) whose buttons come from a server-rendered /Home/ValidateAddress partial — use the suggested address (SaveAddress) or keep the entered one (CancelAddress) — and Continue must be clicked again. The user resolved it during the walk; the partial's markup was gone by the time it was inspected, so the dismissSelector is inferred from the page script's CancelAddress handler and is unverified.",
+    "Hours: each day's Open/Closed select (default Closed) reveals that day's start/end pickers when set to Open, prefilled 08:00/18:00. Claude set Monday–Friday to Open with the user's OK to capture them (revealedBy). Step 3's fingerprint is the arrival set (all days Closed, 0a966732); with Mon–Fri open the same page hashes 13c56f45, so a runner should match the arrival keys as a subset.",
+    "Not walked on step 3: 'Any disciplinary action' = Yes reveals #LicComments (textarea) and enables the license upload; #AvailableHome/#AvailableOffice radios stay hidden for PT.",
+    "required mirrors HTML attributes, which this portal sets on optional inputs too (#mi, the apt/suite fields, #MedicareNumber, #PracticeFax); the gates are the real requirements.",
+    "Label fixes are in displayLabel only (label keeps the probe's text): the probe borrowed the SSN caption for #gender, the city captions for #CorrespondenceState and #PractBillingState, the license-number caption for #RestrictedLic, and the section legend for every Yes/No radio group.",
+    "Options over the panel's 50-option cap: #providertype (77), #CorrespondenceState and #PractBillingState (51), #MinAge and #MaxAge (99). They fail a send until mintedpanel#518 deploys.",
+    "Walk: Claude clicked No on the four step-1 questions and set Mon–Fri to Open (both with the user's OK) and clicked Continue only through `advance` controls; the user typed every step 2–3 value. Step 4 was left blank. Nothing was submitted."
+  ],
+  "rows": [
+    {
+      "label": "Conflict of interest statement",
+      "selector": "#ConflictofInterest",
+      "fieldType": "radio",
+      "formSection": "Conflict of interest statement",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Conflict of interest statement",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Are you employed by the US Government?",
+      "suggestedToken": null,
+      "evidence": "Claude: eligibility question. For a PT the page refuses ANY 'Yes' ('Not authorized to proceed with certification.' / 'Unable to continue with application…'), so 'No' is the only answer an application can carry. Medium: it states a fact about the provider, so a coordinator confirms it per provider.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Conflict of interest statement",
+      "selector": "#IsSalaried",
+      "fieldType": "radio",
+      "formSection": "Conflict of interest statement",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Conflict of interest statement",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Are you hospital-salaried/employed?",
+      "suggestedToken": null,
+      "evidence": "Claude: eligibility question. For a PT the page refuses ANY 'Yes' ('Not authorized to proceed with certification.' / 'Unable to continue with application…'), so 'No' is the only answer an application can carry. Medium: it states a fact about the provider, so a coordinator confirms it per provider.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Conflict of interest statement",
+      "selector": "#IsinTraining",
+      "fieldType": "radio",
+      "formSection": "Conflict of interest statement",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Conflict of interest statement",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Do you fit into one of the outlined categories? (in training / intern / resident / fellow / restricted or temporary license)",
+      "suggestedToken": null,
+      "evidence": "Claude: eligibility question. For a PT the page refuses ANY 'Yes' ('Not authorized to proceed with certification.' / 'Unable to continue with application…'), so 'No' is the only answer an application can carry. Medium: it states a fact about the provider, so a coordinator confirms it per provider.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Conflict of interest statement",
+      "selector": "#IsTeaching",
+      "fieldType": "radio",
+      "formSection": "Conflict of interest statement",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Conflict of interest statement",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Are you a teaching-setting physician?",
+      "suggestedToken": null,
+      "evidence": "Claude: eligibility question. For a PT the page refuses ANY 'Yes' ('Not authorized to proceed with certification.' / 'Unable to continue with application…'), so 'No' is the only answer an application can carry. Medium: it states a fact about the provider, so a coordinator confirms it per provider.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#providertype",
+      "fieldType": "select",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "BA",
+          "label": "Behavior Analyst"
+        },
+        {
+          "value": "ABA",
+          "label": "Assistant Behavior Analyst"
+        },
+        {
+          "value": "ACSP",
+          "label": "Autism Corporate Service Provider"
+        },
+        {
+          "value": "BT",
+          "label": "Behavior Technician"
+        },
+        {
+          "value": "CLD",
+          "label": "Certified Labor Doula"
+        },
+        {
+          "value": "PSY",
+          "label": "Clinical Psychologist"
+        },
+        {
+          "value": "FPH",
+          "label": "Freestanding Psychiatric Hospital"
+        },
+        {
+          "value": "HPU",
+          "label": "Hospital Psych Unit"
+        },
+        {
+          "value": "IOP",
+          "label": "Intensive Outpatient Program (IOP) Non Hospital Based"
+        },
+        {
+          "value": "LC",
+          "label": "Lactation Consultant"
+        },
+        {
+          "value": "CLC",
+          "label": "Lactation Counselor"
+        },
+        {
+          "value": "OTP",
+          "label": "Opioid Treatment Program (OTP) Non Hospital Based"
+        },
+        {
+          "value": "RTC",
+          "label": "Residential Treatment Center"
+        },
+        {
+          "value": "SUDRF",
+          "label": "Inpatient/Residential Substance Use Disorder Rehabilitation Facilities (SUDRFs)"
+        },
+        {
+          "value": "PHP",
+          "label": "Psychiatric And Substance Use Disorder (SUD) Partial Hospitalization Program (PHP) Non Hospital Based"
+        },
+        {
+          "value": "DPM",
+          "label": "Podiatrists (DPM)"
+        },
+        {
+          "value": "MD",
+          "label": "Physicians (MD)"
+        },
+        {
+          "value": "DO",
+          "label": "Physicians (DO)"
+        },
+        {
+          "value": "OD",
+          "label": "Doctors of Optometry (OD)"
+        },
+        {
+          "value": "DMD",
+          "label": "Dentists (DMD)"
+        },
+        {
+          "value": "DDS",
+          "label": "Dentists (DDS)"
+        },
+        {
+          "value": "PT",
+          "label": "Physical Therapist (PT)"
+        },
+        {
+          "value": "OT",
+          "label": "Occupational Therapist (OT)"
+        },
+        {
+          "value": "SLP",
+          "label": "Licensed Registered Speech Therapists (SLP)"
+        },
+        {
+          "value": "AUD",
+          "label": "Audiologist (AUD)"
+        },
+        {
+          "value": "NP",
+          "label": "Nurse Practitioner (NP)"
+        },
+        {
+          "value": "RN",
+          "label": "Registered Nurse (RN)"
+        },
+        {
+          "value": "CRNA",
+          "label": "Certified Registered Nurse Anesthetist (CRNA)"
+        },
+        {
+          "value": "PA",
+          "label": "Certified Physician Assistant (PA)"
+        },
+        {
+          "value": "AA",
+          "label": "Anesthesiologist Assistant (AA)"
+        },
+        {
+          "value": "CNM",
+          "label": "Certified Nurse Midwives (CNM)"
+        },
+        {
+          "value": "RD",
+          "label": "Registered Dietitian (RD)"
+        },
+        {
+          "value": "LN",
+          "label": "Nutritionist (LN)"
+        },
+        {
+          "value": "CSP",
+          "label": "Christian Science Practitioners (CSP)"
+        },
+        {
+          "value": "CSN",
+          "label": "Christian Science Nurses (CSN)"
+        },
+        {
+          "value": "CSW",
+          "label": "Certified Clinical Social Worker (CSW)"
+        },
+        {
+          "value": "MFT",
+          "label": "Certified Marriage and Family Therapist (MFT)"
+        },
+        {
+          "value": "CPNS",
+          "label": "Certified Psychiatric Nurse Specialist (CPNS)"
+        },
+        {
+          "value": "PC",
+          "label": "Pastoral Counselor (PC)"
+        },
+        {
+          "value": "MHC",
+          "label": "Mental Health Counselor (MHC)"
+        },
+        {
+          "value": "ACH",
+          "label": "Acute Care Hospital"
+        },
+        {
+          "value": "CDH",
+          "label": "Cancer/Chronic Disease Hospital"
+        },
+        {
+          "value": "CH",
+          "label": "Children's Hospital"
+        },
+        {
+          "value": "CSS",
+          "label": "Christian Science Sanatorium"
+        },
+        {
+          "value": "CAH",
+          "label": "Critical Access Hospital"
+        },
+        {
+          "value": "HWW",
+          "label": "Hospital without walls"
+        },
+        {
+          "value": "IRF",
+          "label": "Inpatient Rehabilitation"
+        },
+        {
+          "value": "LTCH",
+          "label": "Long Term Care Hospital"
+        },
+        {
+          "value": "RU",
+          "label": "Rehab Unit"
+        },
+        {
+          "value": "SOH",
+          "label": "Satellite of Hospital"
+        },
+        {
+          "value": "SCH",
+          "label": "Sole Community Hospital"
+        },
+        {
+          "value": "SBCAH",
+          "label": "Swing bed unit,CAH"
+        },
+        {
+          "value": "SBALH",
+          "label": "Swing bed unit of Acute or Long Term Care Hospital"
+        },
+        {
+          "value": "ASCF",
+          "label": "Ambulatory Surgery Center (ASC) - Freestanding"
+        },
+        {
+          "value": "ASCHB",
+          "label": "Ambulatory Surgery Center (ASC) - Hospital Based"
+        },
+        {
+          "value": "HF",
+          "label": "Hospice - Freestanding (HF)"
+        },
+        {
+          "value": "HHB",
+          "label": "Hospice - Hospital Based (HHB)"
+        },
+        {
+          "value": "HHA",
+          "label": "Home Health Agencies (HHA)"
+        },
+        {
+          "value": "SNF",
+          "label": "Skilled Nursing Facility (SNF)"
+        },
+        {
+          "value": "CCC",
+          "label": "Cardiac Catheterization Clinic (CCC)"
+        },
+        {
+          "value": "CORF",
+          "label": "Comprehensive Outpatient Rehabilitation Facility (CORF)"
+        },
+        {
+          "value": "FBMTC",
+          "label": "Freestanding Bone Marrow Transplant Center (FBMTC)"
+        },
+        {
+          "value": "FKDC",
+          "label": "Freestanding Kidney Dialysis Center (FKDC)"
+        },
+        {
+          "value": "FMC",
+          "label": "Freestanding MRI Center (FMC)"
+        },
+        {
+          "value": "FSDDC",
+          "label": "Freestanding Sleep Disorder Diagnostic Center (FSDDC)"
+        },
+        {
+          "value": "HI",
+          "label": "Home Infusion (HI)"
+        },
+        {
+          "value": "IDTF",
+          "label": "Independent Diagnostic Testing Facility/Physiological Lab (IDTF)"
+        },
+        {
+          "value": "RTP",
+          "label": "Radiation Therapy Program (RTP)"
+        },
+        {
+          "value": "AMB",
+          "label": "Ambulance (AMB)"
+        },
+        {
+          "value": "DME",
+          "label": "Durable Medical Equipment (DME)"
+        },
+        {
+          "value": "SVPD",
+          "label": "State Vaccine Program (SVP) - Dosage Based (SVPD)"
+        },
+        {
+          "value": "SVPPC",
+          "label": "State Vaccine Program (SVP) - per Capita Based (SVPPC)"
+        },
+        {
+          "value": "PX",
+          "label": "Supplier of Portable X-Ray (PX)"
+        },
+        {
+          "value": "ICL",
+          "label": "Independent Clinical Lab (ICL)"
+        },
+        {
+          "value": "SP",
+          "label": "Specialty Pharmacy (SP)"
+        },
+        {
+          "value": "BC",
+          "label": "Birthing Center (BC)"
+        },
+        {
+          "value": "DMB",
+          "label": "Donor Milk Bank (DMB)"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider type",
+      "suggestedToken": null,
+      "evidence": "Claude: provider type. This capture is the PT variant: the form is opened with ?ProviderType=PT and the page preselects 'Physical Therapist (PT)'; the step 1–2 rules are keyed on it. 77 options (over the panel's 50-option cap until mintedpanel#518 deploys).",
+      "decision": "fixed",
+      "confidence": "high",
+      "suggestedValue": "PT",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "First name*",
+      "selector": "#firstname",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 1,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "provider.firstName",
+      "evidence": "Claude: label 'First name' → provider.firstName",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Middle initial",
+      "selector": "#mi",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 2,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "provider.middleInitial",
+      "evidence": "Claude: label 'Middle initial' → provider.middleInitial",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact name : *",
+      "selector": "#CorrespondenceName",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 3,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact name",
+      "suggestedToken": "credentialingContact.fullName",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: group.credentialingContactName is the group-level alternative.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Last name*",
+      "selector": "#lastname",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 4,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "provider.lastName",
+      "evidence": "Claude: label 'Last name' → provider.lastName",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact email address:*",
+      "selector": "#CorrespondenceEmail",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 5,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact email",
+      "suggestedToken": "credentialingContact.email",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: group.credentialingEmail is the group-level alternative.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Social Security Number (SSN)(No dashes)*",
+      "selector": "#ssn",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 6,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Social Security Number (SSN)",
+      "suggestedToken": null,
+      "evidence": "Claude: full 9-digit SSN, no dashes. The catalog has only provider.ssnLast4, and Humana runs an active-duty check on it server-side, so a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact phone (no dashes):*",
+      "selector": "#CorrespondencePhone",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 7,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact phone",
+      "suggestedToken": "credentialingContact.phoneOffice",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: digits only ('no dashes').",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact street address:*",
+      "selector": "#CorrespondenceAddress",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 8,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact street address",
+      "suggestedToken": "credentialingContact.addressLine1",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: the address is 'where you would like to receive correspondence', so group.correspondenceStreet is the alternative.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Social Security Number (SSN)(No dashes)*",
+      "selector": "#gender",
+      "fieldType": "select",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "Male",
+          "label": "Male"
+        },
+        {
+          "value": "Female",
+          "label": "Female"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 9,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Gender",
+      "suggestedToken": "provider.gender",
+      "evidence": "Claude: options Male/Female → provider.gender. Medium: the stored value must read exactly 'Male'/'Female'. (The probe borrowed the SSN caption as this select's label.)",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#Suffix",
+      "fieldType": "select",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "Jr",
+          "label": "Jr"
+        },
+        {
+          "value": "Sr",
+          "label": "Sr"
+        },
+        {
+          "value": "I",
+          "label": "I"
+        },
+        {
+          "value": "II",
+          "label": "II"
+        },
+        {
+          "value": "III",
+          "label": "III"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 10,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Suffix",
+      "suggestedToken": "provider.suffix",
+      "evidence": "Claude: name suffix select (Jr/Sr/I/II/III) → provider.suffix. Medium: only those five values match; blank stays blank.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact apt/suite/other:",
+      "selector": "#CorrespondenceAddress2",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 11,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact apt/suite",
+      "suggestedToken": "credentialingContact.addressLine2",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: group.correspondenceSuite is the alternative.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Email address*",
+      "selector": "#emailaddress",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 12,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "provider.email",
+      "evidence": "Claude: label 'Email address' in the provider's demographic block → provider.email",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact city:*",
+      "selector": "#CorrespondenceCity",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 13,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact city",
+      "suggestedToken": "credentialingContact.city",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: group.correspondenceCity is the alternative.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Date of birth(MM-DD-YYYY)*",
+      "selector": "#dob",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 14,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "provider.dateOfBirth",
+      "evidence": "Claude: label 'Date of birth(MM-DD-YYYY)' → provider.dateOfBirth. Shape Date → MM-DD-YYYY: Humana's validator only accepts dashes (^\\d{1,2}-\\d{1,2}-\\d{4}$).",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact city:*",
+      "selector": "#CorrespondenceState",
+      "fieldType": "select",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "AK",
+          "label": "ALASKA"
+        },
+        {
+          "value": "AL",
+          "label": "ALABAMA"
+        },
+        {
+          "value": "AR",
+          "label": "ARKANSAS"
+        },
+        {
+          "value": "AZ",
+          "label": "ARIZONA"
+        },
+        {
+          "value": "CA",
+          "label": "CALIFORNIA"
+        },
+        {
+          "value": "CO",
+          "label": "COLORADO"
+        },
+        {
+          "value": "CT",
+          "label": "CONNECTICUT"
+        },
+        {
+          "value": "DC",
+          "label": "DISTRICT OF COLUMBIA"
+        },
+        {
+          "value": "DE",
+          "label": "DELAWARE"
+        },
+        {
+          "value": "FL",
+          "label": "FLORIDA"
+        },
+        {
+          "value": "GA",
+          "label": "GEORGIA"
+        },
+        {
+          "value": "HI",
+          "label": "HAWAII"
+        },
+        {
+          "value": "IA",
+          "label": "IOWA"
+        },
+        {
+          "value": "ID",
+          "label": "IDAHO"
+        },
+        {
+          "value": "IL",
+          "label": "ILLINOIS"
+        },
+        {
+          "value": "IN",
+          "label": "INDIANA"
+        },
+        {
+          "value": "KS",
+          "label": "KANSAS"
+        },
+        {
+          "value": "KY",
+          "label": "KENTUCKY"
+        },
+        {
+          "value": "LA",
+          "label": "LOUISIANA"
+        },
+        {
+          "value": "MA",
+          "label": "MASSACHUSETTS"
+        },
+        {
+          "value": "MD",
+          "label": "MARYLAND"
+        },
+        {
+          "value": "ME",
+          "label": "MAINE"
+        },
+        {
+          "value": "MI",
+          "label": "MICHIGAN"
+        },
+        {
+          "value": "MN",
+          "label": "MINNESOTA"
+        },
+        {
+          "value": "MO",
+          "label": "MISSOURI"
+        },
+        {
+          "value": "MS",
+          "label": "MISSISSIPPI"
+        },
+        {
+          "value": "MT",
+          "label": "MONTANA"
+        },
+        {
+          "value": "NC",
+          "label": "NORTH CAROLINA"
+        },
+        {
+          "value": "ND",
+          "label": "NORTH DAKOTA"
+        },
+        {
+          "value": "NE",
+          "label": "NEBRASKA"
+        },
+        {
+          "value": "NH",
+          "label": "NEW HAMPSHIRE"
+        },
+        {
+          "value": "NJ",
+          "label": "NEW JERSEY"
+        },
+        {
+          "value": "NM",
+          "label": "NEW MEXICO"
+        },
+        {
+          "value": "NV",
+          "label": "NEVADA"
+        },
+        {
+          "value": "NY",
+          "label": "NEW YORK"
+        },
+        {
+          "value": "OH",
+          "label": "OHIO"
+        },
+        {
+          "value": "OK",
+          "label": "OKLAHOMA"
+        },
+        {
+          "value": "OR",
+          "label": "OREGON"
+        },
+        {
+          "value": "PA",
+          "label": "PENNSYLVANIA"
+        },
+        {
+          "value": "RI",
+          "label": "RHODE ISLAND"
+        },
+        {
+          "value": "SC",
+          "label": "SOUTH CAROLINA"
+        },
+        {
+          "value": "SD",
+          "label": "SOUTH DAKOTA"
+        },
+        {
+          "value": "TN",
+          "label": "TENNESSEE"
+        },
+        {
+          "value": "TX",
+          "label": "TEXAS"
+        },
+        {
+          "value": "UT",
+          "label": "UTAH"
+        },
+        {
+          "value": "VA",
+          "label": "VIRGINIA"
+        },
+        {
+          "value": "VT",
+          "label": "VERMONT"
+        },
+        {
+          "value": "WA",
+          "label": "WASHINGTON"
+        },
+        {
+          "value": "WI",
+          "label": "WISCONSIN"
+        },
+        {
+          "value": "WV",
+          "label": "WEST VIRGINIA"
+        },
+        {
+          "value": "WY",
+          "label": "WYOMING"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 15,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact state",
+      "suggestedToken": "credentialingContact.state",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: 51 two-letter state options (over the 50-option cap). The probe borrowed the city caption as this select's label.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "National Provider Identifier (NPI) :\n                                *",
+      "selector": "#npi",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 16,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "National Provider Identifier (NPI)",
+      "suggestedToken": "provider.npi",
+      "evidence": "Claude: label 'National Provider Identifier (NPI)' in the provider's block → provider.npi. Humana checks it server-side as a practitioner (Type 1) NPI ('Practitioner NPI is invalid').",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Point of contact ZIP Code:*",
+      "selector": "#CorrespondenceZip",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 17,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Point of contact ZIP",
+      "suggestedToken": "credentialingContact.postalCode",
+      "evidence": "Claude: the 'Correspondence/point of contact' block asks for 'the person available to answer questions about this TRICARE certification application' → the org's credentialing contact. Medium: Humana checks the ZIP against the state server-side.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Demographic information",
+      "selector": "#TelehealthCapabilities",
+      "fieldType": "radio",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 18,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Telehealth capabilities",
+      "suggestedToken": null,
+      "evidence": "Claude: yes/no practice capability; no catalog token. Likely a fixed answer per org once the trainer confirms it. It reveals nothing on this form.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#MedicareNumber",
+      "fieldType": "text",
+      "formSection": "Demographic information",
+      "pageStep": "Demographic information",
+      "sortOrder": 19,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Medicare number",
+      "suggestedToken": null,
+      "evidence": "Claude: optional; no Medicare-number token in the catalog. Format-checked when filled ('Medicare number is invalid.'), blank passes.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Select primary specialty *",
+      "selector": "#Selectedspecialty",
+      "fieldType": "select",
+      "formSection": "Demographic information",
+      "options": [
+        {
+          "value": "225100000X",
+          "label": "Physical Therapist"
+        },
+        {
+          "value": "2251C2600X",
+          "label": "Physical Therapist-Cardiopulmonary"
+        },
+        {
+          "value": "2251E1300X",
+          "label": "Physical Therapist-Electrophysiology, Clinical"
+        },
+        {
+          "value": "2251E1200X",
+          "label": "Physical Therapist-Ergonomics"
+        },
+        {
+          "value": "2251G0304X",
+          "label": "Physical Therapist-Geriatrics"
+        },
+        {
+          "value": "2251H1200X",
+          "label": "Physical Therapist-Hand"
+        },
+        {
+          "value": "2251H1300X",
+          "label": "Physical Therapist-Human Factors"
+        },
+        {
+          "value": "2251N0400X",
+          "label": "Physical Therapist-Neurology"
+        },
+        {
+          "value": "2251X0800X",
+          "label": "Physical Therapist-Orthopedic"
+        },
+        {
+          "value": "2251P0200X",
+          "label": "Physical Therapist-Pediatrics"
+        },
+        {
+          "value": "2251S0007X",
+          "label": "Physical Therapist-Sports"
+        }
+      ],
+      "pageStep": "Demographic information",
+      "sortOrder": 20,
+      "required": false,
+      "origin": "user_mapped",
+      "displayLabel": "Primary specialty",
+      "suggestedToken": "provider.taxonomyCode",
+      "evidence": "Claude: option VALUES are NUCC taxonomy codes (225100000X 'Physical Therapist', 2251X0800X 'Physical Therapist-Orthopedic', …) → provider.taxonomyCode matches by value when the provider's code is one of these 11. Medium only because the control is a select2 widget: the native select is aria-hidden and 1×0, so the scanner skips it (added by hand) and today's fill would skip it as hidden.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location phone number (no dashes):*",
+      "selector": "#PracticePhone",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 0,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.phone",
+      "evidence": "Claude: label 'Location phone number (no dashes)' → facility.phone (digits only)",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#PractPhysicalState",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "AL",
+          "label": "ALABAMA"
+        },
+        {
+          "value": "AR",
+          "label": "ARKANSAS"
+        },
+        {
+          "value": "CT",
+          "label": "CONNECTICUT"
+        },
+        {
+          "value": "DC",
+          "label": "DISTRICT OF COLUMBIA"
+        },
+        {
+          "value": "DE",
+          "label": "DELAWARE"
+        },
+        {
+          "value": "FL",
+          "label": "FLORIDA"
+        },
+        {
+          "value": "GA",
+          "label": "GEORGIA"
+        },
+        {
+          "value": "IN",
+          "label": "INDIANA"
+        },
+        {
+          "value": "KY",
+          "label": "KENTUCKY"
+        },
+        {
+          "value": "MA",
+          "label": "MASSACHUSETTS"
+        },
+        {
+          "value": "MD",
+          "label": "MARYLAND"
+        },
+        {
+          "value": "ME",
+          "label": "MAINE"
+        },
+        {
+          "value": "MI",
+          "label": "MICHIGAN"
+        },
+        {
+          "value": "MO",
+          "label": "MISSOURI"
+        },
+        {
+          "value": "MS",
+          "label": "MISSISSIPPI"
+        },
+        {
+          "value": "NC",
+          "label": "NORTH CAROLINA"
+        },
+        {
+          "value": "NH",
+          "label": "NEW HAMPSHIRE"
+        },
+        {
+          "value": "NJ",
+          "label": "NEW JERSEY"
+        },
+        {
+          "value": "NY",
+          "label": "NEW YORK"
+        },
+        {
+          "value": "OH",
+          "label": "OHIO"
+        },
+        {
+          "value": "PA",
+          "label": "PENNSYLVANIA"
+        },
+        {
+          "value": "RI",
+          "label": "RHODE ISLAND"
+        },
+        {
+          "value": "SC",
+          "label": "SOUTH CAROLINA"
+        },
+        {
+          "value": "TN",
+          "label": "TENNESSEE"
+        },
+        {
+          "value": "VA",
+          "label": "VIRGINIA"
+        },
+        {
+          "value": "VT",
+          "label": "VERMONT"
+        },
+        {
+          "value": "WI",
+          "label": "WISCONSIN"
+        },
+        {
+          "value": "WV",
+          "label": "WEST VIRGINIA"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location state",
+      "suggestedToken": "facility.state",
+      "evidence": "Claude: location state select; values are two-letter codes, limited to the 28 TRICARE East states → facility.state (a location outside them can't be entered).",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Name of group practice (DBA Name):*",
+      "selector": "#PractitionerName",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 2,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Group practice DBA name",
+      "suggestedToken": "facility.name",
+      "evidence": "Claude: 'Name of group practice (DBA Name)' → the location's doing-business-as name. Medium: group.name if the org has no separate DBA; the legal name has its own field.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Please note a fax number must be entered to be listed in the directory",
+      "selector": "#NoLocfax_cd",
+      "fieldType": "checkbox",
+      "formSection": "Location and state license/certificate information:",
+      "options": [],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "I do not have a fax number",
+      "suggestedToken": null,
+      "evidence": "Claude: 'I do not have a fax number' — tick only when the location has no fax: the fax gate accepts a fax OR this box. No fill ticks a box on an empty token.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location tax ID:*",
+      "selector": "#PractitionerTin",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 4,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.tin",
+      "evidence": "Claude: label 'Location tax ID' → group.tin. Humana refuses a Type 2 NPI paired with the provider's SSN as TIN.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location fax (no dashes):",
+      "selector": "#PracticeFax",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 5,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.fax",
+      "evidence": "Claude: label 'Location fax (no dashes)' → facility.fax (digits only); a fax is needed to be listed in the directory",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Group/o​rganizational NPI:*",
+      "selector": "#PractitionerNPI",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 6,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Group/organizational NPI",
+      "suggestedToken": "group.npiType2",
+      "evidence": "Claude: label 'Group/organizational NPI' → group.npiType2. Humana accepts a Type 2, or the provider's own Type 1 for a solo practitioner (any other Type 1 is refused).",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Legal name of group practice :*",
+      "selector": "#PracticeLegalName",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 7,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.name",
+      "evidence": "Claude: label 'Legal name of group practice' → group.name",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location physical street address (PO box not allowed):*",
+      "selector": "#PractPhysicalAddress",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 8,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.street",
+      "evidence": "Claude: label 'Location physical street address (PO box not allowed)' → facility.street; Humana runs address verification on it",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location physical apt/suite/other:",
+      "selector": "#PractPhysicalAddress2",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 9,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.suite",
+      "evidence": "Claude: label 'Location physical apt/suite/other' → facility.suite",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hours of operation",
+      "selector": "#sunddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 10,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Sunday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location physical address city:*",
+      "selector": "#PractPhysicalCity",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 11,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.city",
+      "evidence": "Claude: label 'Location physical address city' → facility.city",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#monddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 12,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Monday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#monstartddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 13,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Monday opens",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Monday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#monendddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 14,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Monday closes",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Monday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#tuesddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 15,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Tuesday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#tuesstartddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 16,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Tuesday opens",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Tuesday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#tuesendddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 17,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Tuesday closes",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Tuesday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location physical address ZIP Code:*",
+      "selector": "#PractPhysicalZip",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 18,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "facility.zip",
+      "evidence": "Claude: label 'Location physical address ZIP Code' → facility.zip (checked against the state server-side)",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#wedddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 19,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Wednesday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#wedstartddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 20,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Wednesday opens",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Wednesday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#wedendddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 21,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Wednesday closes",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Wednesday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#thursddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 22,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Thursday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#thursstartddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 23,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Thursday opens",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Thursday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#thursendddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 24,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Thursday closes",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Thursday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Is billing address same as physical address:*",
+      "selector": "#IsBillAddSameasPhysical",
+      "fieldType": "checkbox",
+      "formSection": "Location and state license/certificate information:",
+      "options": [],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 25,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Is billing address same as physical address",
+      "suggestedToken": null,
+      "evidence": "Claude: leave unticked and fill the billing block from group.billing*: ticking makes the page copy the physical address over it. Medium: an org whose pay-to IS the location may prefer to tick it.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location billing street address:*",
+      "selector": "#PractBillingAddress",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 26,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.billingStreet",
+      "evidence": "Claude: label 'Location billing street address' → group.billingStreet",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#friddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 27,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Friday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#fristartddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 28,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Friday opens",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Friday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#friendddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "00:00",
+          "label": "00:00"
+        },
+        {
+          "value": "00:30",
+          "label": "00:30"
+        },
+        {
+          "value": "01:00",
+          "label": "01:00"
+        },
+        {
+          "value": "01:30",
+          "label": "01:30"
+        },
+        {
+          "value": "02:00",
+          "label": "02:00"
+        },
+        {
+          "value": "02:30",
+          "label": "02:30"
+        },
+        {
+          "value": "03:00",
+          "label": "03:00"
+        },
+        {
+          "value": "03:30",
+          "label": "03:30"
+        },
+        {
+          "value": "04:00",
+          "label": "04:00"
+        },
+        {
+          "value": "04:30",
+          "label": "04:30"
+        },
+        {
+          "value": "05:00",
+          "label": "05:00"
+        },
+        {
+          "value": "05:30",
+          "label": "05:30"
+        },
+        {
+          "value": "06:00",
+          "label": "06:00"
+        },
+        {
+          "value": "06:30",
+          "label": "06:30"
+        },
+        {
+          "value": "07:00",
+          "label": "07:00"
+        },
+        {
+          "value": "07:30",
+          "label": "07:30"
+        },
+        {
+          "value": "08:00",
+          "label": "08:00"
+        },
+        {
+          "value": "08:30",
+          "label": "08:30"
+        },
+        {
+          "value": "09:00",
+          "label": "09:00"
+        },
+        {
+          "value": "09:30",
+          "label": "09:30"
+        },
+        {
+          "value": "10:00",
+          "label": "10:00"
+        },
+        {
+          "value": "10:30",
+          "label": "10:30"
+        },
+        {
+          "value": "11:00",
+          "label": "11:00"
+        },
+        {
+          "value": "11:30",
+          "label": "11:30"
+        },
+        {
+          "value": "12:00",
+          "label": "12:00"
+        },
+        {
+          "value": "12:30",
+          "label": "12:30"
+        },
+        {
+          "value": "13:00",
+          "label": "13:00"
+        },
+        {
+          "value": "13:30",
+          "label": "13:30"
+        },
+        {
+          "value": "14:00",
+          "label": "14:00"
+        },
+        {
+          "value": "14:30",
+          "label": "14:30"
+        },
+        {
+          "value": "15:00",
+          "label": "15:00"
+        },
+        {
+          "value": "15:30",
+          "label": "15:30"
+        },
+        {
+          "value": "16:00",
+          "label": "16:00"
+        },
+        {
+          "value": "16:30",
+          "label": "16:30"
+        },
+        {
+          "value": "17:00",
+          "label": "17:00"
+        },
+        {
+          "value": "17:30",
+          "label": "17:30"
+        },
+        {
+          "value": "18:00",
+          "label": "18:00"
+        },
+        {
+          "value": "18:30",
+          "label": "18:30"
+        },
+        {
+          "value": "19:00",
+          "label": "19:00"
+        },
+        {
+          "value": "19:30",
+          "label": "19:30"
+        },
+        {
+          "value": "20:00",
+          "label": "20:00"
+        },
+        {
+          "value": "20:30",
+          "label": "20:30"
+        },
+        {
+          "value": "21:00",
+          "label": "21:00"
+        },
+        {
+          "value": "21:30",
+          "label": "21:30"
+        },
+        {
+          "value": "22:00",
+          "label": "22:00"
+        },
+        {
+          "value": "22:30",
+          "label": "22:30"
+        },
+        {
+          "value": "23:00",
+          "label": "23:00"
+        },
+        {
+          "value": "23:30",
+          "label": "23:30"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 29,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Friday closes",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them. Humana prefills 08:00/18:00 when the day is set to Open.",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Friday status = Open (the page shows this picker only for an open day)",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location billing apt/suite/other:",
+      "selector": "#PractBillingAddress2",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 30,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.billingSuite",
+      "evidence": "Claude: label 'Location billing apt/suite/other' → group.billingSuite",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#saturddl",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Open",
+          "label": "Open"
+        },
+        {
+          "value": "Closed",
+          "label": "Closed"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 31,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Hours of operation: Saturday status",
+      "suggestedToken": null,
+      "evidence": "Claude: per-day Open/Closed status and half-hour start/end pickers; facility.hours is free text, so no token resolves to these values. The trainer fixes them per location or a person sets them.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location billing address city:*",
+      "selector": "#PractBillingCity",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 32,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.billingCity",
+      "evidence": "Claude: label 'Location billing address city' → group.billingCity",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location and state license/certificate information",
+      "selector": "#LicenseState",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "AL",
+          "label": "ALABAMA"
+        },
+        {
+          "value": "AR",
+          "label": "ARKANSAS"
+        },
+        {
+          "value": "CT",
+          "label": "CONNECTICUT"
+        },
+        {
+          "value": "DC",
+          "label": "DISTRICT OF COLUMBIA"
+        },
+        {
+          "value": "DE",
+          "label": "DELAWARE"
+        },
+        {
+          "value": "FL",
+          "label": "FLORIDA"
+        },
+        {
+          "value": "GA",
+          "label": "GEORGIA"
+        },
+        {
+          "value": "IN",
+          "label": "INDIANA"
+        },
+        {
+          "value": "KY",
+          "label": "KENTUCKY"
+        },
+        {
+          "value": "MA",
+          "label": "MASSACHUSETTS"
+        },
+        {
+          "value": "MD",
+          "label": "MARYLAND"
+        },
+        {
+          "value": "ME",
+          "label": "MAINE"
+        },
+        {
+          "value": "MI",
+          "label": "MICHIGAN"
+        },
+        {
+          "value": "MO",
+          "label": "MISSOURI"
+        },
+        {
+          "value": "MS",
+          "label": "MISSISSIPPI"
+        },
+        {
+          "value": "NC",
+          "label": "NORTH CAROLINA"
+        },
+        {
+          "value": "NH",
+          "label": "NEW HAMPSHIRE"
+        },
+        {
+          "value": "NJ",
+          "label": "NEW JERSEY"
+        },
+        {
+          "value": "NY",
+          "label": "NEW YORK"
+        },
+        {
+          "value": "OH",
+          "label": "OHIO"
+        },
+        {
+          "value": "PA",
+          "label": "PENNSYLVANIA"
+        },
+        {
+          "value": "RI",
+          "label": "RHODE ISLAND"
+        },
+        {
+          "value": "SC",
+          "label": "SOUTH CAROLINA"
+        },
+        {
+          "value": "TN",
+          "label": "TENNESSEE"
+        },
+        {
+          "value": "VA",
+          "label": "VIRGINIA"
+        },
+        {
+          "value": "VT",
+          "label": "VERMONT"
+        },
+        {
+          "value": "WI",
+          "label": "WISCONSIN"
+        },
+        {
+          "value": "WV",
+          "label": "WEST VIRGINIA"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 33,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "State license/certificate state",
+      "suggestedToken": "license.state",
+      "evidence": "Claude: license-block state select, two-letter codes, 28 TRICARE East states → license.state",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location billing address city:*",
+      "selector": "#PractBillingState",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "AK",
+          "label": "ALASKA"
+        },
+        {
+          "value": "AL",
+          "label": "ALABAMA"
+        },
+        {
+          "value": "AR",
+          "label": "ARKANSAS"
+        },
+        {
+          "value": "AZ",
+          "label": "ARIZONA"
+        },
+        {
+          "value": "CA",
+          "label": "CALIFORNIA"
+        },
+        {
+          "value": "CO",
+          "label": "COLORADO"
+        },
+        {
+          "value": "CT",
+          "label": "CONNECTICUT"
+        },
+        {
+          "value": "DC",
+          "label": "DISTRICT OF COLUMBIA"
+        },
+        {
+          "value": "DE",
+          "label": "DELAWARE"
+        },
+        {
+          "value": "FL",
+          "label": "FLORIDA"
+        },
+        {
+          "value": "GA",
+          "label": "GEORGIA"
+        },
+        {
+          "value": "HI",
+          "label": "HAWAII"
+        },
+        {
+          "value": "IA",
+          "label": "IOWA"
+        },
+        {
+          "value": "ID",
+          "label": "IDAHO"
+        },
+        {
+          "value": "IL",
+          "label": "ILLINOIS"
+        },
+        {
+          "value": "IN",
+          "label": "INDIANA"
+        },
+        {
+          "value": "KS",
+          "label": "KANSAS"
+        },
+        {
+          "value": "KY",
+          "label": "KENTUCKY"
+        },
+        {
+          "value": "LA",
+          "label": "LOUISIANA"
+        },
+        {
+          "value": "MA",
+          "label": "MASSACHUSETTS"
+        },
+        {
+          "value": "MD",
+          "label": "MARYLAND"
+        },
+        {
+          "value": "ME",
+          "label": "MAINE"
+        },
+        {
+          "value": "MI",
+          "label": "MICHIGAN"
+        },
+        {
+          "value": "MN",
+          "label": "MINNESOTA"
+        },
+        {
+          "value": "MO",
+          "label": "MISSOURI"
+        },
+        {
+          "value": "MS",
+          "label": "MISSISSIPPI"
+        },
+        {
+          "value": "MT",
+          "label": "MONTANA"
+        },
+        {
+          "value": "NC",
+          "label": "NORTH CAROLINA"
+        },
+        {
+          "value": "ND",
+          "label": "NORTH DAKOTA"
+        },
+        {
+          "value": "NE",
+          "label": "NEBRASKA"
+        },
+        {
+          "value": "NH",
+          "label": "NEW HAMPSHIRE"
+        },
+        {
+          "value": "NJ",
+          "label": "NEW JERSEY"
+        },
+        {
+          "value": "NM",
+          "label": "NEW MEXICO"
+        },
+        {
+          "value": "NV",
+          "label": "NEVADA"
+        },
+        {
+          "value": "NY",
+          "label": "NEW YORK"
+        },
+        {
+          "value": "OH",
+          "label": "OHIO"
+        },
+        {
+          "value": "OK",
+          "label": "OKLAHOMA"
+        },
+        {
+          "value": "OR",
+          "label": "OREGON"
+        },
+        {
+          "value": "PA",
+          "label": "PENNSYLVANIA"
+        },
+        {
+          "value": "RI",
+          "label": "RHODE ISLAND"
+        },
+        {
+          "value": "SC",
+          "label": "SOUTH CAROLINA"
+        },
+        {
+          "value": "SD",
+          "label": "SOUTH DAKOTA"
+        },
+        {
+          "value": "TN",
+          "label": "TENNESSEE"
+        },
+        {
+          "value": "TX",
+          "label": "TEXAS"
+        },
+        {
+          "value": "UT",
+          "label": "UTAH"
+        },
+        {
+          "value": "VA",
+          "label": "VIRGINIA"
+        },
+        {
+          "value": "VT",
+          "label": "VERMONT"
+        },
+        {
+          "value": "WA",
+          "label": "WASHINGTON"
+        },
+        {
+          "value": "WI",
+          "label": "WISCONSIN"
+        },
+        {
+          "value": "WV",
+          "label": "WEST VIRGINIA"
+        },
+        {
+          "value": "WY",
+          "label": "WYOMING"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 34,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location billing state",
+      "suggestedToken": "group.billingState",
+      "evidence": "Claude: billing-block state select, two-letter codes → group.billingState. 51 options (over the 50-option cap). The probe borrowed the city caption as its label.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "State license/certificate number:",
+      "selector": "#Licensenum",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 35,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "license.licenseNumber",
+      "evidence": "Claude: label 'State license/certificate number' → license.licenseNumber",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location billing address ZIP Code:*",
+      "selector": "#PractBillingZip",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 36,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.billingZip",
+      "evidence": "Claude: label 'Location billing address ZIP Code' → group.billingZip (checked against the state server-side)",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "State license/certificate number:",
+      "selector": "#RestrictedLic",
+      "fieldType": "checkbox",
+      "formSection": "Location and state license/certificate information:",
+      "options": [],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 37,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Temporary/Limited license",
+      "suggestedToken": null,
+      "evidence": "Claude: 'Temporary/Limited' license box (the probe borrowed the license-number caption). Unticked for a full license; a restricted/temporary license is also what step 1's 'outlined categories' question excludes.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "No",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Ages served:*",
+      "selector": "#MinAge",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "0",
+          "label": "0"
+        },
+        {
+          "value": "1",
+          "label": "1"
+        },
+        {
+          "value": "2",
+          "label": "2"
+        },
+        {
+          "value": "3",
+          "label": "3"
+        },
+        {
+          "value": "4",
+          "label": "4"
+        },
+        {
+          "value": "5",
+          "label": "5"
+        },
+        {
+          "value": "6",
+          "label": "6"
+        },
+        {
+          "value": "7",
+          "label": "7"
+        },
+        {
+          "value": "8",
+          "label": "8"
+        },
+        {
+          "value": "9",
+          "label": "9"
+        },
+        {
+          "value": "10",
+          "label": "10"
+        },
+        {
+          "value": "11",
+          "label": "11"
+        },
+        {
+          "value": "12",
+          "label": "12"
+        },
+        {
+          "value": "13",
+          "label": "13"
+        },
+        {
+          "value": "14",
+          "label": "14"
+        },
+        {
+          "value": "15",
+          "label": "15"
+        },
+        {
+          "value": "16",
+          "label": "16"
+        },
+        {
+          "value": "17",
+          "label": "17"
+        },
+        {
+          "value": "18",
+          "label": "18"
+        },
+        {
+          "value": "19",
+          "label": "19"
+        },
+        {
+          "value": "20",
+          "label": "20"
+        },
+        {
+          "value": "21",
+          "label": "21"
+        },
+        {
+          "value": "22",
+          "label": "22"
+        },
+        {
+          "value": "23",
+          "label": "23"
+        },
+        {
+          "value": "24",
+          "label": "24"
+        },
+        {
+          "value": "25",
+          "label": "25"
+        },
+        {
+          "value": "26",
+          "label": "26"
+        },
+        {
+          "value": "27",
+          "label": "27"
+        },
+        {
+          "value": "28",
+          "label": "28"
+        },
+        {
+          "value": "29",
+          "label": "29"
+        },
+        {
+          "value": "30",
+          "label": "30"
+        },
+        {
+          "value": "31",
+          "label": "31"
+        },
+        {
+          "value": "32",
+          "label": "32"
+        },
+        {
+          "value": "33",
+          "label": "33"
+        },
+        {
+          "value": "34",
+          "label": "34"
+        },
+        {
+          "value": "35",
+          "label": "35"
+        },
+        {
+          "value": "36",
+          "label": "36"
+        },
+        {
+          "value": "37",
+          "label": "37"
+        },
+        {
+          "value": "38",
+          "label": "38"
+        },
+        {
+          "value": "39",
+          "label": "39"
+        },
+        {
+          "value": "40",
+          "label": "40"
+        },
+        {
+          "value": "41",
+          "label": "41"
+        },
+        {
+          "value": "42",
+          "label": "42"
+        },
+        {
+          "value": "43",
+          "label": "43"
+        },
+        {
+          "value": "44",
+          "label": "44"
+        },
+        {
+          "value": "45",
+          "label": "45"
+        },
+        {
+          "value": "46",
+          "label": "46"
+        },
+        {
+          "value": "47",
+          "label": "47"
+        },
+        {
+          "value": "48",
+          "label": "48"
+        },
+        {
+          "value": "49",
+          "label": "49"
+        },
+        {
+          "value": "50",
+          "label": "50"
+        },
+        {
+          "value": "51",
+          "label": "51"
+        },
+        {
+          "value": "52",
+          "label": "52"
+        },
+        {
+          "value": "53",
+          "label": "53"
+        },
+        {
+          "value": "54",
+          "label": "54"
+        },
+        {
+          "value": "55",
+          "label": "55"
+        },
+        {
+          "value": "56",
+          "label": "56"
+        },
+        {
+          "value": "57",
+          "label": "57"
+        },
+        {
+          "value": "58",
+          "label": "58"
+        },
+        {
+          "value": "59",
+          "label": "59"
+        },
+        {
+          "value": "60",
+          "label": "60"
+        },
+        {
+          "value": "61",
+          "label": "61"
+        },
+        {
+          "value": "62",
+          "label": "62"
+        },
+        {
+          "value": "63",
+          "label": "63"
+        },
+        {
+          "value": "64",
+          "label": "64"
+        },
+        {
+          "value": "65",
+          "label": "65"
+        },
+        {
+          "value": "66",
+          "label": "66"
+        },
+        {
+          "value": "67",
+          "label": "67"
+        },
+        {
+          "value": "68",
+          "label": "68"
+        },
+        {
+          "value": "69",
+          "label": "69"
+        },
+        {
+          "value": "70",
+          "label": "70"
+        },
+        {
+          "value": "71",
+          "label": "71"
+        },
+        {
+          "value": "72",
+          "label": "72"
+        },
+        {
+          "value": "73",
+          "label": "73"
+        },
+        {
+          "value": "74",
+          "label": "74"
+        },
+        {
+          "value": "75",
+          "label": "75"
+        },
+        {
+          "value": "76",
+          "label": "76"
+        },
+        {
+          "value": "77",
+          "label": "77"
+        },
+        {
+          "value": "78",
+          "label": "78"
+        },
+        {
+          "value": "79",
+          "label": "79"
+        },
+        {
+          "value": "80",
+          "label": "80"
+        },
+        {
+          "value": "81",
+          "label": "81"
+        },
+        {
+          "value": "82",
+          "label": "82"
+        },
+        {
+          "value": "83",
+          "label": "83"
+        },
+        {
+          "value": "84",
+          "label": "84"
+        },
+        {
+          "value": "85",
+          "label": "85"
+        },
+        {
+          "value": "86",
+          "label": "86"
+        },
+        {
+          "value": "87",
+          "label": "87"
+        },
+        {
+          "value": "88",
+          "label": "88"
+        },
+        {
+          "value": "89",
+          "label": "89"
+        },
+        {
+          "value": "90",
+          "label": "90"
+        },
+        {
+          "value": "91",
+          "label": "91"
+        },
+        {
+          "value": "92",
+          "label": "92"
+        },
+        {
+          "value": "93",
+          "label": "93"
+        },
+        {
+          "value": "94",
+          "label": "94"
+        },
+        {
+          "value": "95",
+          "label": "95"
+        },
+        {
+          "value": "96",
+          "label": "96"
+        },
+        {
+          "value": "97",
+          "label": "97"
+        },
+        {
+          "value": "98",
+          "label": "98"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 38,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Ages served: minimum age",
+      "suggestedToken": "provider.ageGroupsServed",
+      "evidence": "Claude: 'Ages served' minimum, numeric 0–98 (99 options, over the 50 cap). provider.ageGroupsServed holds age-group labels, not numbers — a fixed range per org (e.g. all ages) is the likely answer.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "",
+      "selector": "#MaxAge",
+      "fieldType": "select",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "1",
+          "label": "1"
+        },
+        {
+          "value": "2",
+          "label": "2"
+        },
+        {
+          "value": "3",
+          "label": "3"
+        },
+        {
+          "value": "4",
+          "label": "4"
+        },
+        {
+          "value": "5",
+          "label": "5"
+        },
+        {
+          "value": "6",
+          "label": "6"
+        },
+        {
+          "value": "7",
+          "label": "7"
+        },
+        {
+          "value": "8",
+          "label": "8"
+        },
+        {
+          "value": "9",
+          "label": "9"
+        },
+        {
+          "value": "10",
+          "label": "10"
+        },
+        {
+          "value": "11",
+          "label": "11"
+        },
+        {
+          "value": "12",
+          "label": "12"
+        },
+        {
+          "value": "13",
+          "label": "13"
+        },
+        {
+          "value": "14",
+          "label": "14"
+        },
+        {
+          "value": "15",
+          "label": "15"
+        },
+        {
+          "value": "16",
+          "label": "16"
+        },
+        {
+          "value": "17",
+          "label": "17"
+        },
+        {
+          "value": "18",
+          "label": "18"
+        },
+        {
+          "value": "19",
+          "label": "19"
+        },
+        {
+          "value": "20",
+          "label": "20"
+        },
+        {
+          "value": "21",
+          "label": "21"
+        },
+        {
+          "value": "22",
+          "label": "22"
+        },
+        {
+          "value": "23",
+          "label": "23"
+        },
+        {
+          "value": "24",
+          "label": "24"
+        },
+        {
+          "value": "25",
+          "label": "25"
+        },
+        {
+          "value": "26",
+          "label": "26"
+        },
+        {
+          "value": "27",
+          "label": "27"
+        },
+        {
+          "value": "28",
+          "label": "28"
+        },
+        {
+          "value": "29",
+          "label": "29"
+        },
+        {
+          "value": "30",
+          "label": "30"
+        },
+        {
+          "value": "31",
+          "label": "31"
+        },
+        {
+          "value": "32",
+          "label": "32"
+        },
+        {
+          "value": "33",
+          "label": "33"
+        },
+        {
+          "value": "34",
+          "label": "34"
+        },
+        {
+          "value": "35",
+          "label": "35"
+        },
+        {
+          "value": "36",
+          "label": "36"
+        },
+        {
+          "value": "37",
+          "label": "37"
+        },
+        {
+          "value": "38",
+          "label": "38"
+        },
+        {
+          "value": "39",
+          "label": "39"
+        },
+        {
+          "value": "40",
+          "label": "40"
+        },
+        {
+          "value": "41",
+          "label": "41"
+        },
+        {
+          "value": "42",
+          "label": "42"
+        },
+        {
+          "value": "43",
+          "label": "43"
+        },
+        {
+          "value": "44",
+          "label": "44"
+        },
+        {
+          "value": "45",
+          "label": "45"
+        },
+        {
+          "value": "46",
+          "label": "46"
+        },
+        {
+          "value": "47",
+          "label": "47"
+        },
+        {
+          "value": "48",
+          "label": "48"
+        },
+        {
+          "value": "49",
+          "label": "49"
+        },
+        {
+          "value": "50",
+          "label": "50"
+        },
+        {
+          "value": "51",
+          "label": "51"
+        },
+        {
+          "value": "52",
+          "label": "52"
+        },
+        {
+          "value": "53",
+          "label": "53"
+        },
+        {
+          "value": "54",
+          "label": "54"
+        },
+        {
+          "value": "55",
+          "label": "55"
+        },
+        {
+          "value": "56",
+          "label": "56"
+        },
+        {
+          "value": "57",
+          "label": "57"
+        },
+        {
+          "value": "58",
+          "label": "58"
+        },
+        {
+          "value": "59",
+          "label": "59"
+        },
+        {
+          "value": "60",
+          "label": "60"
+        },
+        {
+          "value": "61",
+          "label": "61"
+        },
+        {
+          "value": "62",
+          "label": "62"
+        },
+        {
+          "value": "63",
+          "label": "63"
+        },
+        {
+          "value": "64",
+          "label": "64"
+        },
+        {
+          "value": "65",
+          "label": "65"
+        },
+        {
+          "value": "66",
+          "label": "66"
+        },
+        {
+          "value": "67",
+          "label": "67"
+        },
+        {
+          "value": "68",
+          "label": "68"
+        },
+        {
+          "value": "69",
+          "label": "69"
+        },
+        {
+          "value": "70",
+          "label": "70"
+        },
+        {
+          "value": "71",
+          "label": "71"
+        },
+        {
+          "value": "72",
+          "label": "72"
+        },
+        {
+          "value": "73",
+          "label": "73"
+        },
+        {
+          "value": "74",
+          "label": "74"
+        },
+        {
+          "value": "75",
+          "label": "75"
+        },
+        {
+          "value": "76",
+          "label": "76"
+        },
+        {
+          "value": "77",
+          "label": "77"
+        },
+        {
+          "value": "78",
+          "label": "78"
+        },
+        {
+          "value": "79",
+          "label": "79"
+        },
+        {
+          "value": "80",
+          "label": "80"
+        },
+        {
+          "value": "81",
+          "label": "81"
+        },
+        {
+          "value": "82",
+          "label": "82"
+        },
+        {
+          "value": "83",
+          "label": "83"
+        },
+        {
+          "value": "84",
+          "label": "84"
+        },
+        {
+          "value": "85",
+          "label": "85"
+        },
+        {
+          "value": "86",
+          "label": "86"
+        },
+        {
+          "value": "87",
+          "label": "87"
+        },
+        {
+          "value": "88",
+          "label": "88"
+        },
+        {
+          "value": "89",
+          "label": "89"
+        },
+        {
+          "value": "90",
+          "label": "90"
+        },
+        {
+          "value": "91",
+          "label": "91"
+        },
+        {
+          "value": "92",
+          "label": "92"
+        },
+        {
+          "value": "93",
+          "label": "93"
+        },
+        {
+          "value": "94",
+          "label": "94"
+        },
+        {
+          "value": "95",
+          "label": "95"
+        },
+        {
+          "value": "96",
+          "label": "96"
+        },
+        {
+          "value": "97",
+          "label": "97"
+        },
+        {
+          "value": "98",
+          "label": "98"
+        },
+        {
+          "value": "99",
+          "label": "99"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 39,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Ages served: maximum age",
+      "suggestedToken": "provider.ageGroupsServed",
+      "evidence": "Claude: 'Ages served' maximum, numeric 1–99 (99 options, over the 50 cap); see the minimum.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "License effective date(MM-DD-YYYY) :",
+      "selector": "#LicenseEffDate",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 40,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "License effective date",
+      "suggestedToken": "license.issueDate",
+      "evidence": "Claude: 'License effective date(MM-DD-YYYY)' → license.issueDate, shaped Date → MM-DD-YYYY (dashes only). Medium: effective date vs original issue date.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location and state license/certificate information:",
+      "selector": "#AcceptingNewPatients",
+      "fieldType": "radio",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 41,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Accepting new patients",
+      "suggestedToken": "facility.acceptingNewPatients",
+      "evidence": "Claude: Yes/No 'Accepting new patients' → facility.acceptingNewPatients. Medium: the token must resolve to 'Yes'/'No'.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "License expiration date(MM-DD-YYYY) :",
+      "selector": "#LicenseExpDate",
+      "fieldType": "text",
+      "formSection": "Location and state license/certificate information:",
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 42,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "License expiration date",
+      "suggestedToken": "license.expirationDate",
+      "evidence": "Claude: label 'License expiration date(MM-DD-YYYY)' → license.expirationDate, shaped Date → MM-DD-YYYY (dashes only)",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location and state license/certificate information:",
+      "selector": "#LicAnyDiscplinaryAction",
+      "fieldType": "radio",
+      "formSection": "Location and state license/certificate information:",
+      "options": [
+        {
+          "value": "Yes",
+          "label": "Yes:"
+        },
+        {
+          "value": "No",
+          "label": "No:"
+        }
+      ],
+      "pageStep": "Location and state license/certificate information",
+      "sortOrder": 43,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Any disciplinary action",
+      "suggestedToken": null,
+      "evidence": "Claude: disciplinary-action disclosure on the license: an attestation, and 'Yes' reveals a comments box and the license upload.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Electronic signature (Do not include middle initial):*",
+      "selector": "#Electronicsignature",
+      "fieldType": "text",
+      "formSection": "Attestation:",
+      "pageStep": "Attestation",
+      "sortOrder": 0,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Electronic signature",
+      "suggestedToken": null,
+      "evidence": "Claude: electronic signature attesting the application is true and complete — always a person.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Attested date:*",
+      "selector": "#AttestedDate",
+      "fieldType": "text",
+      "formSection": "Attestation:",
+      "pageStep": "Attestation",
+      "sortOrder": 1,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Attested date",
+      "suggestedToken": null,
+      "evidence": "Claude: date of the attestation, typed alongside the signature; Humana requires it to be TODAY in MM-DD-YYYY — the human attests.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    }
+  ]
+}

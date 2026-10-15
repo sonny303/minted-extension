@@ -69,13 +69,13 @@ first injection run only `window.__mintedCaptureProbe.scan()`; re-inject if
 that throws. The result:
 
 ```
-{ probeVersion: 2, url (no query), title, heading, platform ("qualtrics"|null),
+{ probeVersion: 3, url (no query), title, heading, platform ("qualtrics"|null),
   fingerprint: { keys[], hash },          // page identity — QIDs on Qualtrics
   navigation: [{ kind, caption, selector, disabled }],   // page buttons
   submitWarning,                          // page copy says its Next SUBMITS
   dialogs:    [{ text, actions: [{ kind: "dismiss", … }] }],
   errors:     [{ message, selector|null, question|null }], // validation = gate
-  frames[], fields[] }
+  frames[], fields[], offPage }
 fields[i] = { label, selector, fieldType, formSection, options?, sortOrder, required }
 kind ∈ advance | back | submit | save | dismiss | other
 ```
@@ -115,6 +115,19 @@ pick-several list is usually `human`.
   cross-origin one you can't open directly: record it in `notes` and fall back
   to the extension capture, which injects per frame.
 - Closed shadow roots are unreachable (same as the extension). Note it.
+- **One-url wizards (accordion steps).** A page is what a person can reach
+  now: v3 leaves out controls an `overflow: hidden` ancestor clips away (a
+  collapsed step, a parked carousel slide) and counts them in `offPage`, so
+  each step gets its own fingerprint. The extension's own scan and fill still
+  see every step at once. Link-drawn `<a>Continue</a>` counts as navigation
+  (Humana Military, 2026-10-14).
+- **Errors the probe can't see.** `errors` reads `[role=alert]`,
+  `.ValidationError` and similar. A portal that inserts its messages as
+  `<label class="required">` (Humana Military) shows nothing there: read the
+  messages from the page and note it in the capture.
+- **select2 / custom dropdowns.** A native `<select>` hidden behind a widget
+  (`aria-hidden`, 1×0) is not scanned. Add it by hand (`origin:
+  "user_mapped"`) and note that the fill skips aria-hidden controls today.
 - A label that's empty or generic ("Other", "Please specify") — look at the
   page text around the selector (`find`/`read_page`) and put a readable name in
   `displayLabel`; keep the probe's `label` untouched (it's the payer's text).
