@@ -64,6 +64,10 @@ not the staging installation target.
 
 Chrome Web Store packaging runs via `./scripts/package-extension.sh` (or `npm test && ./scripts/package-extension.sh`), which builds the extension and bundles a clean root-level zip archive (`minted-panel-workbench-v<version>.zip`) stripped of macOS metadata (`__MACOSX`, `.DS_Store`). Automated contract validation runs via `scripts/release/contract.test.mjs`.
 
+`npm run build:probe` builds `dist-probe/capture-probe.js` — `scanCapturableFields`
+wrapped as a standalone IIFE (`src/probe/captureProbe.ts`) that Claude injects into
+a payer form from a browser tool. Never part of the extension package.
+
 `src/harness/workbench.test.ts` drives the **real background modules** against
 `scripts/mock-panel-api.mjs`, an in-repo mirror of the panel /api contract — so
 CI never touches a real portal or the real panel. Add harness coverage for any
@@ -394,7 +398,12 @@ panel, and nothing else would catch it.
   (`hidden` / `aria-hidden` / `display:none` / `visibility:hidden` on self or
   an ancestor). The scanner's extra zero-box check is deliberately NOT applied
   to the fill: a zero-size control is list noise for a trainer but a real field
-  a coordinator is waiting on. Clipped/off-screen panels are out of scope.
+  a coordinator is waiting on. **Exception in the scanner:** a zero-size
+  radio/checkbox with a visible `<label>` is a page-drawn control (Qualtrics,
+  custom-control CSS) and IS captured, ordered by its label's box. Labels are
+  read from every `label[for]` (first with text) and skip embedded widgets
+  (Qualtrics puts its date picker's calendar table inside the label).
+  Clipped/off-screen panels are out of scope.
 - **The three fill-skip reasons are disjoint, and the panel owns the wording.**
   `field not found on this page` (drift), `field belongs to another page`, and
   `field is hidden on this page`. **Only the first is drift** — the other two
@@ -402,7 +411,11 @@ panel, and nothing else would catch it.
   join it to `isNoEvidenceSkip` there or it silently dates a mapping's last
   success to a fill that never touched the field.
 - **Capture is shape-only, never values** — labels, selectors, control types,
-  and option vocabularies. Structured controls record `{value,label}[]` for
+  and option vocabularies. Option lists are capped at 50 by default
+  (`CONTROL_OPTIONS_CAP`, `captureScan.ts`) because the panel's write boundary
+  rejects longer lists; that truncates real dropdowns (US states, BlueKC's 146
+  specialties). Only the capture probe, which never proposes, scans uncapped
+  (`scanCapturableFields({ optionsCap: Infinity })`). Structured controls record `{value,label}[]` for
   `<select>`, radio groups, and valued checkboxes; `selected`/`checked`/typed
   values are never read. Empty option lists are ignored on re-capture.
 - **Manual field mapping exists because a scan only sees what is rendered AND
@@ -540,6 +553,14 @@ they carry procedure:
 - **`chrome-devtools-minted`** — DevTools debugging: form state, `/api`
   requests, both extension consoles, slow renders.
 - **`adhd`** — output shaping for the human reading the session.
+- **`payer-form-capture`** (+ agent `form-scraper`) — Claude walks a payer form
+  in the user's own signed-in browser, scans it shape-only with the probe, and
+  writes `form-captures/<portalKey>.capture.json`: a valid `CaptureSession`
+  carrying token *suggestions* only (`chosenToken` null, nothing sent), plus
+  per-page fingerprint, labeled navigation, gates and branch — the data a
+  future automated walk needs, with readiness the test recomputes. Nothing
+  automates Next today. `src/probe/formCaptures.test.ts` holds every capture
+  file to that contract.
 
 The panel repo (`sonny303/mintedpanel`) carries the same three plus
 `supabase-migrations`, `api-isolation-gate`, `e2e-harness`, and
