@@ -12,17 +12,24 @@
 // of it: which page this is (fingerprint), which control advances / goes back /
 // submits (navigation), what popped up (dialogs), and what the payer refused
 // (errors → gate conditions). The probe never clicks anything.
+//
+// v3: a page is what a person can reach NOW. Controls an overflow-hidden
+// ancestor cuts off (a collapsed accordion step, a carousel slide parked
+// outside its viewport) are left out of `fields` and counted in `offPage`, so
+// each step of a one-url wizard gets its own fingerprint; link-styled buttons
+// (`<a>Continue</a>`) count as navigation.
 import {
   FILLABLE,
   isCapturableControl,
   isHiddenControl,
   scanCapturableFields,
   selectorFor,
+  visibleAnchor,
   type CapturedField,
 } from "../content/captureScan";
-import { querySelectorAllDeep, querySelectorDeep } from "../content/deepDom";
+import { ancestorsIncludingShadow, querySelectorAllDeep, querySelectorDeep } from "../content/deepDom";
 
-export const PROBE_VERSION = 2;
+export const PROBE_VERSION = 3;
 
 export interface ProbeField extends CapturedField {
   /** DOM/visual position within this page, 0-based — the scanner's order. */
@@ -95,10 +102,15 @@ export interface ProbePage {
    * usually brings it in. */
   frames: string[];
   fields: ProbeField[];
+  /** Controls the scanner sees that sit in a clipped-away part of the page
+   * (another step of the same wizard). The extension's own capture and fill
+   * still see them — clipping is out of scope there — so a fill from one step
+   * writes them all; the probe leaves them to the step that shows them. */
+  offPage: number;
 }
 
 const ACTION_SELECTOR =
-  "button, input[type='submit'], input[type='button'], input[type='image'], [role='button']";
+  "button, input[type='submit'], input[type='button'], input[type='image'], [role='button'], a";
 const DIALOG_SELECTOR =
   "[role='dialog'], [role='alertdialog'], dialog[open], .ui-dialog, .modal.show, .modal.in";
 const ERROR_SELECTOR =
@@ -137,10 +149,45 @@ function collapse(text: string | null | undefined): string {
   return (text ?? "").replace(/\s+/g, " ").trim();
 }
 
+const CLIPS = new Set(["hidden", "clip"]);
+const SCROLLS = new Set(["auto", "scroll"]);
+
+/** Cut off by an ancestor that hides its overflow: Humana Military's
+ * certification wizard keeps every step laid out and collapses the closed
+ * ones to `height: 0; overflow: hidden`, so nothing is positively hidden and
+ * every step's controls have a box. A scroll container ends the climb —
+ * what is inside one is reachable by scrolling, and its own ancestors clip the
+ * scroller, not its content. */
+function isClippedAway(el: Element): boolean {
+  const box = el.getBoundingClientRect();
+  for (const node of ancestorsIncludingShadow(el)) {
+    if (node === el) continue;
+    if (node === document.body || node === document.documentElement) break;
+    const { overflowX, overflowY } = getComputedStyle(node);
+    const clip = node.getBoundingClientRect();
+    if (CLIPS.has(overflowX) && !(clip.width > 0 && box.left < clip.right && box.right > clip.left)) return true;
+    if (CLIPS.has(overflowY) && !(clip.height > 0 && box.top < clip.bottom && box.bottom > clip.top)) return true;
+    if (SCROLLS.has(overflowX) || SCROLLS.has(overflowY)) break;
+  }
+  return false;
+}
+
 function isShown(el: Element): boolean {
   if (el.getClientRects().length === 0) return false;
   const { width, height } = el.getBoundingClientRect();
-  return width > 0 && height > 0 && !isHiddenControl(el);
+  return width > 0 && height > 0 && !isHiddenControl(el) && !isClippedAway(el);
+}
+
+/** A captured field whose control (or the label/widget a person sees in its
+ * place) lies in a clipped-away part of the page. */
+function isOffPage(field: CapturedField): boolean {
+  let el: Element | null;
+  try {
+    el = querySelectorDeep(field.selector);
+  } catch {
+    return false;
+  }
+  return el != null && isClippedAway(visibleAnchor(el));
 }
 
 /** 32-bit FNV-1a, hex. Not security — just a stable, short page identity. */
@@ -211,6 +258,12 @@ function describeAction(el: Element, inDialog: boolean): ProbeAction {
   };
 }
 
+/** A link counts only when it reads as a form action (`<a>Continue</a>`):
+ * ordinary links — "Have questions?", the logo — are not the page's controls. */
+function isPageAction(el: Element, action: ProbeAction): boolean {
+  return el.tagName !== "A" || el.matches("[role='button']") || action.kind !== "other";
+}
+
 function visibleDialogs(): Element[] {
   const shown = querySelectorAllDeep(DIALOG_SELECTOR).filter(isShown);
   // Keep the outermost of nested matches (.ui-dialog > [role=dialog]).
@@ -223,7 +276,7 @@ function pageNavigation(dialogs: Element[]): ProbeAction[] {
     if (out.length >= MAX_ACTIONS) break;
     if (!isShown(el) || dialogs.some((d) => d.contains(el))) continue;
     const action = describeAction(el, false);
-    if (action.caption.length > 60) continue;
+    if (action.caption.length > 60 || !isPageAction(el, action)) continue;
     if (out.some((a) => a.selector === action.selector)) continue;
     out.push(action);
   }
@@ -235,7 +288,10 @@ function dialogSummaries(dialogs: Element[]): ProbeDialog[] {
     text: collapse(dialog.textContent).slice(0, MAX_TEXT),
     actions: querySelectorAllDeep(ACTION_SELECTOR, dialog)
       .filter(isShown)
-      .map((el) => describeAction(el, true)),
+      .flatMap((el) => {
+        const action = describeAction(el, true);
+        return isPageAction(el, action) ? [action] : [];
+      }),
   }));
 }
 
@@ -313,7 +369,8 @@ export function probePage(): ProbePage {
   // Uncapped: a capture file never crosses the panel's 50-option write
   // boundary, and a truncated vocabulary hides the very option a mapping needs
   // (BlueKC's 'Physical Therapist' is #121 of 146).
-  const fields = scanCapturableFields({ optionsCap: Infinity }).map((field, sortOrder) => ({
+  const scanned = scanCapturableFields({ optionsCap: Infinity });
+  const fields = scanned.filter((field) => !isOffPage(field)).map((field, sortOrder) => ({
     ...field,
     sortOrder,
     required: isRequired(field),
@@ -340,6 +397,7 @@ export function probePage(): ProbePage {
       .map((frame) => urlWithoutQuery(frame.getAttribute("src") ?? ""))
       .filter(Boolean),
     fields,
+    offPage: scanned.length - fields.length,
   };
 }
 

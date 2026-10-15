@@ -279,3 +279,116 @@ describe("probePage — fingerprint", () => {
     expect(JSON.stringify(done)).not.toContain("Dr. Example");
   });
 });
+
+/** Give one element a specific box (everything else keeps the stacked stub). */
+function place(el: Element, box: { top: number; height: number; left?: number; width?: number }): void {
+  const left = box.left ?? 0;
+  const width = box.width ?? 600;
+  const rect = {
+    x: left, y: box.top, top: box.top, left, right: left + width, bottom: box.top + box.height,
+    width, height: box.height, toJSON() { return this; },
+  };
+  el.getBoundingClientRect = () => rect as DOMRect;
+  el.getClientRects = () => [rect] as unknown as DOMRectList;
+}
+
+/** jsdom leaves overflow-x/-y "visible" for the `overflow` shorthand
+ * (Chrome expands it), so fixtures spell the longhands. */
+const CLIP = "overflow-x: hidden; overflow-y: hidden";
+
+/** Humana Military's certification wizard, reduced: one url, every step laid
+ * out, the closed steps collapsed to `height: 0; overflow: hidden`, and its
+ * Continue / Back / Submit drawn as plain `<a>` links. */
+const ACCORDION = `
+  <h1>Provider certification application</h1>
+  <form id="certForm">
+    <fieldset><legend>Conflict of interest statement</legend>
+      <div class="certApp--form__wrapper" id="step1" style="${CLIP}">
+        <p>Are you employed by the US Government?</p>
+        <label><input type="radio" id="ConflictofInterest" name="ConflictofInterest" value="Yes" /> Yes</label>
+        <label><input type="radio" name="ConflictofInterest" value="No" /> No</label>
+        <a class="certApp--form__NB">Continue</a>
+      </div>
+    </fieldset>
+    <fieldset><legend>Demographic information</legend>
+      <div class="certApp--form__wrapper" id="step2" style="${CLIP}">
+        <label for="firstname">First name*</label><input id="firstname" />
+        <a class="certApp--form__PB">Back</a><a class="certApp--form__NB">Continue</a>
+      </div>
+    </fieldset>
+    <fieldset><legend>Attestation:</legend>
+      <div class="certApp--form__wrapper" id="step3" style="${CLIP}">
+        <label for="Electronicsignature">Electronic signature*</label><input id="Electronicsignature" />
+        <a class="certApp--form__PB">Back</a><a id="certApp--form__submit" class="certApp--form__NB">Submit</a>
+      </div>
+    </fieldset>
+  </form>
+  <a href="/contact">Have questions?</a>`;
+
+/** Open one step: its wrapper spans its children, the others collapse to 0. */
+function openStep(open: string): void {
+  render(ACCORDION);
+  for (const wrapper of document.querySelectorAll(".certApp--form__wrapper")) {
+    const kids = [...wrapper.querySelectorAll("*")].map((el) => el.getBoundingClientRect());
+    const top = Math.min(...kids.map((r) => r.top));
+    const bottom = Math.max(...kids.map((r) => r.bottom));
+    place(wrapper, wrapper.id === open ? { top, height: bottom - top } : { top, height: 0 });
+  }
+}
+
+describe("probePage — one-url wizard steps (Humana Military)", () => {
+  it("reports only the open step's fields, so each step gets its own fingerprint", () => {
+    const pages = ["step1", "step2", "step3"].map((step) => {
+      openStep(step);
+      return probePage();
+    });
+    expect(pages.map((p) => p.fields.map((f) => f.selector))).toEqual([
+      ["#ConflictofInterest"],
+      ["#firstname"],
+      ["#Electronicsignature"],
+    ]);
+    // The other steps are still in the DOM and still fillable — counted, not lost.
+    expect(pages.map((p) => p.offPage)).toEqual([2, 2, 2]);
+    expect(new Set(pages.map((p) => p.fingerprint.hash)).size).toBe(3);
+    expect(pages.map((p) => p.fields[0]?.sortOrder)).toEqual([0, 0, 0]);
+  });
+
+  it("reads link-drawn Continue/Back/Submit as navigation, but not ordinary links", () => {
+    const navOf = (step: string) => {
+      openStep(step);
+      return probePage().navigation.map((a) => [a.kind, a.caption]);
+    };
+    expect(navOf("step1")).toEqual([["advance", "Continue"]]);
+    expect(navOf("step2")).toEqual([["back", "Back"], ["advance", "Continue"]]);
+    expect(navOf("step3")).toEqual([["back", "Back"], ["submit", "Submit"]]);
+    openStep("step3");
+    expect(probePage().navigation.find((a) => a.kind === "submit")?.selector).toBe("#certApp--form__submit");
+  });
+
+  it("drops a carousel slide parked outside an overflow-hidden viewport", () => {
+    render(`
+      <div id="viewport" style="${CLIP}">
+        <div id="slide1"><label for="a">A</label><input id="a" /></div>
+        <div id="slide2"><label for="b">B</label><input id="b" /></div>
+      </div>`);
+    place(document.getElementById("viewport")!, { top: 0, height: 400, left: 0, width: 600 });
+    place(document.getElementById("b")!, { top: 40, height: 24, left: 600, width: 200 });
+    const page = probePage();
+    expect(page.fields.map((f) => f.selector)).toEqual(["#a"]);
+    expect(page.offPage).toBe(1);
+  });
+
+  it("keeps fields below the fold of a scroll container — scrolling reaches them", () => {
+    render(`
+      <div id="clip" style="${CLIP}">
+        <div id="scroller" style="overflow-y: auto">
+          <label for="a">A</label><input id="a" />
+          <label for="b">B</label><input id="b" />
+        </div>
+      </div>`);
+    place(document.getElementById("clip")!, { top: 0, height: 80 });
+    place(document.getElementById("scroller")!, { top: 0, height: 80 });
+    place(document.getElementById("b")!, { top: 400, height: 24 });
+    expect(probePage().fields.map((f) => f.selector)).toEqual(["#a", "#b"]);
+  });
+});
