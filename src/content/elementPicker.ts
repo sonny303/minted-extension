@@ -9,6 +9,7 @@ import { byLabel, isCustomCheckboxElement, LABEL_SELECTOR_PREFIX } from "./fillE
 import {
   describeControl,
   nearestCapturableControl,
+  visibleAnchor,
   type CapturedField,
 } from "./captureScan";
 import { querySelectorAllDeep } from "./deepDom";
@@ -130,7 +131,8 @@ export function startElementPick(): Promise<PickOutcome> {
 
     function onMove(event: MouseEvent): void {
       hovered = nearestCapturableControl(event.target as Element | null);
-      moveOverlay(box, hovered);
+      // Outline what the person sees: a PrimeFaces menu's backing select is 0×0.
+      moveOverlay(box, hovered ? visibleAnchor(hovered) : null);
       hint.textContent = hovered
         ? "Click the field to add it · Esc to cancel"
         : "Point at a form field · Esc to cancel";

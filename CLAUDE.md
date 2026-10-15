@@ -230,6 +230,19 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
   to N+1 by compare-and-set (`advanceActiveWorkContextVersion`); launch
   identity (receipt, bound tab) is unchanged, so the panel doesn't reload.
   `CaseContext.caseStatus` / `contextVersion` are optional in `apiTypes.ts`.
+- **A multi-select fill ADDS one option and never clears another.** A mapped
+  value names ONE option: profile tokens resolve to a single string, and a
+  list-valued token would be a panel-first wire decision. On a native
+  `<select multiple>` the fill sets that option's `selected`. On a PrimeFaces
+  SelectManyMenu it ctrl-clicks the option's visible list item (a plain click
+  makes it the ONLY choice) and requires the widget's highlight and the posted
+  option to agree afterwards. It refuses a list whose init script turns
+  `metaKeySelection` off while other choices exist, and reports (never claims)
+  a click that cleared other choices anyway. A SelectManyMenu's backing select
+  is never written directly. The synchronous `applyFill`/`applyValue` path
+  skips it ("multi-select list can only be filled through its visible items"),
+  and only `applyFillSettled` drives the list. The selector is the row key, so
+  one map adds at most one option. A pick-several list stays `human`.
 - **Tokens never touch page context.** Field values never persist in
   `chrome.storage` (fill reports store labels/counts/reasons only; the
   active-case record stores identifiers + URL only). Quick-card values (incl.
@@ -410,6 +423,21 @@ panel, and nothing else would catch it.
   resolved a selector. Add a fourth panel-first, in `src/lib/formDrift.ts`, and
   join it to `isNoEvidenceSkip` there or it silently dates a mapping's last
   success to a fill that never touched the field.
+- **PrimeFaces menus are judged by their widget, not their backing select.**
+  SelectOneMenu and SelectManyMenu both park the value-bearing `<select>` 0×0
+  inside `.ui-helper-hidden-accessible` (`src/content/primeFaces.ts`). Scanner
+  visibility, reading order, the nearby-caption fallback, and the picker's
+  outline all use the widget (`primeFacesWidget`, `visibleAnchor`). Helper
+  inputs (a SelectOneMenu's `_focus`, a SelectManyMenu's `_filter`) are never
+  rows. A pick anywhere inside the widget resolves to the backing select.
+  **A multi-select row is an ordinary `select` row**: one row per list, the
+  backing select's selector, every option. There is no wire flag; the fill
+  reads `multiple` off the live control. For a SelectManyMenu the fill's hidden
+  guard checks the widget AND the list item about to be clicked (a filter hides
+  items while the widget stays visible), the same rule as a radio option.
+  PrimeFaces 10 items carry no value: item i is option i
+  (`primeFacesListItems`), and the fill refuses a list whose items' text
+  doesn't match its options.
 - **Capture is shape-only, never values** — labels, selectors, control types,
   and option vocabularies. Option lists are capped at 50 by default
   (`CONTROL_OPTIONS_CAP`, `captureScan.ts`) because the panel's write boundary
@@ -460,7 +488,10 @@ cases backwards, each measured against the real engine:
   nothing, sending the trainer to re-capture over a typo.
 
 `fillable` is a **copy** of the engine's rule, so `fillEngine.test.ts` pins the
-two together over six element shapes rather than trusting a comment.
+two together over six element shapes rather than trusting a comment. That
+parity table runs the synchronous `applyFill`. A SelectManyMenu's backing
+select (a `<select>`, so `fillable`) is pinned separately against
+`applyFillSettled`, the only path that fills one.
 
 `highlightSelector` flashes every match in green via a **class**, never inline
 styles (inline would overwrite the portal's own and couldn't be cleanly
@@ -514,7 +545,10 @@ never report). A result is cleared when the page changes.
 **"Clear portal form" is sandbox-only** — it resets every control on the page,
 which on a live case would wipe a coordinator's real typing — and reports what
 it actually changed, so an already-empty form reads "nothing to clear" rather
-than a fake success.
+than a fake success. A multi-select is cleared by deselecting its options;
+`selectedIndex = 0` would choose option 1. A SelectManyMenu is cleared through
+its own list (a ctrl-click per chosen item), and one whose clicks clear the
+others is left alone and not counted.
 
 ## Gotchas
 

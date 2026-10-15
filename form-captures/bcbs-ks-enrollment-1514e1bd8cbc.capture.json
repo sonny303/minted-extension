@@ -159,14 +159,7 @@
       "submitWarning": false,
       "advance": null,
       "interstitials": [],
-      "uncapturedQuestions": [
-        {
-          "question": "networkEnrollmentForm:BehavioralAreasOfExpertise",
-          "kind": "widget",
-          "required": true,
-          "text": "Behavioral health provider areas of expertise (select up to 10 areas)* — PrimeFaces SelectManyMenu with 40 options (A01–A40), shown only when Degree is APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or LPC"
-        }
-      ],
+      "uncapturedQuestions": [],
       "readyOnceApproved": false,
       "automationBlockers": [
         "final page: its only way on is 'Submit' (#networkEnrollmentForm\\:submitBtn) — the human submits",
@@ -259,6 +252,7 @@
         "Group — specialty: undecided",
         "Group — taxonomy: low confidence",
         "Date patients will begin receiving services through this group*: undecided",
+        "Provider — behavioral health areas of expertise: human",
         "Submitter — phone: low confidence",
         "Submitter — comments: human"
       ]
@@ -268,8 +262,8 @@
     "Single-page JSF/PrimeFaces 10 form (sections: Office contact information, New provider information, New group contract, Submitter information) ending in a PrimeFaces CommandButton 'Submit' that posts the whole form over AJAX. There is no Next; the walk ended on its only page and nothing was submitted.",
     "Probe fix made for this capture: the Submit button carries aria-label=\"\", which probe v2 read as an empty caption and classified 'other' instead of 'submit'. An empty aria-label now falls through to the button text, and an uncaptioned control whose id/class says submit/finish classifies as 'submit'. Navigation here comes from the fixed probe on the live page.",
     "Rows and option lists are the probe's output from the user's Chrome (fields hash 34d1ab9c, fingerprint 7fcd6b74). Claude in Chrome truncates script output at ~1 KB, so the same probe build was replayed in jsdom over the page's static HTML and written from there after its fields hashed byte-identical to the live scan. The three 'Show Calendar' buttons exist only after the page's scripts run, so navigation was taken from the live page.",
-    "Conditional behavior (AJAX valueChange partial updates, observed 2026-10-14 by toggling answers with the user's OK; everything was reset afterwards): (1) 'Will this provider be rendering telemedicine service?' checked → reveals 'Will this provider be rendering ONLY telemedicine service?' (fingerprint 318cd02d); checking ONLY removes the provider 24/7 box and all 28 provider hour controls (62db9266). The group block behaves the same (65b4ac6d / 36ef486c). (2) '24/7 office hours?' checked → the 28 hour controls of that block stay visible but become DISABLED; a fill must not write them. (3) Degree PA or LAT → supervising physician NPI and name become required. (4) Degree APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or LPC → reveals 'Behavioral health provider areas of expertise (select up to 10 areas)*' (see uncapturedQuestions). All 58 degrees were tried; no other degree changes the field set.",
-    "The behavioral-health list is a PrimeFaces SelectManyMenu: its native <select multiple> (#networkEnrollmentForm\\:BehavioralAreasOfExpertise_input, aria-required) is 0×0 inside .ui-helper-hidden-accessible, and the scanner only special-cases SelectOneMenu, so it is skipped as zero-size. Capturing and filling it needs scanner + fill-engine support for SelectManyMenu. Its 40 options are listed in bcbs-ks-enrollment-1514e1bd8cbc.template-diff.md.",
+    "Conditional behavior (AJAX valueChange partial updates, observed 2026-10-14 by toggling answers with the user's OK; everything was reset afterwards): (1) 'Will this provider be rendering telemedicine service?' checked → reveals 'Will this provider be rendering ONLY telemedicine service?' (fingerprint 318cd02d); checking ONLY removes the provider 24/7 box and all 28 provider hour controls (62db9266). The group block behaves the same (65b4ac6d / 36ef486c). (2) '24/7 office hours?' checked → the 28 hour controls of that block stay visible but become DISABLED; a fill must not write them. (3) Degree PA or LAT → supervising physician NPI and name become required. (4) Degree APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or LPC → reveals 'Behavioral health provider areas of expertise (select up to 10 areas)*' (row with revealedBy). All 58 degrees were tried; no other degree changes the field set.",
+    "The behavioral-health list is a PrimeFaces SelectManyMenu: its native <select multiple> (#networkEnrollmentForm\\:BehavioralAreasOfExpertise_input, aria-required) is 0×0 inside .ui-helper-hidden-accessible and the person clicks the list beside it. The scanner now judges it by that widget and captures it as one 'select' row with all 40 options. The widget renders only after the Degree AJAX reveal, so it is not in the saved static HTML: its row is the rebuilt probe's output replayed in jsdom over that HTML with PrimeFaces 10.0.0 SelectManyMenuRenderer markup in the empty BehavioralHealthPanel (the other 108 probe rows came out byte-identical), and its options are the 40 read on the live page on 2026-10-14. It has not been re-scanned live. The fill adds one option per mapped value by ctrl-clicking its list item and never clears other choices; the row is left to a person.",
     "Required flags are the probe's (required / aria-required attributes): every '*' text field is required; the selects (Gender, state, Degree, Taxonomy, Specialty) report required:false although the page says 'All fields are required except where noted'. Server-side validation on them was not tested, since testing it means pressing Submit.",
     "Both the 'New provider information' and 'New group contract' blocks are always shown with required fields. Whether a request for a provider joining an existing group can leave the group block empty is unknown without submitting.",
     "Input masks (PrimeFaces InputMask): phones and fax (999)999-9999; ZIP 99999 and +4 9999; tax ids 999999999 (digits only — a dashed group.tin needs a digits-only transform); NPIs 10 digits; CAQH 8 digits; office hours 99:99 with separate AM/PM selects. Dates are PrimeFaces DatePickers, mm/dd/yyyy. Max lengths: names 50, address lines and city 35, middle initial 1, titles 100, emails 125, owners 500, comments 255.",
@@ -10216,13 +10210,193 @@
       "sent": false
     },
     {
+      "label": "Behavioral health provider areas of expertise (select up to 10 areas)*",
+      "selector": "#networkEnrollmentForm\\:BehavioralAreasOfExpertise_input",
+      "fieldType": "select",
+      "formSection": null,
+      "options": [
+        {
+          "value": "A01",
+          "label": "A01 - ATTENTION DEFICIT DISORDER (ADD/ADHD)"
+        },
+        {
+          "value": "A02",
+          "label": "A02 - ADOPTION"
+        },
+        {
+          "value": "A03",
+          "label": "A03 - ANXIETY AND PANIC DISORDERS"
+        },
+        {
+          "value": "A04",
+          "label": "A04 - AUTISM SPECTRUM DISORDERS (AUTISM/PDD/ASPERGERS)"
+        },
+        {
+          "value": "A05",
+          "label": "A05 - BARIATRIC ASSESSMENT (add'l form here)"
+        },
+        {
+          "value": "A06",
+          "label": "A06 - BEHAVIOR MODIFICATION"
+        },
+        {
+          "value": "A07",
+          "label": "A07 - BIPOLAR DISORDERS/MANIC DEPRESSIVE ILLINESS"
+        },
+        {
+          "value": "A08",
+          "label": "A08 - CHEMICAL DEPENDENCY/CHEMICAL DEPENDENCY ASSESSMENT"
+        },
+        {
+          "value": "A09",
+          "label": "A09 - CHRISTIAN COUNSELING"
+        },
+        {
+          "value": "A10",
+          "label": "A10 - COMPULSIVE GAMBLING"
+        },
+        {
+          "value": "A11",
+          "label": "A11 - CULTURAL/ETHNIC ISSUES"
+        },
+        {
+          "value": "A12",
+          "label": "A12 - DEPRESSION"
+        },
+        {
+          "value": "A13",
+          "label": "A13 - DIALECTICAL BEHAVIORAL THERAPY (DBT)"
+        },
+        {
+          "value": "A14",
+          "label": "A14 - DIVORCE/BLENDED FAMILY ISSUES"
+        },
+        {
+          "value": "A15",
+          "label": "A15 - BEHAVIORAL THERAPY FOR AUTISM SPECTRUM DISORDERS"
+        },
+        {
+          "value": "A16",
+          "label": "A16 - EATING DISORDERS"
+        },
+        {
+          "value": "A17",
+          "label": "A17 - ELECTROCONVULSIVE THERPAY (ECT)"
+        },
+        {
+          "value": "A18",
+          "label": "A18 - FAMILY THERAPY"
+        },
+        {
+          "value": "A19",
+          "label": "A19 - GAY/LESBIAN/BISEXUAL ISSUES"
+        },
+        {
+          "value": "A20",
+          "label": "A20 - GROUP THERAPY"
+        },
+        {
+          "value": "A21",
+          "label": "A21 - HIV/AIDS RELATED ISSUES"
+        },
+        {
+          "value": "A22",
+          "label": "A22 - INFERTILITY"
+        },
+        {
+          "value": "A23",
+          "label": "A23 - MEDICATION MANAGEMENT"
+        },
+        {
+          "value": "A24",
+          "label": "A24 - MENS ISSUES"
+        },
+        {
+          "value": "A25",
+          "label": "A25 - NEUROPSYCHOLOGICAL TESTING"
+        },
+        {
+          "value": "A26",
+          "label": "A26 - OBSESSIVE COMPULSIVIE DISORDERS"
+        },
+        {
+          "value": "A27",
+          "label": "A27 - PAIN MANAGEMENT"
+        },
+        {
+          "value": "A28",
+          "label": "A28 - PERSONALITY DISORDERS"
+        },
+        {
+          "value": "A29",
+          "label": "A29 - PSYCHOLOGICAL TESTING"
+        },
+        {
+          "value": "A30",
+          "label": "A30 - SCHIZOPHRENIC DISORDERS"
+        },
+        {
+          "value": "A31",
+          "label": "A31 - TRANSGENDER ISSUES"
+        },
+        {
+          "value": "A32",
+          "label": "A32 - SEXUAL DISORDERS"
+        },
+        {
+          "value": "A33",
+          "label": "A33 - ABUSE, ASSAULT AND TRAUMA (PTSD)"
+        },
+        {
+          "value": "A34",
+          "label": "A34 - PRENATAL ISSUES"
+        },
+        {
+          "value": "A35",
+          "label": "A35 - WOMENS ISSUES"
+        },
+        {
+          "value": "A36",
+          "label": "A36 - POSTPARTUM ISSUES"
+        },
+        {
+          "value": "A37",
+          "label": "A37 - BRIEF SOLUTION FOCUSED"
+        },
+        {
+          "value": "A38",
+          "label": "A38 - END OF LIFE ISSUES"
+        },
+        {
+          "value": "A39",
+          "label": "A39 - GERIATRICS"
+        },
+        {
+          "value": "A40",
+          "label": "A40 - COGNITIVE BEHAVIORAL THERAPY (CBT)"
+        }
+      ],
+      "pageStep": "Network Enrollment Form",
+      "sortOrder": 105,
+      "required": true,
+      "origin": "auto_detected",
+      "displayLabel": "Provider — behavioral health areas of expertise",
+      "suggestedToken": null,
+      "evidence": "Claude: no catalog token — a required pick-up-to-10 list of BCBSKS's own area codes (A01–A40, a PrimeFaces SelectManyMenu). A profile token resolves to one string, so a mapping could add at most one area; which areas a provider practices is the provider's answer, so a person picks them",
+      "decision": "human",
+      "confidence": "high",
+      "revealedBy": "Degree = APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or LPC",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
       "label": "Name*",
       "selector": "#networkEnrollmentForm\\:SubmitterName",
       "fieldType": "text",
       "formSection": null,
       "options": [],
       "pageStep": "Network Enrollment Form",
-      "sortOrder": 105,
+      "sortOrder": 106,
       "required": true,
       "origin": "auto_detected",
       "displayLabel": "Submitter — name",
@@ -10240,7 +10414,7 @@
       "formSection": null,
       "options": [],
       "pageStep": "Network Enrollment Form",
-      "sortOrder": 106,
+      "sortOrder": 107,
       "required": true,
       "origin": "auto_detected",
       "displayLabel": "Submitter — position / title",
@@ -10258,7 +10432,7 @@
       "formSection": null,
       "options": [],
       "pageStep": "Network Enrollment Form",
-      "sortOrder": 107,
+      "sortOrder": 108,
       "required": true,
       "origin": "auto_detected",
       "displayLabel": "Submitter — phone",
@@ -10276,7 +10450,7 @@
       "formSection": null,
       "options": [],
       "pageStep": "Network Enrollment Form",
-      "sortOrder": 108,
+      "sortOrder": 109,
       "required": true,
       "origin": "auto_detected",
       "displayLabel": "Submitter — email",
@@ -10294,7 +10468,7 @@
       "formSection": null,
       "options": [],
       "pageStep": "Network Enrollment Form",
-      "sortOrder": 109,
+      "sortOrder": 110,
       "required": false,
       "origin": "auto_detected",
       "displayLabel": "Submitter — comments",

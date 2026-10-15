@@ -9,7 +9,12 @@ import {
   querySelectorAllDeep,
   querySelectorDeep,
 } from "./deepDom";
-import { isPrimeFacesFocusInput, primeFacesSelectMenu } from "./primeFaces";
+import {
+  isPrimeFacesFocusInput,
+  isPrimeFacesListFilter,
+  primeFacesBackingSelect,
+  primeFacesWidget,
+} from "./primeFaces";
 
 export interface CapturedField {
   /** The payer's own label text, verbatim (trimmed). The server normalizes it
@@ -17,6 +22,10 @@ export interface CapturedField {
   label: string;
   /** A selector that resolves this control, preferring stable identity. */
   selector: string;
+  /** A multi-select (`<select multiple>`, including a PrimeFaces
+   * SelectManyMenu) is an ordinary "select" row: one row, its backing
+   * select's selector, its full option list. The wire has no multi type, and
+   * none is needed — the fill reads `multiple` off the live control. */
   fieldType: PortalFieldType;
   /** Nearest fieldset/section heading, when the form has one. */
   formSection: string | null;
@@ -163,21 +172,25 @@ function visibleChoiceLabel(el: Element): Element | null {
 
 /** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
  * or positively hidden per `isHiddenControl`. A zero-size radio/checkbox with
- * a visible label is the styled-control pattern, not noise, and is kept. */
+ * a visible label is the styled-control pattern, not noise, and is kept. A
+ * PrimeFaces menu's backing select (0×0 by design) is exactly as visible as
+ * the widget drawn for it; the widget's focus input and list filter are not
+ * fields at all. */
 export function isCapturableControl(el: Element): boolean {
-  if (isPrimeFacesFocusInput(el)) return false;
-  const menu = primeFacesSelectMenu(el);
-  if (menu && el === menu.select) return hasLayoutBox(menu.wrapper) && !isHiddenControl(menu.wrapper);
+  if (isPrimeFacesFocusInput(el) || isPrimeFacesListFilter(el)) return false;
+  const widget = primeFacesWidget(el);
+  if (widget) return hasLayoutBox(widget) && !isHiddenControl(widget);
   if (isHiddenControl(el)) return false;
   return hasLayoutBox(el) || visibleChoiceLabel(el) != null;
 }
 
-/** What to measure for reading order: the PrimeFaces widget, a styled
- * choice's visible label (its 0×0 input may be parked anywhere), else the
- * control itself. */
-function positionAnchor(el: Element): Element {
-  const menu = primeFacesSelectMenu(el);
-  if (menu) return menu.wrapper;
+/** What a person sees for this control, and so what reading order (and the
+ * picker's outline) is measured by: the PrimeFaces widget, a styled choice's
+ * visible label (its 0×0 input may be parked anywhere), else the control
+ * itself. */
+export function visibleAnchor(el: Element): Element {
+  const widget = primeFacesWidget(el);
+  if (widget) return widget;
   if (hasLayoutBox(el)) return el;
   return visibleChoiceLabel(el) ?? el;
 }
@@ -372,7 +385,9 @@ function captureLabel(el: Element, type: PortalFieldType): string {
   }
   const wired = labelFor(el);
   if (wired) return wired;
-  return nearbyLabel(el);
+  // A PrimeFaces backing select sits two wrappers deep in its widget; the
+  // caption a person reads is beside the widget, not beside the select.
+  return nearbyLabel(primeFacesWidget(el) ?? el);
 }
 
 function cleanLabelText(raw: string | null | undefined): string {
@@ -580,16 +595,20 @@ export function describeControl(
  * on nothing mappable. */
 export function nearestCapturableControl(node: Element | null): Element | null {
   if (node == null) return null;
-  if (node.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(node)?.select ?? node);
+  // Anything inside a PrimeFaces menu widget — a SelectManyMenu's list item or
+  // filter box, a SelectOneMenu's label — means that menu's backing select.
+  const backing = primeFacesBackingSelect(node);
+  if (backing) return backing;
+  if (node.matches(FILLABLE)) return canonicalControl(node);
   for (const ancestor of ancestorsIncludingShadow(node)) {
-    if (ancestor.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(ancestor)?.select ?? ancestor);
+    if (ancestor.matches(FILLABLE)) return canonicalControl(ancestor);
   }
   const label = closestDeep(node, "label");
   if (label) {
     const forId = label.getAttribute("for");
     if (forId) {
       const target = querySelectorDeep(`#${CSS.escape(forId)}`);
-      if (target?.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(target)?.select ?? target);
+      if (target?.matches(FILLABLE)) return canonicalControl(primeFacesBackingSelect(target) ?? target);
     }
     const inner = querySelectorDeep(FILLABLE, label);
     if (inner) return canonicalControl(inner);
@@ -621,7 +640,7 @@ export function scanCapturableFields(
       return isCapturableControl(el);
     })
     .sort(
-      (a, b) => compareVisualPosition(positionAnchor(a.el), positionAnchor(b.el)) || a.index - b.index,
+      (a, b) => compareVisualPosition(visibleAnchor(a.el), visibleAnchor(b.el)) || a.index - b.index,
     );
 
   for (const { el } of visible) {

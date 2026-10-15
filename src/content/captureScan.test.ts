@@ -6,8 +6,16 @@ import {
   compareVisualPosition,
   isCapturableControl,
   isHiddenControl,
+  nearestCapturableControl,
   scanCapturableFields,
 } from "./captureScan";
+import {
+  BCBSKS_AREAS_ID,
+  BCBSKS_AREAS_LABEL,
+  BCBSKS_AREAS_SELECTOR,
+  BCBSKS_BEHAVIORAL_AREAS,
+  selectManyMenuMarkup,
+} from "../__fixtures__/dom/primeFacesSelectManyMenu";
 
 // jsdom does not provide CSS.escape; captureScan uses it for ids/names.
 if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
@@ -531,5 +539,92 @@ describe("scanCapturableFields — page-drawn controls (Qualtrics)", () => {
       <input type="checkbox" id="agree" value="yes" />`;
     stubVisibleBox(document.getElementById("agree")!);
     expect(scanCapturableFields()[0]?.label).toBe("I accept the terms");
+  });
+});
+
+// The BCBSKS behavioral-health list: PrimeFaces 10's `<select multiple>` sits
+// 0×0 inside `.ui-helper-hidden-accessible`; the person sees and clicks the
+// list beside it. Markup provenance: src/__fixtures__/dom/primeFacesSelectManyMenu.ts.
+describe("scanCapturableFields — PrimeFaces SelectManyMenu", () => {
+  const wrapper = (id = BCBSKS_AREAS_ID): HTMLElement => document.getElementById(id)!;
+
+  it("captures the list as ONE select row: backing selector, full vocabulary, widget visibility", () => {
+    document.body.innerHTML = `
+      <label for="npi">NPI</label><input id="npi" type="text" />
+      ${selectManyMenuMarkup({ filter: true })}
+      <label for="email">Email</label><input id="email" type="text" />
+    `;
+    // Reading order is the widget's; the backing select keeps jsdom's 0×0 at
+    // top 0, so ordering by it would put the list first.
+    stubVisibleBox(document.getElementById("npi")!, { top: 100 });
+    stubVisibleBox(wrapper(), { top: 200, height: 200 });
+    stubVisibleBox(document.getElementById(`${BCBSKS_AREAS_ID}_filter`)!, { top: 200 });
+    stubVisibleBox(document.getElementById("email")!, { top: 450 });
+
+    const fields = scanCapturableFields({ optionsCap: Infinity });
+    expect(fields.map((field) => field.selector)).toEqual(["#npi", BCBSKS_AREAS_SELECTOR, "#email"]);
+    expect(fields[1]).toEqual({
+      label: `${BCBSKS_AREAS_LABEL}*`,
+      selector: BCBSKS_AREAS_SELECTOR,
+      fieldType: "select",
+      formSection: null,
+      options: BCBSKS_BEHAVIORAL_AREAS.map(([code, area]) => ({ value: code, label: `${code} - ${area}` })),
+    });
+    // The list's filter box is a widget helper, never a row.
+    expect(fields.some((field) => field.selector.includes("_filter"))).toBe(false);
+  });
+
+  it("is shape-only: what is already selected never changes the row", () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    stubVisibleBox(wrapper());
+    const blank = scanCapturableFields({ optionsCap: Infinity });
+
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A03", "A12", "A40"] });
+    stubVisibleBox(wrapper());
+    expect(scanCapturableFields({ optionsCap: Infinity })).toEqual(blank);
+  });
+
+  it("judges visibility by the widget, not the 0×0 select", () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    const select = document.querySelector<HTMLSelectElement>("select[multiple]")!;
+    stubZeroBox(select);
+    // Not revealed yet (the AJAX panel has no layout): skipped, like any control.
+    expect(isCapturableControl(select)).toBe(false);
+    stubVisibleBox(wrapper());
+    expect(isCapturableControl(select)).toBe(true);
+    // A visible widget inside a positively hidden panel is still hidden.
+    wrapper().parentElement!.style.display = "none";
+    expect(isCapturableControl(select)).toBe(false);
+  });
+
+  it("reads a caption beside the widget when no label is wired", () => {
+    document.body.innerHTML = `
+      <div><span>Areas of expertise</span>${selectManyMenuMarkup({ label: null })}</div>
+    `;
+    stubVisibleBox(wrapper());
+    expect(scanCapturableFields()[0]?.label).toBe("Areas of expertise");
+  });
+
+  it("resolves a pick on the list (item, filter) to the backing select", () => {
+    document.body.innerHTML = selectManyMenuMarkup({ filter: true });
+    const select = document.querySelector("select[multiple]");
+    expect(nearestCapturableControl(document.querySelectorAll(".ui-selectlistbox-item")[11]!)).toBe(select);
+    expect(nearestCapturableControl(document.getElementById(`${BCBSKS_AREAS_ID}_filter`))).toBe(select);
+    expect(nearestCapturableControl(wrapper())).toBe(select);
+  });
+
+  it("resolves a pick on a SelectOneMenu's visible label to its backing select", () => {
+    document.body.innerHTML = `
+      <div id="degree" class="ui-selectonemenu" role="combobox">
+        <div class="ui-helper-hidden-accessible"><input id="degree_focus" type="text" /></div>
+        <div class="ui-helper-hidden-accessible"><select id="degree_input" aria-hidden="true"><option value="APRN">APRN</option></select></div>
+        <label class="ui-selectonemenu-label">Select One</label>
+        <div class="ui-selectonemenu-trigger"><span></span></div>
+      </div>
+    `;
+    const select = document.getElementById("degree_input");
+    expect(nearestCapturableControl(document.querySelector(".ui-selectonemenu-label"))).toBe(select);
+    expect(nearestCapturableControl(document.getElementById("degree_focus"))).toBe(select);
+    expect(nearestCapturableControl(document.getElementById("degree"))).toBe(select);
   });
 });

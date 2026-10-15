@@ -105,8 +105,10 @@ calls to find every answer that reveals, hides, disables, or flips `required`
 on other fields. A disabled field isn't a removed one, so the fingerprint
 doesn't change. After each change, wait for `pfAjaxComplete` instead of
 sleeping. A `SelectManyMenu` (`<select multiple>` that PrimeFaces renders as
-0×0) is invisible to the scanner: list it under `uncapturedQuestions` with
-`kind: "widget"`.
+0×0 beside a clickable list) is captured as one `select` row: the backing
+select's selector, judged visible by its list, with every option. A token value
+names ONE option, and the fill adds it without clearing others. So a
+pick-several list is usually `human`.
 
 - `fields: []` with a non-empty `frames` → the form lives in an iframe. A
   same-origin frame: navigate the tab to the frame URL and re-probe. A

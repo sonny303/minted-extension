@@ -22,18 +22,18 @@ from an API row. Confirm it before importing.
 
 ## Fields on the form that the template lacks
 
-**All of them.** The portal is registered with no field maps, so all 110
-captured rows plus the one uncapturable list are new. Nothing in the template
+**All of them.** The portal is registered with no field maps, so all 111
+captured rows are new. Nothing in the template
 conflicts with the suggestions, because it has no mappings yet.
 
 | Section | Rows | Suggested |
 |---|---|---|
 | Office contact information | 5 | `credentialingContact.firstName / lastName / title / phoneOffice / email` (medium — the payer sends follow-up paperwork to this person) |
-| New provider information | 53 | `provider.firstName / lastName / middleInitial / dateOfBirth / npi / caqhId / taxonomyCode` (high), `provider.gender` (medium), `provider.degree` (low — payer codes), `facility.street / suite / city / state / appointmentPhone` (high), `facility.zip` (medium, 5-digit mask), `group.npiType2` for billing NPI and `group.tin` for tax id (medium), `assignment.startDate` (medium), `facility.acceptingNewPatients` (medium), 24/7 → fixed "No" |
+| New provider information | 54 | `provider.firstName / lastName / middleInitial / dateOfBirth / npi / caqhId / taxonomyCode` (high), `provider.gender` (medium), `provider.degree` (low — payer codes), `facility.street / suite / city / state / appointmentPhone` (high), `facility.zip` (medium, 5-digit mask), `group.npiType2` for billing NPI and `group.tin` for tax id (medium), `assignment.startDate` (medium), `facility.acceptingNewPatients` (medium), 24/7 → fixed "No" |
 | New group contract | 47 | `group.tin`, `group.npiType2`, `facility.phone`, `facility.fax` (high); `group.name` (legal W-9 name), the service-location block → `facility.*` (medium); directory display name → `facility.name` (low); group taxonomy → `provider.taxonomyCode` (low); 24/7 → fixed "No" |
 | Submitter information | 5 | `user.name / title / email` (high); phone → `credentialingContact.phoneOffice` (low, no `user.phone` token) |
 
-Rows a person has to decide (68):
+Rows a person has to decide (69):
 
 - **Office hours (56 rows)**: provider and group, Sunday–Saturday, from/to as
   `HH:MM` plus an AM/PM select. `facility.hours` is one free-text value, so this
@@ -47,8 +47,9 @@ Rows a person has to decide (68):
 - **Group start date**: "Date patients will begin receiving services through
   this group". Case-specific; `facility.effectiveDate` is the nearest token.
 - **ZIP+4 (2)**: optional, and no catalog token exists.
-- **Human (4)**: owners/partners/investors, supervising physician NPI and name
-  (required only when Degree is PA or LAT), and comments.
+- **Human (5)**: owners/partners/investors, supervising physician NPI and name
+  (required only when Degree is PA or LAT), the behavioral-health areas list
+  (below), and comments.
 
 ## What the template needs
 
@@ -73,15 +74,18 @@ Rows a person has to decide (68):
    group contract)", but the form always shows a required **New group
    contract** block next to the provider block. Whether an existing-group
    request may leave that block empty is unknown without submitting.
-7. **Scanner and fill support for PrimeFaces SelectManyMenu**, for the
-   behavioral-health list below. Until then a person fills it.
+7. **A person picks the behavioral-health areas.** The scanner and fill now
+   support PrimeFaces SelectManyMenu, so the list imports as a row. But no
+   catalog token says which areas a provider practices, and a token's single
+   value could add at most one area.
 
-## Behavioral health areas of expertise (not capturable yet)
+## Behavioral health areas of expertise
 
 `#networkEnrollmentForm\:BehavioralAreasOfExpertise_input` is a required
-`<select multiple>` labelled "select up to 10 areas". It appears only when
-Degree is APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or LPC. Its options (value =
-code; label = `<code> - <text>`):
+`<select multiple>` (a PrimeFaces SelectManyMenu) labelled "select up to 10
+areas". It appears only when Degree is APRN, CNS, LCPC, LCP, LMFT, LMLP, LMSW or
+LPC. It is captured as one `select` row: decision `human`, with `revealedBy`
+naming those degrees. Its options (value = code; label = `<code> - <text>`):
 
 | Code | Area | Code | Area |
 |---|---|---|---|
