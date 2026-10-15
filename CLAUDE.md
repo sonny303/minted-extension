@@ -446,6 +446,11 @@ panel, and nothing else would catch it.
   (`scanCapturableFields({ optionsCap: Infinity })`). Structured controls record `{value,label}[]` for
   `<select>`, radio groups, and valued checkboxes; `selected`/`checked`/typed
   values are never read. Empty option lists are ignored on re-capture.
+  A vocabulary is kept up to 1000 entries (`CONTROL_OPTIONS_CAP`,
+  `src/content/captureScan.ts`) — the panel's own write-boundary cap, which
+  **rejects** (422) a longer list rather than truncating it. That covers a
+  US-state dropdown, a 146-entry specialty list, an 856-entry taxonomy menu.
+  The cap is a locked contract: raise it panel-first, never one-sided.
 - **Manual field mapping exists because a scan only sees what is rendered AND
   wired at that moment.** A field a portal reveals after an earlier answer is
   legitimately missed. `+ Add field` enters pick mode
