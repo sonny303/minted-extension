@@ -9,7 +9,12 @@ import {
   querySelectorAllDeep,
   querySelectorDeep,
 } from "./deepDom";
-import { isPrimeFacesFocusInput, primeFacesSelectMenu } from "./primeFaces";
+import {
+  isPrimeFacesFocusInput,
+  isPrimeFacesListFilter,
+  primeFacesBackingSelect,
+  primeFacesWidget,
+} from "./primeFaces";
 
 export interface CapturedField {
   /** The payer's own label text, verbatim (trimmed). The server normalizes it
@@ -17,6 +22,10 @@ export interface CapturedField {
   label: string;
   /** A selector that resolves this control, preferring stable identity. */
   selector: string;
+  /** A multi-select (`<select multiple>`, including a PrimeFaces
+   * SelectManyMenu) is an ordinary "select" row: one row, its backing
+   * select's selector, its full option list. The wire has no multi type, and
+   * none is needed — the fill reads `multiple` off the live control. */
   fieldType: PortalFieldType;
   /** Nearest fieldset/section heading, when the form has one. */
   formSection: string | null;
@@ -32,7 +41,9 @@ export { FILLABLE };
  * (mintedpanel `CONTROL_OPTIONS_CAP`, which REJECTS a longer list, so a
  * capture never sends more). 1000 holds every real vocabulary seen so far:
  * a US-state dropdown, BlueKC's 146 specialties, an 856-entry taxonomy menu.
- * Raise it only after the panel has deployed the same cap. */
+ * Raise it only after the panel has deployed the same cap. It is the default
+ * for anything that proposes to the panel; the capture probe, whose files never
+ * cross that boundary, asks for the full vocabulary instead (`optionsCap`). */
 export const CONTROL_OPTIONS_CAP = 1000;
 
 /** True when the control has a non-zero layout box (trainer can see it).
@@ -140,13 +151,50 @@ export function isHiddenControl(el: Element): boolean {
   return false;
 }
 
+/** Every <label> wired to this control: each `label[for=id]` (a page may have
+ * several — Qualtrics draws the radio circle in one and the answer text in
+ * another) plus a wrapping label. */
+function labelsOf(el: Element): Element[] {
+  const labels = el.id ? querySelectorAllDeep(`label[for="${CSS.escape(el.id)}"]`) : [];
+  const wrapping = closestDeep(el, "label");
+  if (wrapping && !labels.includes(wrapping)) labels.push(wrapping);
+  return labels;
+}
+
+/** The visible label of a radio/checkbox the PAGE draws instead of the
+ * browser (Qualtrics, Bootstrap custom-control, Material): the real input is
+ * shrunk to 0×0 / opacity 0 and the person clicks its label. Such a control is
+ * exactly as visible as that label. Null for any other control. */
+function visibleChoiceLabel(el: Element): Element | null {
+  if (!(el instanceof HTMLInputElement) || (el.type !== "radio" && el.type !== "checkbox")) {
+    return null;
+  }
+  return labelsOf(el).find((label) => hasLayoutBox(label) && !isHiddenControl(label)) ?? null;
+}
+
 /** Skip controls the trainer cannot meaningfully see: zero-size / no rects,
- * or positively hidden per `isHiddenControl`. */
+ * or positively hidden per `isHiddenControl`. A zero-size radio/checkbox with
+ * a visible label is the styled-control pattern, not noise, and is kept. A
+ * PrimeFaces menu's backing select (0×0 by design) is exactly as visible as
+ * the widget drawn for it; the widget's focus input and list filter are not
+ * fields at all. */
 export function isCapturableControl(el: Element): boolean {
-  if (isPrimeFacesFocusInput(el)) return false;
-  const menu = primeFacesSelectMenu(el);
-  if (menu && el === menu.select) return hasLayoutBox(menu.wrapper) && !isHiddenControl(menu.wrapper);
-  return hasLayoutBox(el) && !isHiddenControl(el);
+  if (isPrimeFacesFocusInput(el) || isPrimeFacesListFilter(el)) return false;
+  const widget = primeFacesWidget(el);
+  if (widget) return hasLayoutBox(widget) && !isHiddenControl(widget);
+  if (isHiddenControl(el)) return false;
+  return hasLayoutBox(el) || visibleChoiceLabel(el) != null;
+}
+
+/** What a person sees for this control, and so what reading order (and the
+ * picker's outline) is measured by: the PrimeFaces widget, a styled choice's
+ * visible label (its 0×0 input may be parked anywhere), else the control
+ * itself. */
+export function visibleAnchor(el: Element): Element {
+  const widget = primeFacesWidget(el);
+  if (widget) return widget;
+  if (hasLayoutBox(el)) return el;
+  return visibleChoiceLabel(el) ?? el;
 }
 
 export function controlType(el: Element): PortalFieldType {
@@ -213,8 +261,9 @@ function structuralPath(el: Element): string {
 /** The most stable selector we can offer for this control, in descending
  * order of durability: a real id, then name (scoped by tag AND type so a
  * radio group's members don't all collapse onto the first match), then the
- * structural path above. */
-function selectorFor(el: Element): string {
+ * structural path above. Exported for the capture probe, which names a page's
+ * navigation buttons the same way. */
+export function selectorFor(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
   const name = (el as HTMLElement & { name?: string }).name ?? el.getAttribute("name");
   if (name) {
@@ -267,25 +316,47 @@ export function hostLabel(host: Element): string {
   return parts.join(" ").trim();
 }
 
-/** The label a human would read for this control: its <label>, then aria
- * text, then placeholder. Empty when the form gives us nothing — such a field
- * is still captured (with its selector) rather than silently dropped, because
- * a human can name it in the review UI. */
+/** Subtrees inside a label that are a WIDGET, not the caption. Qualtrics
+ * renders its date picker's whole calendar inside the question's <label>, so
+ * plain textContent read "Today's Date: Previous Month (September 2026)
+ * October 2026 … Su Mo Tu … 27 28 29" as the field's name. Links stay: "I
+ * accept the <a>terms</a>" is caption text. */
+const CAPTION_NOISE =
+  "table, [role='grid'], [role='dialog'], [role='listbox'], [role='menu'], button, select, textarea, input, script, style, link, noscript, template, svg";
+
+/** A label's own text, minus any embedded widget's. Same whitespace as
+ * textContent when there's nothing to drop. */
+function captionText(node: Element | null | undefined): string {
+  if (!node) return "";
+  if (!node.querySelector(CAPTION_NOISE)) return node.textContent ?? "";
+  let text = "";
+  const walk = (parent: Node): void => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) text += child.textContent ?? "";
+      else if (child.nodeType === Node.ELEMENT_NODE && !(child as Element).matches(CAPTION_NOISE)) walk(child);
+    }
+  };
+  walk(node);
+  return text;
+}
+
+/** The label a human would read for this control: its <label>s (the first
+ * that has text — a drawn-control label is often empty), then aria text, then
+ * placeholder. Empty when the form gives us nothing — such a field is still
+ * captured (with its selector) rather than silently dropped, because a human
+ * can name it in the review UI. */
 function labelFor(el: Element): string {
-  if (el.id) {
-    const explicit = querySelectorDeep(`label[for="${CSS.escape(el.id)}"]`);
-    const text = explicit?.textContent?.trim();
+  for (const label of labelsOf(el)) {
+    const text = captionText(label).trim();
     if (text) return text;
   }
-  const wrapping = closestDeep(el, "label")?.textContent?.trim();
-  if (wrapping) return wrapping;
   const aria = el.getAttribute("aria-label")?.trim();
   if (aria) return aria;
   const labelledBy = el.getAttribute("aria-labelledby");
   if (labelledBy) {
     const text = labelledBy
       .split(/\s+/)
-      .map((id) => querySelectorDeep(`#${CSS.escape(id)}`)?.textContent?.trim() ?? "")
+      .map((id) => captionText(querySelectorDeep(`#${CSS.escape(id)}`)).trim())
       .filter(Boolean)
       .join(" ");
     if (text) return text;
@@ -316,7 +387,9 @@ function captureLabel(el: Element, type: PortalFieldType): string {
   }
   const wired = labelFor(el);
   if (wired) return wired;
-  return nearbyLabel(el);
+  // A PrimeFaces backing select sits two wrappers deep in its widget; the
+  // caption a person reads is beside the widget, not beside the select.
+  return nearbyLabel(primeFacesWidget(el) ?? el);
 }
 
 function cleanLabelText(raw: string | null | undefined): string {
@@ -340,10 +413,7 @@ function radioGroupLabel(el: HTMLInputElement): string {
   );
   if (group) {
     const legend = cleanLabelText(
-      querySelectorDeep(
-        "legend, [slot='legend'], lh-group-legend",
-        group,
-      )?.textContent,
+      captionText(querySelectorDeep("legend, [slot='legend'], lh-group-legend", group)),
     );
     if (legend) return legend;
     const aria = cleanLabelText(group.getAttribute("aria-label"));
@@ -416,7 +486,7 @@ function sectionFor(el: Element): string | null {
   const group = closestDeep(el, "fieldset, [role='group'], lh-checkbox-group, [role='radiogroup']");
   if (group) {
     const legend = cleanLabelText(
-      querySelectorDeep("legend, [slot='legend'], lh-group-legend", group)?.textContent,
+      captionText(querySelectorDeep("legend, [slot='legend'], lh-group-legend", group)),
     );
     if (legend) return legend;
     const aria = cleanLabelText(group.getAttribute("aria-label"));
@@ -424,19 +494,26 @@ function sectionFor(el: Element): string | null {
   }
   const section = closestDeep(el, "section, [role='group']");
   const heading = section
-    ? cleanLabelText(querySelectorDeep("h1, h2, h3, h4", section)?.textContent)
+    ? cleanLabelText(captionText(querySelectorDeep("h1, h2, h3, h4", section)))
     : "";
   return heading || null;
 }
 
-function capOptions(options: { value: string; label: string }[]): { value: string; label: string }[] {
-  return options.slice(0, CONTROL_OPTIONS_CAP);
+function capOptions(
+  options: { value: string; label: string }[],
+  cap: number,
+): { value: string; label: string }[] {
+  return options.slice(0, cap);
 }
 
 /** Option vocabulary for a structured control. Reads each choice's declared
  * `value` attribute and its visible label — never `selected`, `checked`, or a
  * typed value. */
-function optionsFor(el: Element, type: PortalFieldType): { value: string; label: string }[] | undefined {
+function optionsFor(
+  el: Element,
+  type: PortalFieldType,
+  cap: number,
+): { value: string; label: string }[] | undefined {
   if (type === "select" && el instanceof HTMLSelectElement) {
     const options: { value: string; label: string }[] = [];
     for (const option of Array.from(el.options)) {
@@ -446,7 +523,7 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
       if (value === "") continue;
       options.push({ value, label: (option.textContent ?? "").trim() });
     }
-    return capOptions(options);
+    return capOptions(options, cap);
   }
   if (type === "radio") {
     // Name-matched radios may sit in sibling shadow trees under one group host;
@@ -465,7 +542,7 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
       if (value === "") continue;
       options.push({ value, label: labelFor(radio) || value });
     }
-    return capOptions(options);
+    return capOptions(options, cap);
   }
   if (type === "checkbox") {
     const value = (el as HTMLElement & { value?: string }).value ?? el.getAttribute("value");
@@ -492,6 +569,9 @@ function optionsFor(el: Element, type: PortalFieldType): { value: string; label:
 export interface DescribeControlOptions {
   /** Omit declared choice values when only selector/label metadata is needed. */
   includeOptions?: boolean;
+  /** Max choices kept per control. Defaults to the panel's write-boundary
+   * cap; only a caller whose output never reaches that boundary may raise it. */
+  optionsCap?: number;
 }
 
 export function describeControl(
@@ -501,7 +581,7 @@ export function describeControl(
   const type = controlType(el);
   const capturedOptions = options.includeOptions === false
     ? undefined
-    : optionsFor(el, type);
+    : optionsFor(el, type, options.optionsCap ?? CONTROL_OPTIONS_CAP);
   return {
     label: captureLabel(el, type),
     selector: selectorFor(el),
@@ -517,16 +597,20 @@ export function describeControl(
  * on nothing mappable. */
 export function nearestCapturableControl(node: Element | null): Element | null {
   if (node == null) return null;
-  if (node.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(node)?.select ?? node);
+  // Anything inside a PrimeFaces menu widget — a SelectManyMenu's list item or
+  // filter box, a SelectOneMenu's label — means that menu's backing select.
+  const backing = primeFacesBackingSelect(node);
+  if (backing) return backing;
+  if (node.matches(FILLABLE)) return canonicalControl(node);
   for (const ancestor of ancestorsIncludingShadow(node)) {
-    if (ancestor.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(ancestor)?.select ?? ancestor);
+    if (ancestor.matches(FILLABLE)) return canonicalControl(ancestor);
   }
   const label = closestDeep(node, "label");
   if (label) {
     const forId = label.getAttribute("for");
     if (forId) {
       const target = querySelectorDeep(`#${CSS.escape(forId)}`);
-      if (target?.matches(FILLABLE)) return canonicalControl(primeFacesSelectMenu(target)?.select ?? target);
+      if (target?.matches(FILLABLE)) return canonicalControl(primeFacesBackingSelect(target) ?? target);
     }
     const inner = querySelectorDeep(FILLABLE, label);
     if (inner) return canonicalControl(inner);
@@ -540,7 +624,9 @@ export function nearestCapturableControl(node: Element | null): Element | null {
   return fillableNode ? canonicalControl(fillableNode) : null;
 }
 
-export function scanCapturableFields(): CapturedField[] {
+export function scanCapturableFields(
+  options: Pick<DescribeControlOptions, "optionsCap"> = {},
+): CapturedField[] {
   const seenRadioNames = new Set<string>();
   const seenControls = new Set<Element>();
   const fields: CapturedField[] = [];
@@ -556,11 +642,7 @@ export function scanCapturableFields(): CapturedField[] {
       return isCapturableControl(el);
     })
     .sort(
-      (a, b) => {
-        const aMenu = primeFacesSelectMenu(a.el);
-        const bMenu = primeFacesSelectMenu(b.el);
-        return compareVisualPosition(aMenu?.wrapper ?? a.el, bMenu?.wrapper ?? b.el) || a.index - b.index;
-      },
+      (a, b) => compareVisualPosition(visibleAnchor(a.el), visibleAnchor(b.el)) || a.index - b.index,
     );
 
   for (const { el } of visible) {
@@ -572,7 +654,7 @@ export function scanCapturableFields(): CapturedField[] {
         seenRadioNames.add(name);
       }
     }
-    fields.push(describeControl(el));
+    fields.push(describeControl(el, options));
   }
 
   return fields;

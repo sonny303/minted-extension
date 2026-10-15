@@ -10,6 +10,14 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 import { FIELD_NOT_FOUND_REASON } from "../shared/fixit";
 import { createFillEventV2OpaqueKey } from "../shared/fillEventV2";
 import { buildDateReversionFixture } from "../__fixtures__/dom/portalScenarios";
+import {
+  BCBSKS_AREAS_ID,
+  BCBSKS_AREAS_SELECTOR,
+  highlightedCodes,
+  postedCodes,
+  selectManyMenuMarkup,
+  wireSelectManyMenu,
+} from "../__fixtures__/dom/primeFacesSelectManyMenu";
 
 // jsdom does not provide CSS.escape; applyRadio uses it to scope a NAMED radio
 // group. Same shim the captureScan and elementPicker suites already carry —
@@ -1397,4 +1405,205 @@ describe("workshop / engine parity on what counts as a field", () => {
       expect(workshopSaysFillable).toBe(engineFilled);
     });
   }
+});
+
+// The BCBSKS behavioral-health list (PrimeFaces 10 SelectManyMenu). Its
+// backing `<select multiple>` is what the form posts; the list is what the
+// coordinator sees. The fill drives the list — a ctrl-click per option, the
+// way a person adds to a multi-selection — and checks both agree afterwards.
+// Markup + widget port: src/__fixtures__/dom/primeFacesSelectManyMenu.ts.
+describe("PrimeFaces SelectManyMenu fill", () => {
+  const areas = (over: Partial<FillInstruction> = {}): FillInstruction =>
+    instr({ label: "Areas of expertise", selector: BCBSKS_AREAS_SELECTOR, fieldType: "select", value: "A12", ...over });
+  const wrapper = (): HTMLElement => document.getElementById(BCBSKS_AREAS_ID)!;
+  const item = (code: string): HTMLElement =>
+    wrapper().querySelectorAll<HTMLElement>(".ui-selectlistbox-item")[Number(code.slice(1)) - 1]!;
+
+  it("adds the mapped option by clicking its visible item, keeping the coordinator's other choices", async () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    const widget = wireSelectManyMenu(wrapper());
+    item("A03").click(); // the coordinator's own pick: a plain click
+    expect(postedCodes(wrapper())).toEqual(["A03"]);
+
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.filled).toEqual(["Areas of expertise"]);
+    expect(result.skipped).toEqual([]);
+    expect(result.writes).toEqual([{ selector: BCBSKS_AREAS_SELECTOR, kind: "static" }]);
+    expect(postedCodes(wrapper())).toEqual(["A03", "A12"]);
+    expect(highlightedCodes(wrapper())).toEqual(["A03", "A12"]);
+    expect(widget.changes()).toBe(2);
+    // The outline goes on the list the coordinator reviews.
+    expect(wrapper().classList.contains("mp-fill-static")).toBe(true);
+  });
+
+  it("matches an option by its visible label too", async () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    wireSelectManyMenu(wrapper());
+    const result = await applyFillSettled([areas({ value: "A40 - COGNITIVE BEHAVIORAL THERAPY (CBT)" })]);
+    expect(result.filled).toEqual(["Areas of expertise"]);
+    expect(postedCodes(wrapper())).toEqual(["A40"]);
+    expect(highlightedCodes(wrapper())).toEqual(["A40"]);
+  });
+
+  it("works the same with showCheckbox, where every click toggles", async () => {
+    document.body.innerHTML = selectManyMenuMarkup({ showCheckbox: true, selected: ["A01"] });
+    wireSelectManyMenu(wrapper(), { showCheckbox: true });
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.filled).toEqual(["Areas of expertise"]);
+    expect(postedCodes(wrapper())).toEqual(["A01", "A12"]);
+  });
+
+  it("leaves an already-chosen option alone and reports no write", async () => {
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A12"] });
+    const widget = wireSelectManyMenu(wrapper());
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.filled).toEqual(["Areas of expertise"]);
+    expect(result.attemptedLabels).toEqual([]);
+    expect(result.writes).toEqual([]);
+    expect(widget.changes()).toBe(0);
+    expect(postedCodes(wrapper())).toEqual(["A12"]);
+  });
+
+  it("skips a list inside a hidden panel without touching it", async () => {
+    document.body.innerHTML = `<div style="display:none">${selectManyMenuMarkup()}</div>`;
+    const widget = wireSelectManyMenu(wrapper());
+    const result = await applyFillSettled([areas()]);
+    expect(result.filled).toEqual([]);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ label: "Areas of expertise", reason: HIDDEN_REASON, kind: HIDDEN_KIND }),
+    ]);
+    expect(widget.changes()).toBe(0);
+    expect(postedCodes(wrapper())).toEqual([]);
+  });
+
+  it("guards the ITEM about to be clicked: one the list filter hid is not written", async () => {
+    document.body.innerHTML = selectManyMenuMarkup({ filter: true });
+    const widget = wireSelectManyMenu(wrapper());
+    item("A12").style.display = "none"; // the coordinator filtered the list
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({ reason: HIDDEN_REASON, kind: HIDDEN_KIND }),
+    ]);
+    expect(widget.changes()).toBe(0);
+    expect(postedCodes(wrapper())).toEqual([]);
+  });
+
+  it("refuses when a click would replace the other choices (metaKeySelection off)", async () => {
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A03"], metaKeySelection: false });
+    const widget = wireSelectManyMenu(wrapper(), { metaKeySelection: false });
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.filled).toEqual([]);
+    expect(result.skipped).toEqual([expect.objectContaining({
+      reason: "this list replaces its other choices on click; review this field on the portal",
+      kind: "unverified",
+    })]);
+    expect(widget.changes()).toBe(0);
+    expect(postedCodes(wrapper())).toEqual(["A03"]);
+  });
+
+  it("reports, never claims, a click that cleared other choices anyway", async () => {
+    // The init script says nothing, but the widget clears on every click.
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A03"] });
+    wireSelectManyMenu(wrapper(), { metaKeySelection: false });
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.filled).toEqual([]);
+    expect(result.skipped).toEqual([expect.objectContaining({
+      reason: "selecting it cleared the list's other choices; review this field on the portal",
+      kind: "unverified",
+    })]);
+  });
+
+  it("reports a vocabulary miss without the value", async () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    const widget = wireSelectManyMenu(wrapper());
+    const result = await applyFillSettled([areas({ value: "Equine therapy" })]);
+    expect(result.skipped).toEqual([expect.objectContaining({ reason: "dropdown: no option matches the mapped value" })]);
+    expect(JSON.stringify(result)).not.toContain("Equine");
+    expect(widget.changes()).toBe(0);
+  });
+
+  it("refuses a list whose items don't line up with its options", async () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    item("A12").textContent = "Something else";
+    const result = await applyFillSettled([areas({ value: "A12" })]);
+    expect(result.skipped).toEqual([expect.objectContaining({
+      reason: "list items do not line up with the field's options; review this field on the portal",
+    })]);
+    expect(postedCodes(wrapper())).toEqual([]);
+  });
+
+  it("never writes the backing select behind the list (synchronous path)", () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    const result = applyFill([areas({ value: "A12" })]);
+    expect(result.filled).toEqual([]);
+    expect(result.skipped).toEqual([expect.objectContaining({
+      reason: "multi-select list can only be filled through its visible items",
+    })]);
+    expect(postedCodes(wrapper())).toEqual([]);
+  });
+
+  it("keeps later probed fields valid under strictRevalidation (the click is not a form change)", async () => {
+    document.body.innerHTML = `${selectManyMenuMarkup()}<input id="email" type="text" />`;
+    wireSelectManyMenu(wrapper());
+    const keyA = createFillEventV2OpaqueKey("t");
+    const keyB = createFillEventV2OpaqueKey("t");
+    const list = areas({ mapId: "m-list", probeKey: keyA, telemetry: { targetKey: keyA, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null } });
+    const email = instr({ label: "Email", selector: "#email", value: "a@b.co", mapId: "m-email", probeKey: keyB, telemetry: { targetKey: keyB, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null } });
+    const probe = await probeFillOnPage([
+      { mapId: list.mapId, probeKey: keyA, selector: list.selector, selectorFallbacks: [], fieldType: "select", pageStep: null },
+      { mapId: email.mapId, probeKey: keyB, selector: email.selector, selectorFallbacks: [], fieldType: "text", pageStep: null },
+    ]);
+    expect(probe.map((p) => p.targetStatus)).toEqual(["unique", "unique"]);
+
+    const first = await applyFillSettled([list], true);
+    const second = await applyFillSettled([email], true);
+    expect([...first.filled, ...second.filled]).toEqual(["Areas of expertise", "Email"]);
+    expect([...first.skipped, ...second.skipped]).toEqual([]);
+    expect(postedCodes(wrapper())).toEqual(["A12"]);
+    expect(highlightedCodes(wrapper())).toEqual(["A12"]);
+  });
+
+  it("is a field to the Selector Workshop, and the engine fills it", async () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    wireSelectManyMenu(wrapper());
+    expect(describeSelectorMatches(BCBSKS_AREAS_SELECTOR)).toEqual({ valid: true, matches: 1, fillable: 1, radioGroup: false });
+    expect((await applyFillSettled([areas()])).filled).toEqual(["Areas of expertise"]);
+    expect(highlightedCodes(wrapper())).toEqual(["A12"]);
+  });
+});
+
+describe("multi-select fill and clear", () => {
+  it("adds to a native <select multiple> instead of replacing its selection", () => {
+    document.body.innerHTML = `
+      <select id="langs" multiple>
+        <option value="en" selected>English</option><option value="es">Spanish</option><option value="fr">French</option>
+      </select>`;
+    const result = applyFill([instr({ label: "Languages", selector: "#langs", fieldType: "select", value: "Spanish" })]);
+    expect(result.filled).toEqual(["Languages"]);
+    const select = document.querySelector<HTMLSelectElement>("#langs")!;
+    expect(Array.from(select.selectedOptions).map((option) => option.value)).toEqual(["en", "es"]);
+  });
+
+  it("clears a SelectManyMenu through its own list, and a native multi-select without choosing option 1", () => {
+    document.body.innerHTML = `
+      ${selectManyMenuMarkup({ selected: ["A03", "A12"] })}
+      <select id="langs" multiple><option value="en" selected>English</option><option value="es">Spanish</option></select>
+      <select id="empty" multiple><option value="x">X</option></select>`;
+    const wrapper = document.getElementById(BCBSKS_AREAS_ID)!;
+    const widget = wireSelectManyMenu(wrapper);
+    expect(clearPortalForm()).toBe(2);
+    expect(postedCodes(wrapper)).toEqual([]);
+    expect(highlightedCodes(wrapper)).toEqual([]);
+    expect(widget.changes()).toBe(2);
+    expect(document.querySelector<HTMLSelectElement>("#langs")!.selectedOptions).toHaveLength(0);
+    expect(document.querySelector<HTMLSelectElement>("#empty")!.selectedOptions).toHaveLength(0);
+  });
+
+  it("leaves a list it can't clear click-by-click alone (metaKeySelection off)", () => {
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A03", "A12"], metaKeySelection: false });
+    const wrapper = document.getElementById(BCBSKS_AREAS_ID)!;
+    wireSelectManyMenu(wrapper, { metaKeySelection: false });
+    expect(clearPortalForm()).toBe(0);
+    expect(postedCodes(wrapper)).toEqual(["A03", "A12"]);
+  });
 });

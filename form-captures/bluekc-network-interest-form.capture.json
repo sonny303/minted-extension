@@ -1,0 +1,4281 @@
+{
+  "format": "minted.form-capture/v1",
+  "portalKey": "bluekc-network-interest-form",
+  "portalKeyStatus": "provisional",
+  "templateStepId": null,
+  "startedAt": "2026-10-14T19:55:00.000Z",
+  "payer": "Blue KC (Blue Cross and Blue Shield of Kansas City)",
+  "formUrl": "https://bluekc.az1.qualtrics.com/jfe/form/SV_3jAoF5MwXJB7yKO",
+  "platform": "qualtrics",
+  "capturedWith": {
+    "probeVersion": 2,
+    "browser": "chrome"
+  },
+  "walkStatus": "complete through the final page (Page 23). Not submitted — submitting is the user's action.",
+  "pages": [
+    {
+      "pageStep": "Page 1",
+      "heading": null,
+      "reachedBy": "form start (reCAPTCHA v3 passes automatically in the user's own Chrome; fails in the built-in pane)",
+      "fingerprint": {
+        "keys": [
+          "QID85"
+        ],
+        "hash": "b807e6b1"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "9b5d4536"
+          }
+        ]
+      },
+      "interstitials": [],
+      "readyOnceApproved": true,
+      "automationBlockers": [],
+      "uncapturedQuestions": []
+    },
+    {
+      "pageStep": "Page 2",
+      "heading": null,
+      "reachedBy": "Page 1 → #NextButton (no answers needed)",
+      "fingerprint": {
+        "keys": [
+          "QID180",
+          "QID185",
+          "QID86",
+          "QID92"
+        ],
+        "hash": "9b5d4536"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [
+          {
+            "selector": "#QR\\~QID86\\~4",
+            "question": "QID86",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID86\\~5",
+            "question": "QID86",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": null,
+            "question": "QID92",
+            "kind": "uncapturable",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID185",
+            "question": "QID185",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "ceb9ce90"
+          }
+        ]
+      },
+      "interstitials": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Located in Blue KC service-area counties?: human",
+        "Provider/Submitter Name: medium confidence",
+        "Provider/Submitter Title: medium confidence",
+        "Today's Date: human",
+        "gate a person must clear: QID92 (signature pad)"
+      ],
+      "uncapturedQuestions": [
+        {
+          "question": "QID92",
+          "kind": "signature",
+          "required": true,
+          "text": "Signature pad (Qualtrics Draw question, canvas)"
+        }
+      ]
+    },
+    {
+      "pageStep": "Page 3",
+      "heading": null,
+      "reachedBy": "Page 2 → #NextButton after the user completed and signed the attestation",
+      "fingerprint": {
+        "keys": [
+          "QID189",
+          "QID190",
+          "QID202",
+          "QID204",
+          "QID208",
+          "QID209",
+          "QID210",
+          "QID211",
+          "QID52",
+          "QID65",
+          "QID95"
+        ],
+        "hash": "ceb9ce90"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [
+          {
+            "selector": "#QR\\~QID52\\~7",
+            "question": "QID52",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID52\\~8",
+            "question": "QID52",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID52\\~9",
+            "question": "QID52",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID95\\~7",
+            "question": "QID95",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID95\\~9",
+            "question": "QID95",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID95\\~8",
+            "question": "QID95",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID65\\~4",
+            "question": "QID65",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID202",
+            "question": "QID202",
+            "kind": "nonEmpty",
+            "message": "Your response must be at least 9 characters."
+          },
+          {
+            "selector": "#QR\\~QID189",
+            "question": "QID189",
+            "kind": "nonEmpty",
+            "message": "Your response must be at least 10 characters."
+          },
+          {
+            "selector": "#QR\\~QID190",
+            "question": "QID190",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "57ee76d5"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [
+        {
+          "question": "QID204",
+          "kind": "file",
+          "required": false,
+          "text": "Use the \"Choose File\" button below to upload a copy of your group's W-9 tax form."
+        },
+        {
+          "question": "QID209",
+          "kind": "file",
+          "required": false,
+          "text": "Please provide any additional supporting documents you may have, such as brochures, LOIs, PowerPoint description of services or products, etc. PDF format is strongly encouraged."
+        },
+        {
+          "question": "QID210",
+          "kind": "file",
+          "required": false,
+          "text": "If you are a DME, HIT, Lab or Specialty Pharmacy, and have a document listing your top 10 CPT/HCPS codes billed, you may attach it here."
+        }
+      ],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Form contact: name: medium confidence",
+        "Form contact: email: medium confidence",
+        "Form contact is practice administrator? (Y/N): undecided",
+        "Legal business name:: medium confidence",
+        "Group name (doing business as/DBA):: undecided",
+        "Top 10 CPT/HCPCS codes (DME/HIT/Lab/Pharmacy): human",
+        "How are claims billed?: medium confidence",
+        "Claims billed: other (specify): human"
+      ]
+    },
+    {
+      "pageStep": "Page 4",
+      "heading": null,
+      "reachedBy": "Page 3 → #NextButton after the user filled its ten required fields",
+      "fingerprint": {
+        "keys": [
+          "QID155"
+        ],
+        "hash": "57ee76d5"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [
+          {
+            "selector": "#QR\\~QID155\\~36",
+            "question": "QID155",
+            "kind": "answer",
+            "message": "Please answer this question."
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "c12f8525"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Network-interest attestation: human"
+      ]
+    },
+    {
+      "pageStep": "Page 5",
+      "heading": null,
+      "reachedBy": "Page 4 → #NextButton after the user selected the network-interest attestation",
+      "fingerprint": {
+        "keys": [
+          "QID212"
+        ],
+        "hash": "c12f8525"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "2c130e2c"
+          }
+        ]
+      },
+      "interstitials": [
+        {
+          "text": "Response Requested There is 1 unanswered question on this page. Would you like to continue? Continue Without Answering Answer the Question",
+          "dismissSelector": "#Page > div:nth-child(3) > div:nth-child(4) > div:nth-child(3) > button:nth-child(2)",
+          "proceedSelector": "#Page > div:nth-child(3) > div:nth-child(4) > div:nth-child(3) > button:nth-child(1)"
+        }
+      ],
+      "uncapturedQuestions": [
+        {
+          "question": "QID212",
+          "kind": "file",
+          "required": false,
+          "text": "Please complete the attached roster template with practitioner information and upload it to this survey form. Blue KC Provider Roster Template"
+        }
+      ],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "soft-required prompt: roster upload (QID212) requested; a runner could only skip it"
+      ]
+    },
+    {
+      "pageStep": "Page 6",
+      "heading": null,
+      "reachedBy": "Page 5 → #NextButton after the user uploaded the roster (no 'Response Requested' popup once a file is attached)",
+      "fingerprint": {
+        "keys": [
+          "QID82"
+        ],
+        "hash": "2c130e2c"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "0efc900f"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "30 service checkboxes: undecided (need a list-contains transform)",
+        "Services: other (specify): human"
+      ]
+    },
+    {
+      "pageStep": "Page 7",
+      "heading": null,
+      "reachedBy": "Page 6 → #NextButton after the user ticked their services",
+      "fingerprint": {
+        "keys": [
+          "QID94"
+        ],
+        "hash": "0efc900f"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "76acddc2"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Number of providers being added: human"
+      ]
+    },
+    {
+      "pageStep": "Page 8",
+      "heading": null,
+      "reachedBy": "Page 7 → #NextButton after the user entered the number of providers",
+      "fingerprint": {
+        "keys": [
+          "QID97"
+        ],
+        "hash": "76acddc2"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "bd3a5a2e"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1 name: medium confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 9",
+      "heading": null,
+      "reachedBy": "Page 8 → #NextButton after the user entered the provider name(s); one QID96/QID186 block for Provider 1",
+      "fingerprint": {
+        "keys": [
+          "QID186",
+          "QID96"
+        ],
+        "hash": "bd3a5a2e"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [
+          {
+            "selector": "#QR\\~QID96\\~1",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": "Please answer this question."
+          },
+          {
+            "selector": "#QR\\~QID96\\~3",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~4",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~9",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~14",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~15",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": "Please enter a valid US phone number XXX-XXX-XXXX."
+          },
+          {
+            "selector": "#QR\\~QID96\\~13",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~10",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~11",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          },
+          {
+            "selector": "#QR\\~QID96\\~12",
+            "question": "QID96",
+            "kind": "nonEmpty",
+            "message": ""
+          }
+        ],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "23238495"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: title: low confidence",
+        "Provider 1: provider type: medium confidence",
+        "Provider 1: fax: medium confidence",
+        "Provider 1: phone: medium confidence",
+        "Provider 1: ever opted out of Medicare (Y/N): human",
+        "Provider 1: accepting new patients (Y/N): medium confidence",
+        "Provider 1: patient gender restrictions: human",
+        "Provider 1: patient age restrictions: undecided"
+      ]
+    },
+    {
+      "pageStep": "Page 10",
+      "heading": null,
+      "reachedBy": "Page 9 → #NextButton after every Provider 1 box was answered and the phone passed Blue KC's US-number check",
+      "fingerprint": {
+        "keys": [
+          "QID182"
+        ],
+        "hash": "23238495"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "a4c97c8f"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: hospital name: human",
+        "Provider 1: hospital TIN: human",
+        "Provider 1: hospital address — recipient line: human",
+        "Provider 1: hospital address — delivery line: human",
+        "Provider 1: hospital address — last line (City ST ZIP): human"
+      ]
+    },
+    {
+      "pageStep": "Page 11",
+      "heading": null,
+      "reachedBy": "Page 10 → #NextButton after the user entered the hospital affiliation",
+      "fingerprint": {
+        "keys": [
+          "QID214"
+        ],
+        "hash": "a4c97c8f"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "d1bc931b"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: admitting privileges at affiliated hospital: medium confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 12",
+      "heading": null,
+      "reachedBy": "Page 11 → #NextButton after the user answered the admitting-privileges question",
+      "fingerprint": {
+        "keys": [
+          "QID98"
+        ],
+        "hash": "d1bc931b"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "2009b81b"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: license expiration date: medium confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 13",
+      "heading": null,
+      "reachedBy": "Page 12 → #NextButton after the user entered the licensure",
+      "fingerprint": {
+        "keys": [
+          "QID100"
+        ],
+        "hash": "2009b81b"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [
+              {
+                "selector": "#QR\\~QID100\\~1",
+                "option": "2"
+              }
+            ],
+            "leadsTo": "26d4e3d4"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: mid-level practitioner?: medium confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 14",
+      "heading": null,
+      "reachedBy": "Page 13 → #NextButton with 'mid-level?' answered No (option 2)",
+      "fingerprint": {
+        "keys": [
+          "QID101"
+        ],
+        "hash": "26d4e3d4"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "d1ae3291"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: primary specialty: low confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 15",
+      "heading": null,
+      "reachedBy": "Page 14 → #NextButton after the user picked the primary specialty",
+      "fingerprint": {
+        "keys": [
+          "QID137"
+        ],
+        "hash": "d1ae3291"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "b49b980a"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": true,
+      "automationBlockers": []
+    },
+    {
+      "pageStep": "Page 16",
+      "heading": null,
+      "reachedBy": "Page 15 → #NextButton after the user entered the taxonomy code (page took >3 s to swap)",
+      "fingerprint": {
+        "keys": [
+          "QID158"
+        ],
+        "hash": "b49b980a"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [
+              {
+                "selector": "#QR\\~QID158",
+                "notOption": "171"
+              }
+            ],
+            "leadsTo": "d1292be5",
+            "condition": "a secondary specialty is chosen → its taxonomy code is asked (Page 17a)"
+          },
+          {
+            "branch": [
+              {
+                "selector": "#QR\\~QID158",
+                "option": "171"
+              }
+            ],
+            "leadsTo": "81995948",
+            "condition": "'No secondary specialty' (171) → Page 17b (confirmed by the user, 2026-10-14)"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: secondary specialty: low confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 17a",
+      "heading": null,
+      "reachedBy": "Page 16 → #NextButton with a secondary specialty chosen (route 1)",
+      "fingerprint": {
+        "keys": [
+          "QID146"
+        ],
+        "hash": "d1292be5"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": null
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Provider 1: secondary taxonomy code: human"
+      ]
+    },
+    {
+      "pageStep": "Page 17b",
+      "heading": null,
+      "reachedBy": "Page 16 → #NextButton after the user went Back and changed the secondary specialty to 'No secondary specialty' (route 2, confirmed)",
+      "fingerprint": {
+        "keys": [
+          "QID215"
+        ],
+        "hash": "81995948"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "c80b7d41"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Admitting privileges (piped names empty on this path): undecided"
+      ]
+    },
+    {
+      "pageStep": "Page 18",
+      "heading": null,
+      "reachedBy": "Page 17b → #NextButton with QID215 left unanswered (not required)",
+      "fingerprint": {
+        "keys": [
+          "QID216"
+        ],
+        "hash": "c80b7d41"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [
+          {
+            "selector": "#QR\\~QID216\\~1",
+            "question": "QID216",
+            "kind": "answer",
+            "message": "Please answer this question."
+          }
+        ],
+        "routes": [
+          {
+            "branch": [
+              {
+                "selector": "#QR\\~QID216\\~1",
+                "option": "2"
+              }
+            ],
+            "leadsTo": "15ee870d",
+            "condition": "'No' selected by Claude at the user's direction"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Admitting privileges, slot 3 (piped names empty): undecided"
+      ]
+    },
+    {
+      "pageStep": "Page 19",
+      "heading": null,
+      "reachedBy": "Page 18 → #NextButton with 'No' selected",
+      "fingerprint": {
+        "keys": [
+          "QID160"
+        ],
+        "hash": "15ee870d"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "34c6c60e"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Number of practice locations being added: human"
+      ]
+    },
+    {
+      "pageStep": "Page 20",
+      "heading": null,
+      "reachedBy": "Page 19 → #NextButton after the user entered the number of locations",
+      "fingerprint": {
+        "keys": [
+          "QID161"
+        ],
+        "hash": "34c6c60e"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "676c111b"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Location 1: recipient line (location name): medium confidence",
+        "Location 1: delivery address line: medium confidence",
+        "Location 1: last line (City ST ZIP): undecided"
+      ]
+    },
+    {
+      "pageStep": "Page 21",
+      "heading": null,
+      "reachedBy": "Page 20 → #NextButton after the user entered Location 1's address",
+      "fingerprint": {
+        "keys": [
+          "QID175"
+        ],
+        "hash": "676c111b"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "89ef63ab"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Location 1: handicap accessible?: undecided"
+      ]
+    },
+    {
+      "pageStep": "Page 22",
+      "heading": null,
+      "reachedBy": "Page 21 → #NextButton after the user answered the accessibility question",
+      "fingerprint": {
+        "keys": [
+          "QID162"
+        ],
+        "hash": "89ef63ab"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "advance",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "advance": {
+        "selector": "#NextButton",
+        "requires": [],
+        "routes": [
+          {
+            "branch": [],
+            "leadsTo": "c1c28c2c"
+          }
+        ]
+      },
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "Location 1 practice type: Hospital or Facility Services: medium confidence",
+        "Location 1 practice type: Ambulatory Surgery Center Services: medium confidence",
+        "Location 1 practice type: Diagnostic Imaging Center Services: medium confidence",
+        "Location 1 practice type: Office/Clinic: medium confidence",
+        "Location 1 practice type: Dental Office: medium confidence"
+      ]
+    },
+    {
+      "pageStep": "Page 23",
+      "heading": null,
+      "reachedBy": "Page 22 → #NextButton after the user ticked the practice type",
+      "fingerprint": {
+        "keys": [
+          "QID181"
+        ],
+        "hash": "c1c28c2c"
+      },
+      "navigation": [
+        {
+          "kind": "back",
+          "caption": "Back",
+          "selector": "#PreviousButton",
+          "disabled": false
+        },
+        {
+          "kind": "submit",
+          "caption": "Next",
+          "selector": "#NextButton",
+          "disabled": false
+        }
+      ],
+      "submitWarning": true,
+      "advance": null,
+      "interstitials": [],
+      "uncapturedQuestions": [],
+      "readyOnceApproved": false,
+      "automationBlockers": [
+        "final page: its 'Next' button submits the form — the human submits"
+      ]
+    }
+  ],
+  "notes": [
+    "Every page of this Qualtrics survey has the same URL; pages are identified by their question ids (fingerprint.keys), not by URL. The extension's URL-based page matching cannot tell them apart.",
+    "QID92 is a Qualtrics 'Draw' question: a canvas signature pad with no input element. It is required to leave Page 2 and is not a capturable row.",
+    "QID180 (service-area counties) is NOT required: Next on an empty Page 2 flags QID86, QID92 and QID185 only.",
+    "The form's intro (Page 1) says this is a network-interest form, not an application, and asks the submitter to have ready: W-9, group NPI, provider NPI, certification numbers, practice addresses with their TINs, state license number and expiration, specialty taxonomy codes, supervising physician NPI (mid-levels), and top 10 CPT/HCPCS codes (DME/HIT/specialty pharmacy). Expect those on the pages after the attestation.",
+    "Interstitial seen once after Page 1 → Next: 'Your session was outdated, but we have updated you to your most recent response.' Cause: the same survey open in a second tab of the same browser (shared Qualtrics session). Its OK button was not captured with a selector (seen before probe v2); avoid it by keeping one tab per survey.",
+    "Page 3's file uploads (W-9, supporting documents, CPT list) create their <input type=file> only when clicked, so they are listed under uncapturedQuestions, not rows. None is required to advance.",
+    "Next on Qualtrics posts each page to Blue KC as a partial response. Page 2's attestation was completed and signed by the user on 2026-10-14; nothing has been submitted.",
+    "Page 5's 'Response Requested' popup is built on demand; its button selectors are structural (#Page > … > button:nth-child(n)) and were read once on 2026-10-14 — unconfirmed on replay. Button 1 'Continue Without Answering' skips, button 2 'Answer the Question' returns to the page.",
+    "The practitioner data for this form travels in the uploaded 'Blue KC Provider Roster Template' spreadsheet (Page 5), not in web fields — the roster-mapper skill's job, not this capture's.",
+    "Page 6 is a 30-option mark-all-that-apply services list. The fill engine checks a box only for a truthy word (yes/true/1/x/on/checked), so no list token can drive it today: the gap is a per-option 'list contains' transform over facility.serviceTypes.",
+    "Page 6's gate was not tested: the user ticked their services before Next, so whether the services question is required is unknown.",
+    "Page 7's count drives Page 8: Qualtrics renders exactly that many 'Provider k:' boxes (#QR\\~QID97\\~1…k), server-side, so only Provider 1 exists in this walk (count entered by the user). The page fingerprint (QID97) is the same for any count.",
+    "Qualtrics pipes earlier answers into question text: Page 9 reads 'What is the NPI for <name typed on Page 8>?'. Captured labels on Page 9 have the piped name replaced with '[Provider 1 name]' so this file stays value-free. The probe (and the extension's own capture) read piped text verbatim — a known gap for Qualtrics forms.",
+    "Page 9's QID96 is a Qualtrics form-field question with forced response on EVERY box: Next flags all ten Provider 1 detail fields together. Fax accepts the literal 'NA'. QID186 (NPI) was not flagged on that attempt, so whether it is required is not known.",
+    "Page 9 validates Phone Number as a real US (NANP) number in the form 'XXX-XXX-XXXX': dashes required, and neither the area code nor the exchange (middle three digits) may start with 0 or 1 — a well-formatted number with an exchange like 0xx/1xx is refused. Panel phone values are stored as digits, so a token fill needs a dashed-phone transform, and placeholder numbers will not pass.",
+    "Page 10 asks for Provider 1's hospital affiliation (name, TIN, USPS-formatted address in recipient / delivery / last-line form; the formatting example is an image). The panel has no hospital-affiliation fields — a token-catalog gap for credentialing forms generally. The provider's name is piped into the question and is redacted here as '[Provider 1 name]'.",
+    "Page 11 pipes two earlier answers into one question (provider name from Page 8, hospital name from Page 10); both are redacted in the captured label.",
+    "Page 12 raised no format error on Next with the expiration date as the user typed it; Blue KC's accepted date format(s) remain unconfirmed.",
+    "Page 13 'No' (not mid-level) leads straight to Page 14 (primary specialty); the 'Yes' branch — expected to ask for the supervising physician's NPI — was not walked.",
+    "Page 14's specialty dropdown has 146 options, all captured here. The extension's Train-forms capture and the panel's write boundary both cap option lists at 50 (CONTROL_OPTIONS_CAP), so proposing this row to the panel today would be rejected (>50) or truncated by the extension — the cap is the open cross-repo fix.",
+    "Page 15 pipes the specialty chosen on Page 14 into its question; the captured label shows '[Page 14 specialty]' instead of the chosen option.",
+    "Advance timing: Page 15 → 16 took longer than 3 s. A runner must wait for the fingerprint to CHANGE (poll), not sleep a fixed delay — an unchanged fingerprint with no errors means 'still loading', not 'refused'.",
+    "Blue KC reuses option codes across questions: value 171 is 'Durable Medical Equipment' on Page 14 and 'No secondary specialty' on Page 16. Option values are only meaningful per question; match fixed answers by label when comparing questions.",
+    "Page 17a pipes the secondary specialty chosen on Page 16 into its question; redacted as '[Page 16 secondary specialty]'.",
+    "Page 16 is a branch point: a chosen secondary specialty leads to Page 17a (its taxonomy code); changing the answer to 'No secondary specialty' (confirmed by the user) leads to Page 17b (QID215, admitting privileges) instead. Both routes are recorded on Page 16. Page 17a's own Next was never taken, so where it leads is not yet known.",
+    "Page 17b's question pipes two values that resolve EMPTY ('Does  have admitting privileges at ?') — a survey-logic quirk on Blue KC's side; the captured label is verbatim, there is nothing to redact.",
+    "Admitting-privileges questions repeat per slot: QID214 (Page 11, Provider 1 + hospital piped), QID215 (Page 17b, pipes empty, optional), QID216 (Page 18, pipes empty, REQUIRED). With one provider counted, Blue KC still shows the empty slots — a survey-logic issue to raise with them; a runner cannot answer a question that names nobody.",
+    "Page 19's location count drives Page 20 like Page 7 drives Page 8: one USPS three-line address block per location (Location 1 = #QR\\~QID161\\~1/13/14). USPS style needs two composed values the panel lacks as single tokens: delivery line (street + suite) and last line (City ST ZIP).",
+    "Page 21 pipes Location 1's recipient line (typed on Page 20) into its question; redacted as '[Location 1 recipient line]'.",
+    "Page 22 pipes Location 1's recipient line into its question; redacted as '[Location 1 recipient line]'.",
+    "Page 23 (QID181, text only) is the FINAL page: 'Click on the \"Next\" button below to submit this form now. This form will not submit until you click the \"Next\" button.' Its button is captioned 'Next' yet SUBMITS. Probe v2 now reads page copy and reports such an advance as kind 'submit' (submitWarning: true); before that fix it was classified 'advance' and a caption-trusting runner would have submitted. The walk stopped here; nothing was submitted."
+  ],
+  "rows": [
+    {
+      "label": "The Blue KC service area includes the following counties. Please indicate if you are located within these counties:KansasJohnson, WyandotteMissouriAndrew, Atchison, Bates, Benton, Buchanan, Caldwell, Carroll, Cass, Clay, Clinton, Daviess, DeKalb, Gentry, Grundy, Harrison, Henry, Holt, Jackson, Johnson, Lafayette, Livingston, Mercer, Nodaway, Pettis, Platte, Ray, St. Clair, Saline, Vernon, WorthYou will still be able to complete the form even if you are not located within the service area.",
+      "selector": "#QR\\~QID180\\~1",
+      "fieldType": "radio",
+      "formSection": "The Blue KC service area includes the following counties. Please indicate if you are located within these counties:KansasJohnson, WyandotteMissouriAndrew, Atchison, Bates, Benton, Buchanan, Caldwell, Carroll, Cass, Clay, Clinton, Daviess, DeKalb, Gentry, Grundy, Harrison, Henry, Holt, Jackson, Johnson, Lafayette, Livingston, Mercer, Nodaway, Pettis, Platte, Ray, St. Clair, Saline, Vernon, WorthYou will still be able to complete the form even if you are not located within the service area.",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes, I am located in one of the counties listed above."
+        },
+        {
+          "value": "2",
+          "label": "No, I am not located in one of the counties listed above."
+        }
+      ],
+      "pageStep": "Page 2",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Located in Blue KC service-area counties?",
+      "suggestedToken": null,
+      "evidence": "Claude: yes/no derived from whether the fill's practice location (facility.county + facility.state) is in Blue KC's listed counties; no token carries that answer, so a person picks it (or a future county-list transform could).",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider/Submitter Name",
+      "selector": "#QR\\~QID86\\~4",
+      "fieldType": "text",
+      "formSection": "Interest Form Attestation Provider acknowledges and agrees Blue KC's network requirements have been reviewed and understood. Provider certifies that the provider has reviewed the interest form and all associated forms and documentation and attests that the information provided to Blue KC is accurate and complete. Provider further acknowledges that incomplete forms will be automatically rejected, and Provider will not be eligible to submit again for 1 year after the date of form submission. Provider understands and agrees that this form must be executed by the Provider or the Provider’s authorized agent with full authority to bind the Provider.",
+      "pageStep": "Page 2",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Attestation: submitter name",
+      "suggestedToken": "contractingSigner.fullName",
+      "evidence": "Claude: attestation must be 'executed by the Provider or the Provider's authorized agent with full authority to bind' → the org's default contracting signer; use provider.fullName instead if the provider signs personally.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider/Submitter Title",
+      "selector": "#QR\\~QID86\\~5",
+      "fieldType": "text",
+      "formSection": "Interest Form Attestation Provider acknowledges and agrees Blue KC's network requirements have been reviewed and understood. Provider certifies that the provider has reviewed the interest form and all associated forms and documentation and attests that the information provided to Blue KC is accurate and complete. Provider further acknowledges that incomplete forms will be automatically rejected, and Provider will not be eligible to submit again for 1 year after the date of form submission. Provider understands and agrees that this form must be executed by the Provider or the Provider’s authorized agent with full authority to bind the Provider.",
+      "pageStep": "Page 2",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Attestation: submitter title",
+      "suggestedToken": "contractingSigner.title",
+      "evidence": "Claude: pairs with the submitter name above (same signer); medium because the signer policy (agent vs provider) is the org's call.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Today's Date:",
+      "selector": "#QR\\~QID185",
+      "fieldType": "text",
+      "formSection": "Today's Date:",
+      "pageStep": "Page 2",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Attestation date",
+      "suggestedToken": null,
+      "evidence": "Claude: the signing date; no token resolves 'today', so a person enters it (a date-of-fill transform would make it automatable).",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Name:",
+      "selector": "#QR\\~QID52\\~7",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Practice Administrator or the person to contact regarding questions about this network request form:",
+      "pageStep": "Page 3",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Form contact: name",
+      "suggestedToken": "credentialingContact.fullName",
+      "evidence": "Claude: section 'person to contact regarding questions about this network request form' → the org's default credentialing contact; use user.name instead if the coordinator filling the form should field questions.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Email:",
+      "selector": "#QR\\~QID52\\~8",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Practice Administrator or the person to contact regarding questions about this network request form:",
+      "pageStep": "Page 3",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Form contact: email",
+      "suggestedToken": "credentialingContact.email",
+      "evidence": "Claude: pairs with the form-contact name above (same person).",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Practice Administrator? (Y/N)",
+      "selector": "#QR\\~QID52\\~9",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Practice Administrator or the person to contact regarding questions about this network request form:",
+      "pageStep": "Page 3",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Form contact is practice administrator? (Y/N)",
+      "suggestedToken": null,
+      "evidence": "Claude: a per-org constant once decided — 'Y' if the form contact is the practice's own administrator, 'N' if it's a credentialing coordinator or agency. Required free-text Y/N, no token.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Name:",
+      "selector": "#QR\\~QID95\\~7",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Signator - the person who will be signing the contract:",
+      "pageStep": "Page 3",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Contract signatory: name",
+      "suggestedToken": "contractingSigner.fullName",
+      "evidence": "Claude: section 'the Signator - the person who will be signing the contract' is exactly the org's contracting signer.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Title:",
+      "selector": "#QR\\~QID95\\~9",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Signator - the person who will be signing the contract:",
+      "pageStep": "Page 3",
+      "sortOrder": 4,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Contract signatory: title",
+      "suggestedToken": "contractingSigner.title",
+      "evidence": "Claude: contract signatory's title (section 'Signator').",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Email:",
+      "selector": "#QR\\~QID95\\~8",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the Signator - the person who will be signing the contract:",
+      "pageStep": "Page 3",
+      "sortOrder": 5,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Contract signatory: email",
+      "suggestedToken": "contractingSigner.email",
+      "evidence": "Claude: contract signatory's email (section 'Signator').",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Legal business name:",
+      "selector": "#QR\\~QID65\\~4",
+      "fieldType": "text",
+      "formSection": "Please provide information about the group below:",
+      "pageStep": "Page 3",
+      "sortOrder": 6,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.name",
+      "evidence": "Claude: 'Legal business name' of the group; group.name is the only group-name token — medium until confirmed it holds the legal (W-9) name, not a DBA.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Group name (doing business as/DBA):",
+      "selector": "#QR\\~QID65\\~5",
+      "fieldType": "text",
+      "formSection": "Please provide information about the group below:",
+      "pageStep": "Page 3",
+      "sortOrder": 7,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: no DBA token exists; group.name likely holds the legal name (row above). Optional on this form.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Group Tax Identification Number (TIN):",
+      "selector": "#QR\\~QID202",
+      "fieldType": "text",
+      "formSection": null,
+      "pageStep": "Page 3",
+      "sortOrder": 8,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.tin",
+      "evidence": "Claude: label 'Group Tax Identification Number (TIN)' → group.tin. Payer validates ≥ 9 characters.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Group NPI/Type II NPI:",
+      "selector": "#QR\\~QID189",
+      "fieldType": "text",
+      "formSection": null,
+      "pageStep": "Page 3",
+      "sortOrder": 9,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": "group.npiType2",
+      "evidence": "Claude: label 'Group NPI/Type II NPI' → group.npiType2. Payer validates ≥ 10 characters.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "In the space below, provide the practice website URL or information.",
+      "selector": "#QR\\~QID190",
+      "fieldType": "text",
+      "formSection": null,
+      "pageStep": "Page 3",
+      "sortOrder": 10,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Practice website",
+      "suggestedToken": "group.websiteUrl",
+      "evidence": "Claude: practice website → group.websiteUrl. Required: a group with no website needs a person to write 'none' or a description.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "If you are a DME, HIT, Lab or Specialty Pharmacy, please add the top 10 CPT/HCPS codes billed. Submissions with insufficient or missing code information will have delays in assessment.",
+      "selector": "#QR\\~QID208",
+      "fieldType": "text",
+      "formSection": null,
+      "pageStep": "Page 3",
+      "sortOrder": 11,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Top 10 CPT/HCPCS codes (DME/HIT/Lab/Pharmacy)",
+      "suggestedToken": null,
+      "evidence": "Claude: only for DME/HIT/Lab/Specialty Pharmacy; no token holds billed-code lists. Optional.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "How are claims billed?",
+      "selector": "#QR\\~QID211\\~1",
+      "fieldType": "radio",
+      "formSection": null,
+      "options": [
+        {
+          "value": "1",
+          "label": "HCFA-1500"
+        },
+        {
+          "value": "2",
+          "label": "UB-04"
+        },
+        {
+          "value": "3",
+          "label": "Other (please specify):"
+        }
+      ],
+      "pageStep": "Page 3",
+      "sortOrder": 12,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: an org constant — professional (non-facility) practices such as outpatient PT bill on the CMS-1500 (HCFA-1500); facilities bill UB-04. Medium until the org confirms.",
+      "decision": "fixed",
+      "confidence": "medium",
+      "suggestedValue": "1",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Other (please specify):",
+      "selector": "#QR\\~QID211\\~3\\~TEXT",
+      "fieldType": "text",
+      "formSection": null,
+      "pageStep": "Page 3",
+      "sortOrder": 13,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Claims billed: other (specify)",
+      "suggestedToken": null,
+      "evidence": "Claude: the free-text box for 'Other' on the claims question; only used when Other is picked.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Please attest that you are interested in joining the networks below:Blue Care HMOBlue Access HMO/EPOPreferred Care PPO/EPOFreedom Network PPO/EPO/LeasedFreedom Network Select PPO/EPO/LeasedPreferred Health Professional PPO/EPO/LeasedPreferred Care Blue PPO/EPOBlue Select PPO/EPOBlueSelect Plus PPO/EPOPar/Traditional HMOPar/Traditional PPO",
+      "selector": "#QR\\~QID155\\~36",
+      "fieldType": "radio",
+      "formSection": "Please attest that you are interested in joining the networks below:Blue Care HMOBlue Access HMO/EPOPreferred Care PPO/EPOFreedom Network PPO/EPO/LeasedFreedom Network Select PPO/EPO/LeasedPreferred Health Professional PPO/EPO/LeasedPreferred Care Blue PPO/EPOBlue Select PPO/EPOBlueSelect Plus PPO/EPOPar/Traditional HMOPar/Traditional PPO",
+      "options": [
+        {
+          "value": "36",
+          "label": "I am interested in joining the networks above."
+        }
+      ],
+      "pageStep": "Page 4",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Network-interest attestation",
+      "suggestedToken": null,
+      "evidence": "Claude: a one-option attestation of interest in Blue KC's 11 listed networks (Blue Care HMO … Par/Traditional PPO). Attestations stay with a person even though the answer never varies; required to leave the page.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Acupuncture",
+      "selector": "#QR\\~QID82\\~1",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Acupuncture"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Medication Assistance Treatment",
+      "selector": "#QR\\~QID82\\~19",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Medication Assistance Treatment"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Casting",
+      "selector": "#QR\\~QID82\\~5",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Casting"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Mobile Provider",
+      "selector": "#QR\\~QID82\\~20",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Mobile Provider"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Chemotherapy",
+      "selector": "#QR\\~QID82\\~7",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Chemotherapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 4,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Moderate Sedation",
+      "selector": "#QR\\~QID82\\~21",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Moderate Sedation"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 5,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Chronic Care Management",
+      "selector": "#QR\\~QID82\\~8",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Chronic Care Management"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 6,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "MRI Imaging",
+      "selector": "#QR\\~QID82\\~22",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "MRI Imaging"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 7,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "CT Imaging",
+      "selector": "#QR\\~QID82\\~9",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "CT Imaging"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 8,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Nutritional Counseling",
+      "selector": "#QR\\~QID82\\~23",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Nutritional Counseling"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 9,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "COVID-19 Testing",
+      "selector": "#QR\\~QID82\\~10",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "COVID-19 Testing"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 10,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Occupational Therapy",
+      "selector": "#QR\\~QID82\\~24",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Occupational Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 11,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "COVID-19 Vaccination",
+      "selector": "#QR\\~QID82\\~11",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "COVID-19 Vaccination"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 12,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Office-Based Surgery",
+      "selector": "#QR\\~QID82\\~25",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Office-Based Surgery"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 13,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Dental Services",
+      "selector": "#QR\\~QID82\\~12",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Dental Services"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 14,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Opioid Management Therapy",
+      "selector": "#QR\\~QID82\\~26",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Opioid Management Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 15,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Diabetes Self-Management Training",
+      "selector": "#QR\\~QID82\\~13",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Diabetes Self-Management Training"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 16,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Physical Therapy",
+      "selector": "#QR\\~QID82\\~27",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Physical Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 17,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Durable Medical Equipment (DME)",
+      "selector": "#QR\\~QID82\\~34",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Durable Medical Equipment (DME)"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 18,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Routine Eye Care",
+      "selector": "#QR\\~QID82\\~28",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Routine Eye Care"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 19,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Imaging",
+      "selector": "#QR\\~QID82\\~14",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Imaging"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 20,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Smoking Cessation",
+      "selector": "#QR\\~QID82\\~29",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Smoking Cessation"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 21,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Infusion Therapy",
+      "selector": "#QR\\~QID82\\~15",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Infusion Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 22,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Speech Therapy",
+      "selector": "#QR\\~QID82\\~30",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Speech Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 23,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Laboratory",
+      "selector": "#QR\\~QID82\\~16",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Laboratory"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 24,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Telehealth",
+      "selector": "#QR\\~QID82\\~31",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Telehealth"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 25,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Mammography",
+      "selector": "#QR\\~QID82\\~17",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Mammography"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 26,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "X-Rays",
+      "selector": "#QR\\~QID82\\~32",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "X-Rays"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 27,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Massage Therapy",
+      "selector": "#QR\\~QID82\\~18",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Massage Therapy"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 28,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": null,
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Other (please specify):",
+      "selector": "#QR\\~QID82\\~33",
+      "fieldType": "checkbox",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Other (please specify):"
+        }
+      ],
+      "pageStep": "Page 6",
+      "sortOrder": 29,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Services: other",
+      "suggestedToken": null,
+      "evidence": "Claude: one option of a mark-all-that-apply services list. facility.serviceTypes holds the practice's services as a list, but a checkbox fills only from a yes/no word, so mapping the list token would UNcheck the box; it needs a per-option 'list contains this service' transform. Until one exists a person ticks it.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Other (please specify):",
+      "selector": "#QR\\~QID82\\~33\\~TEXT",
+      "fieldType": "text",
+      "formSection": "Which of the following services are offered at your practice? (Mark all that apply)",
+      "pageStep": "Page 6",
+      "sortOrder": 30,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Services: other (specify)",
+      "suggestedToken": null,
+      "evidence": "Claude: free text for the 'Other' service; only used when Other is ticked.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Number of providers:",
+      "selector": "#QR\\~QID94\\~10",
+      "fieldType": "text",
+      "formSection": "How many providers are being added with this form?",
+      "pageStep": "Page 7",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Number of providers being added",
+      "suggestedToken": null,
+      "evidence": "Claude: a per-submission count (the practitioners on the uploaded roster); no token holds it. Likely drives how many provider sections the survey shows next.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider 1:",
+      "selector": "#QR\\~QID97\\~1",
+      "fieldType": "text",
+      "formSection": "Please list the names of the providers you will be adding through this form.",
+      "pageStep": "Page 8",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1 name",
+      "suggestedToken": "provider.fullName",
+      "evidence": "Claude: first provider being added → the case's provider. Medium: right for a one-provider form; further providers on the same form (Provider 2…N) are not this case's provider and stay manual.",
+      "decision": "token",
+      "confidence": "medium",
+      "revealedBy": "Page 7 'Number of providers' ≥ 1 — Qualtrics renders one 'Provider k:' box (#QR\\~QID97\\~k) per provider counted there",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Title:",
+      "selector": "#QR\\~QID96\\~1",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: title",
+      "suggestedToken": "provider.credentials",
+      "evidence": "Claude: 'Title' beside 'Degree Type' in the provider block — most likely the professional title/credentials (e.g. 'PT, DPT'); could also mean an honorific. Low until a person confirms what Blue KC expects.",
+      "decision": "token",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Degree Type:",
+      "selector": "#QR\\~QID96\\~3",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: degree",
+      "suggestedToken": "provider.degree",
+      "evidence": "Claude: label 'Degree Type' → provider.degree.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Gender:",
+      "selector": "#QR\\~QID96\\~4",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: gender",
+      "suggestedToken": "provider.gender",
+      "evidence": "Claude: label 'Gender' in the provider block → provider.gender.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider Type:",
+      "selector": "#QR\\~QID96\\~9",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: provider type",
+      "suggestedToken": "license.licenseType",
+      "evidence": "Claude: 'Provider Type' is the discipline (PT, OT, NP…), which the state license's type carries; provider.specialty is the alternative if Blue KC wants the specialty name.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Fax Number: (if none type \"NA\")",
+      "selector": "#QR\\~QID96\\~14",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 4,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: fax",
+      "suggestedToken": "facility.fax",
+      "evidence": "Claude: provider fax = the practice location's fax. Medium: when the location has no fax the form wants the literal 'NA', which needs a fallback.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Phone Number:",
+      "selector": "#QR\\~QID96\\~15",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 5,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: phone",
+      "suggestedToken": "facility.phone",
+      "evidence": "Claude: for network/directory purposes the provider's phone is the practice phone (facility.phone); provider.phone is the provider's own number. Blue KC requires a valid US number as XXX-XXX-XXXX (area code and exchange may not start with 0/1), so the map needs a dashed-phone transform.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Ever opted out of Medicare? (Y/N)",
+      "selector": "#QR\\~QID96\\~13",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 6,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: ever opted out of Medicare (Y/N)",
+      "suggestedToken": null,
+      "evidence": "Claude: a per-provider fact with no token; Y/N free text.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Accepting New Patients? (Y/N)",
+      "selector": "#QR\\~QID96\\~10",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 7,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: accepting new patients (Y/N)",
+      "suggestedToken": "facility.acceptingNewPatients",
+      "evidence": "Claude: facility.acceptingNewPatients renders as 'Yes'/'No'; the form asks Y/N in a free-text box. Medium on format.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Patient Gender Restrictions (M/F)",
+      "selector": "#QR\\~QID96\\~11",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 8,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: patient gender restrictions",
+      "suggestedToken": null,
+      "evidence": "Claude: no token holds patient gender restrictions; usually 'None' — a person answers.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Patient Age Restrictions (<18, 18+)",
+      "selector": "#QR\\~QID96\\~12",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about [Provider 1 name], the first provider mentioned.",
+      "pageStep": "Page 9",
+      "sortOrder": 9,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: patient age restrictions",
+      "suggestedToken": "provider.ageGroupsServed",
+      "evidence": "Claude: provider.ageGroupsServed is the closest token, but it's a list of age groups, not the '<18 / 18+' the form asks for — needs a person or a transform.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "What is the NPI for [Provider 1 name]?",
+      "selector": "#QR\\~QID186",
+      "fieldType": "text",
+      "formSection": "What is the NPI for [Provider 1 name]?",
+      "pageStep": "Page 9",
+      "sortOrder": 10,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: NPI",
+      "suggestedToken": "provider.npi",
+      "evidence": "Claude: the provider's own (Type 1) NPI → provider.npi.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital Name",
+      "selector": "#QR\\~QID182\\~1",
+      "fieldType": "text",
+      "formSection": "What is the hospital affiliation of [Provider 1 name]? When entering the Hospital Address, please use United States Postal Service standard formatting, shown below:",
+      "pageStep": "Page 10",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: hospital name",
+      "suggestedToken": null,
+      "evidence": "Claude: no hospital-affiliation data exists in the panel schema (no hospital name/TIN/address on providers), so no token can fill it; a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital Tax Identification Number (TIN)",
+      "selector": "#QR\\~QID182\\~2",
+      "fieldType": "text",
+      "formSection": "What is the hospital affiliation of [Provider 1 name]? When entering the Hospital Address, please use United States Postal Service standard formatting, shown below:",
+      "pageStep": "Page 10",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: hospital TIN",
+      "suggestedToken": null,
+      "evidence": "Claude: no hospital-affiliation data exists in the panel schema (no hospital name/TIN/address on providers), so no token can fill it; a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital Address Recipient Line",
+      "selector": "#QR\\~QID182\\~3",
+      "fieldType": "text",
+      "formSection": "What is the hospital affiliation of [Provider 1 name]? When entering the Hospital Address, please use United States Postal Service standard formatting, shown below:",
+      "pageStep": "Page 10",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: hospital address — recipient line",
+      "suggestedToken": null,
+      "evidence": "Claude: no hospital-affiliation data exists in the panel schema (no hospital name/TIN/address on providers), so no token can fill it; a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital Address Delivery Address Line",
+      "selector": "#QR\\~QID182\\~4",
+      "fieldType": "text",
+      "formSection": "What is the hospital affiliation of [Provider 1 name]? When entering the Hospital Address, please use United States Postal Service standard formatting, shown below:",
+      "pageStep": "Page 10",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: hospital address — delivery line",
+      "suggestedToken": null,
+      "evidence": "Claude: no hospital-affiliation data exists in the panel schema (no hospital name/TIN/address on providers), so no token can fill it; a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital Address Last Line",
+      "selector": "#QR\\~QID182\\~5",
+      "fieldType": "text",
+      "formSection": "What is the hospital affiliation of [Provider 1 name]? When entering the Hospital Address, please use United States Postal Service standard formatting, shown below:",
+      "pageStep": "Page 10",
+      "sortOrder": 4,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: hospital address — last line (City ST ZIP)",
+      "suggestedToken": null,
+      "evidence": "Claude: no hospital-affiliation data exists in the panel schema (no hospital name/TIN/address on providers), so no token can fill it; a person enters it.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Does [Provider 1 name] have admitting privileges at [Page 10 hospital name]?",
+      "selector": "#QR\\~QID214\\~1",
+      "fieldType": "radio",
+      "formSection": "Does [Provider 1 name] have admitting privileges at [Page 10 hospital name]?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes"
+        },
+        {
+          "value": "2",
+          "label": "No"
+        }
+      ],
+      "pageStep": "Page 11",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: admitting privileges at affiliated hospital",
+      "suggestedToken": null,
+      "evidence": "Claude: no token holds hospital privileges. Outpatient therapy providers usually hold none, so 'No' is a likely org default — medium until the org confirms it holds for all its providers.",
+      "decision": "fixed",
+      "suggestedValue": "2",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider State License #:",
+      "selector": "#QR\\~QID98\\~1",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the licensure of [Provider 1 name].",
+      "pageStep": "Page 12",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: state license number",
+      "suggestedToken": "license.licenseNumber",
+      "evidence": "Claude: 'Provider State License #' → the case-state license's number (license.licenseNumber, preferred over provider.licenseNumber).",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider License Expiration Date:",
+      "selector": "#QR\\~QID98\\~2",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the licensure of [Provider 1 name].",
+      "pageStep": "Page 12",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: license expiration date",
+      "suggestedToken": "license.expirationDate",
+      "evidence": "Claude: license expiration → license.expirationDate. Medium on format: the panel stores ISO dates and Blue KC's expected date format is not yet known.",
+      "decision": "token",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Provider License State:",
+      "selector": "#QR\\~QID98\\~3",
+      "fieldType": "text",
+      "formSection": "Please provide the following information about the licensure of [Provider 1 name].",
+      "pageStep": "Page 12",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: license state",
+      "suggestedToken": "license.state",
+      "evidence": "Claude: license state → license.state.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Is [Provider 1 name] a mid-level physician?",
+      "selector": "#QR\\~QID100\\~1",
+      "fieldType": "radio",
+      "formSection": "Is [Provider 1 name] a mid-level physician?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes"
+        },
+        {
+          "value": "2",
+          "label": "No"
+        }
+      ],
+      "pageStep": "Page 13",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: mid-level practitioner?",
+      "suggestedToken": null,
+      "evidence": "Claude: mid-level = NP/PA-type practitioners; follows from the provider's discipline (license.licenseType) but no token answers Yes/No. For a therapy org whose providers are PT/OT/SLP the answer is 'No' — medium until the org confirms. Likely a branch: Yes should add the supervising-physician NPI the intro mentions.",
+      "decision": "fixed",
+      "suggestedValue": "2",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "What is [Provider 1 name]'s primary specialty?",
+      "selector": "#QR\\~QID101",
+      "fieldType": "select",
+      "formSection": "What is [Provider 1 name]'s primary specialty?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Acupuncture"
+        },
+        {
+          "value": "4",
+          "label": "Adolescent Medicine"
+        },
+        {
+          "value": "5",
+          "label": "Advanced Heart Failure and Transplant Cardiology"
+        },
+        {
+          "value": "6",
+          "label": "Advanced Practice Nurse"
+        },
+        {
+          "value": "7",
+          "label": "Allergy & Immunology"
+        },
+        {
+          "value": "8",
+          "label": "Allergy & Immunology - Pediatric"
+        },
+        {
+          "value": "9",
+          "label": "Anesthesia Assistant"
+        },
+        {
+          "value": "159",
+          "label": "Anesthesiology"
+        },
+        {
+          "value": "10",
+          "label": "Anesthesiology - Pediatric"
+        },
+        {
+          "value": "11",
+          "label": "Applied Behavioral Analyst Therapy"
+        },
+        {
+          "value": "12",
+          "label": "Assistant Physician"
+        },
+        {
+          "value": "160",
+          "label": "Audiologist"
+        },
+        {
+          "value": "161",
+          "label": "Bariatric Medicine"
+        },
+        {
+          "value": "13",
+          "label": "Cardiac Electrophysiology"
+        },
+        {
+          "value": "14",
+          "label": "Cardiology - Pediatric"
+        },
+        {
+          "value": "15",
+          "label": "Cardiovascular & Thoracic Surgery"
+        },
+        {
+          "value": "16",
+          "label": "Cardiovascular Disease"
+        },
+        {
+          "value": "17",
+          "label": "Certified Mid-Wife"
+        },
+        {
+          "value": "18",
+          "label": "Child & Adolescent Psychology"
+        },
+        {
+          "value": "19",
+          "label": "Chiropractor"
+        },
+        {
+          "value": "20",
+          "label": "Clinical Genetics"
+        },
+        {
+          "value": "21",
+          "label": "Colon & Rectal Surgery"
+        },
+        {
+          "value": "22",
+          "label": "Critical Care Medicine"
+        },
+        {
+          "value": "23",
+          "label": "Critical Care Medicine - Pediatric"
+        },
+        {
+          "value": "24",
+          "label": "Certified Registered Nurse Anesthetist (CRNA)"
+        },
+        {
+          "value": "25",
+          "label": "Dermatology"
+        },
+        {
+          "value": "26",
+          "label": "Dermatology - Pediatric"
+        },
+        {
+          "value": "27",
+          "label": "Dermatopathology"
+        },
+        {
+          "value": "28",
+          "label": "Developmental Behavioral Pediatric"
+        },
+        {
+          "value": "29",
+          "label": "Diagnostic Radiology"
+        },
+        {
+          "value": "30",
+          "label": "Diagnostic Radiology - Pediatric"
+        },
+        {
+          "value": "31",
+          "label": "Dietitian"
+        },
+        {
+          "value": "171",
+          "label": "Durable Medical Equipment"
+        },
+        {
+          "value": "32",
+          "label": "Emergency Medicine"
+        },
+        {
+          "value": "33",
+          "label": "Emergency Medicine - Pediatric"
+        },
+        {
+          "value": "34",
+          "label": "Endocrinology"
+        },
+        {
+          "value": "35",
+          "label": "Endocrinology - Pediatric"
+        },
+        {
+          "value": "36",
+          "label": "Endodontist"
+        },
+        {
+          "value": "37",
+          "label": "ENT (Otolaryngology)"
+        },
+        {
+          "value": "38",
+          "label": "ENT (Otolaryngology) - Pediatric"
+        },
+        {
+          "value": "39",
+          "label": "ER - Midlevel"
+        },
+        {
+          "value": "40",
+          "label": "Family Nurse Practitioner"
+        },
+        {
+          "value": "41",
+          "label": "Family Practice"
+        },
+        {
+          "value": "42",
+          "label": "Female Pelvic Medicine & Reconstructive Surgery"
+        },
+        {
+          "value": "43",
+          "label": "Gastroenterology"
+        },
+        {
+          "value": "44",
+          "label": "Gastroenterology - Pediatric"
+        },
+        {
+          "value": "45",
+          "label": "General Dentistry"
+        },
+        {
+          "value": "164",
+          "label": "General Practice"
+        },
+        {
+          "value": "165",
+          "label": "General Surgery"
+        },
+        {
+          "value": "166",
+          "label": "Genetics - Pediatric"
+        },
+        {
+          "value": "46",
+          "label": "Geriatrics"
+        },
+        {
+          "value": "47",
+          "label": "Gynecologic Oncology"
+        },
+        {
+          "value": "48",
+          "label": "Gynecology Only"
+        },
+        {
+          "value": "49",
+          "label": "Hand Surgery"
+        },
+        {
+          "value": "167",
+          "label": "Hearing Aid Dispenser"
+        },
+        {
+          "value": "50",
+          "label": "Hematology-Oncology Pediatric"
+        },
+        {
+          "value": "51",
+          "label": "Hematology"
+        },
+        {
+          "value": "52",
+          "label": "Hematology & Oncology"
+        },
+        {
+          "value": "54",
+          "label": "Hospice and Palliative Medicine"
+        },
+        {
+          "value": "53",
+          "label": "Hospice and Palliative Medicine - Pediatric"
+        },
+        {
+          "value": "55",
+          "label": "Hospitalist"
+        },
+        {
+          "value": "56",
+          "label": "Hyperbaric Medicine"
+        },
+        {
+          "value": "57",
+          "label": "Infectious Disease"
+        },
+        {
+          "value": "58",
+          "label": "Infectious Disease - Pediatric"
+        },
+        {
+          "value": "59",
+          "label": "Internal Medicine"
+        },
+        {
+          "value": "60",
+          "label": "Interventional Cardiology"
+        },
+        {
+          "value": "61",
+          "label": "Lactation Consultant - Non-RN"
+        },
+        {
+          "value": "62",
+          "label": "Licensed Clinical Professional Counselor (LCPC)"
+        },
+        {
+          "value": "64",
+          "label": "Licensed Clinical Psychotherapist"
+        },
+        {
+          "value": "162",
+          "label": "Licensed Clinical Social Worker (LCSW)"
+        },
+        {
+          "value": "65",
+          "label": "Licensed Master-Level Psychologist"
+        },
+        {
+          "value": "66",
+          "label": "Licensed Master of Social Work"
+        },
+        {
+          "value": "67",
+          "label": "Licensed Professional Counselor"
+        },
+        {
+          "value": "68",
+          "label": "Manipulative Therapy"
+        },
+        {
+          "value": "69",
+          "label": "Marriage and Family Counseling"
+        },
+        {
+          "value": "70",
+          "label": "Massage Therapy"
+        },
+        {
+          "value": "71",
+          "label": "Master of Arts Counseling"
+        },
+        {
+          "value": "72",
+          "label": "Master of Social Work"
+        },
+        {
+          "value": "73",
+          "label": "Maternal Fetal Medicine"
+        },
+        {
+          "value": "76",
+          "label": "MedSupply Certified Prosthetist"
+        },
+        {
+          "value": "77",
+          "label": "Medical Oncology"
+        },
+        {
+          "value": "78",
+          "label": "Medical Toxicology - Pediatric"
+        },
+        {
+          "value": "79",
+          "label": "Mental Health Counselor"
+        },
+        {
+          "value": "82",
+          "label": "Naturopathic Medicine"
+        },
+        {
+          "value": "83",
+          "label": "Neonatal/Perinatal Medicine"
+        },
+        {
+          "value": "84",
+          "label": "Nephrology"
+        },
+        {
+          "value": "85",
+          "label": "Nephrology - Pediatric"
+        },
+        {
+          "value": "86",
+          "label": "Neurodevelopmental Disability - Pediatric"
+        },
+        {
+          "value": "87",
+          "label": "Neurological Surgery"
+        },
+        {
+          "value": "88",
+          "label": "Neurology"
+        },
+        {
+          "value": "89",
+          "label": "Neurology - Pediatric"
+        },
+        {
+          "value": "90",
+          "label": "Neuro-Ophthalmology"
+        },
+        {
+          "value": "91",
+          "label": "Non-Provider/Newsletters Only"
+        },
+        {
+          "value": "92",
+          "label": "Nuclear Medicine"
+        },
+        {
+          "value": "93",
+          "label": "Nurse Midwife"
+        },
+        {
+          "value": "94",
+          "label": "Obstetrics and Gynecology"
+        },
+        {
+          "value": "95",
+          "label": "Occupational Medicine"
+        },
+        {
+          "value": "96",
+          "label": "Occupational Therapy"
+        },
+        {
+          "value": "97",
+          "label": "Occupational Therapy Assistant"
+        },
+        {
+          "value": "168",
+          "label": "Ophthalmology"
+        },
+        {
+          "value": "169",
+          "label": "Ophthalmology - Pediatric"
+        },
+        {
+          "value": "98",
+          "label": "Optometrist"
+        },
+        {
+          "value": "99",
+          "label": "Oral and Maxillofacial Surgery"
+        },
+        {
+          "value": "100",
+          "label": "Oral Pathology"
+        },
+        {
+          "value": "101",
+          "label": "Orthodontics"
+        },
+        {
+          "value": "102",
+          "label": "Orthopedic Surgery"
+        },
+        {
+          "value": "103",
+          "label": "Orthopedics - Pediatric"
+        },
+        {
+          "value": "104",
+          "label": "Otology/Neurotology"
+        },
+        {
+          "value": "105",
+          "label": "Outpatient Mental Health Therapist"
+        },
+        {
+          "value": "106",
+          "label": "Pain Management"
+        },
+        {
+          "value": "107",
+          "label": "Pathology"
+        },
+        {
+          "value": "108",
+          "label": "Pathology - Pediatric"
+        },
+        {
+          "value": "109",
+          "label": "Pediatric Dentistry"
+        },
+        {
+          "value": "110",
+          "label": "Pediatric Nurse"
+        },
+        {
+          "value": "111",
+          "label": "Pediatric Rehabilitation Medicine"
+        },
+        {
+          "value": "112",
+          "label": "Pediatric Surgery"
+        },
+        {
+          "value": "113",
+          "label": "Pediatrics"
+        },
+        {
+          "value": "114",
+          "label": "Periodontist"
+        },
+        {
+          "value": "115",
+          "label": "Phlebology"
+        },
+        {
+          "value": "116",
+          "label": "Physical Medicine and Rehabilitation"
+        },
+        {
+          "value": "117",
+          "label": "Physical Therapist"
+        },
+        {
+          "value": "118",
+          "label": "Physical Therapy Assistant"
+        },
+        {
+          "value": "170",
+          "label": "Physician Assistant"
+        },
+        {
+          "value": "119",
+          "label": "Plastic & Reconstructive Surgery"
+        },
+        {
+          "value": "120",
+          "label": "Podiatry"
+        },
+        {
+          "value": "121",
+          "label": "Prosthodontist"
+        },
+        {
+          "value": "122",
+          "label": "Psychiatric Nurse Practitioner"
+        },
+        {
+          "value": "124",
+          "label": "Psychiatry"
+        },
+        {
+          "value": "125",
+          "label": "Psychologist"
+        },
+        {
+          "value": "127",
+          "label": "Pulmonary Disease"
+        },
+        {
+          "value": "128",
+          "label": "Pulmonology - Pediatric"
+        },
+        {
+          "value": "129",
+          "label": "Radiation Oncology"
+        },
+        {
+          "value": "130",
+          "label": "Radiology - Vascular/Interventional"
+        },
+        {
+          "value": "131",
+          "label": "Reproductive Endocrinology & Infertility"
+        },
+        {
+          "value": "132",
+          "label": "Respiratory Therapist"
+        },
+        {
+          "value": "134",
+          "label": "Rheumatology"
+        },
+        {
+          "value": "135",
+          "label": "Rheumatology - Pediatric"
+        },
+        {
+          "value": "136",
+          "label": "Sleep Study"
+        },
+        {
+          "value": "137",
+          "label": "Social Work"
+        },
+        {
+          "value": "138",
+          "label": "Speech/Language Pathologist"
+        },
+        {
+          "value": "139",
+          "label": "Sports Medicine - Pediatric"
+        },
+        {
+          "value": "140",
+          "label": "Surgical Critical Care"
+        },
+        {
+          "value": "141",
+          "label": "Transplant Hepatology"
+        },
+        {
+          "value": "142",
+          "label": "Transplant Surgery (General Surgery)"
+        },
+        {
+          "value": "143",
+          "label": "Urology"
+        },
+        {
+          "value": "144",
+          "label": "Vascular Surgery"
+        }
+      ],
+      "pageStep": "Page 14",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: primary specialty",
+      "suggestedToken": "provider.specialty",
+      "evidence": "Claude: primary specialty → provider.specialty, but Blue KC's 146-option list names professions ('Physical Therapist' = 117, 'Occupational Therapy' = 96, 'Speech/Language Pathologist' = 138) where the panel stores specialties ('Physical Therapy'), so an exact select match will miss without a value translation. Full vocabulary captured (the probe is uncapped).",
+      "decision": "token",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Please provide the taxonomy code for [Page 14 specialty].",
+      "selector": "#QR\\~QID137",
+      "fieldType": "text",
+      "formSection": "Please provide the taxonomy code for [Page 14 specialty].",
+      "pageStep": "Page 15",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: taxonomy code",
+      "suggestedToken": "provider.taxonomyCode",
+      "evidence": "Claude: taxonomy code for the provider's specialty → provider.taxonomyCode.",
+      "decision": "token",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "What is [Provider 1 name]'s secondary specialty?",
+      "selector": "#QR\\~QID158",
+      "fieldType": "select",
+      "formSection": "What is [Provider 1 name]'s secondary specialty?",
+      "options": [
+        {
+          "value": "171",
+          "label": "No secondary specialty"
+        },
+        {
+          "value": "1",
+          "label": "Acupuncture"
+        },
+        {
+          "value": "4",
+          "label": "Adolescent Medicine"
+        },
+        {
+          "value": "5",
+          "label": "Advanced Heart Failure and Transplant Cardiology"
+        },
+        {
+          "value": "6",
+          "label": "Advanced Practice Nurse"
+        },
+        {
+          "value": "7",
+          "label": "Allergy & Immunology"
+        },
+        {
+          "value": "8",
+          "label": "Allergy & Immunology - Pediatric"
+        },
+        {
+          "value": "9",
+          "label": "Anesthesia Assistant"
+        },
+        {
+          "value": "159",
+          "label": "Anesthesiology"
+        },
+        {
+          "value": "10",
+          "label": "Anesthesiology - Pediatric"
+        },
+        {
+          "value": "11",
+          "label": "Applied Behavioral Analyst Therapy"
+        },
+        {
+          "value": "12",
+          "label": "Assistant Physician"
+        },
+        {
+          "value": "160",
+          "label": "Audiologist"
+        },
+        {
+          "value": "161",
+          "label": "Bariatric Medicine"
+        },
+        {
+          "value": "13",
+          "label": "Cardiac Electrophysiology"
+        },
+        {
+          "value": "14",
+          "label": "Cardiology - Pediatric"
+        },
+        {
+          "value": "15",
+          "label": "Cardiovascular & Thoracic Surgery"
+        },
+        {
+          "value": "16",
+          "label": "Cardiovascular Disease"
+        },
+        {
+          "value": "17",
+          "label": "Certified Mid-Wife"
+        },
+        {
+          "value": "18",
+          "label": "Child & Adolescent Psychology"
+        },
+        {
+          "value": "19",
+          "label": "Chiropractor"
+        },
+        {
+          "value": "20",
+          "label": "Clinical Genetics"
+        },
+        {
+          "value": "21",
+          "label": "Colon & Rectal Surgery"
+        },
+        {
+          "value": "22",
+          "label": "Critical Care Medicine"
+        },
+        {
+          "value": "23",
+          "label": "Critical Care Medicine - Pediatric"
+        },
+        {
+          "value": "24",
+          "label": "Certified Registered Nurse Anesthetist (CRNA)"
+        },
+        {
+          "value": "25",
+          "label": "Dermatology"
+        },
+        {
+          "value": "26",
+          "label": "Dermatology - Pediatric"
+        },
+        {
+          "value": "27",
+          "label": "Dermatopathology"
+        },
+        {
+          "value": "28",
+          "label": "Developmental Behavioral Pediatric"
+        },
+        {
+          "value": "29",
+          "label": "Diagnostic Radiology"
+        },
+        {
+          "value": "30",
+          "label": "Diagnostic Radiology - Pediatric"
+        },
+        {
+          "value": "31",
+          "label": "Dietitian"
+        },
+        {
+          "value": "32",
+          "label": "Emergency Medicine"
+        },
+        {
+          "value": "33",
+          "label": "Emergency Medicine - Pediatric"
+        },
+        {
+          "value": "34",
+          "label": "Endocrinology"
+        },
+        {
+          "value": "35",
+          "label": "Endocrinology - Pediatric"
+        },
+        {
+          "value": "36",
+          "label": "Endodontist"
+        },
+        {
+          "value": "37",
+          "label": "ENT (Otolaryngology)"
+        },
+        {
+          "value": "38",
+          "label": "ENT (Otolaryngology) - Pediatric"
+        },
+        {
+          "value": "39",
+          "label": "ER - Midlevel"
+        },
+        {
+          "value": "40",
+          "label": "Family Nurse Practitioner"
+        },
+        {
+          "value": "41",
+          "label": "Family Practice"
+        },
+        {
+          "value": "42",
+          "label": "Female Pelvic Medicine & Reconstructive Surgery"
+        },
+        {
+          "value": "43",
+          "label": "Gastroenterology"
+        },
+        {
+          "value": "44",
+          "label": "Gastroenterology - Pediatric"
+        },
+        {
+          "value": "45",
+          "label": "General Dentistry"
+        },
+        {
+          "value": "164",
+          "label": "General Practice"
+        },
+        {
+          "value": "165",
+          "label": "General Surgery"
+        },
+        {
+          "value": "166",
+          "label": "Genetics - Pediatric"
+        },
+        {
+          "value": "46",
+          "label": "Geriatrics"
+        },
+        {
+          "value": "47",
+          "label": "Gynecologic Oncology"
+        },
+        {
+          "value": "48",
+          "label": "Gynecology Only"
+        },
+        {
+          "value": "49",
+          "label": "Hand Surgery"
+        },
+        {
+          "value": "167",
+          "label": "Hearing Aid Dispenser"
+        },
+        {
+          "value": "50",
+          "label": "Hematology-Oncology Pediatric"
+        },
+        {
+          "value": "51",
+          "label": "Hematology"
+        },
+        {
+          "value": "52",
+          "label": "Hematology & Oncology"
+        },
+        {
+          "value": "54",
+          "label": "Hospice and Palliative Medicine"
+        },
+        {
+          "value": "53",
+          "label": "Hospice and Palliative Medicine - Pediatric"
+        },
+        {
+          "value": "55",
+          "label": "Hospitalist"
+        },
+        {
+          "value": "56",
+          "label": "Hyperbaric Medicine"
+        },
+        {
+          "value": "57",
+          "label": "Infectious Disease"
+        },
+        {
+          "value": "58",
+          "label": "Infectious Disease - Pediatric"
+        },
+        {
+          "value": "59",
+          "label": "Internal Medicine"
+        },
+        {
+          "value": "60",
+          "label": "Interventional Cardiology"
+        },
+        {
+          "value": "61",
+          "label": "Lactation Consultant - Non-RN"
+        },
+        {
+          "value": "62",
+          "label": "Licensed Clinical Professional Counselor (LCPC)"
+        },
+        {
+          "value": "64",
+          "label": "Licensed Clinical Psychotherapist"
+        },
+        {
+          "value": "162",
+          "label": "Licensed Clinical Social Worker (LCSW)"
+        },
+        {
+          "value": "65",
+          "label": "Licensed Master-Level Psychologist"
+        },
+        {
+          "value": "66",
+          "label": "Licensed Master of Social Work"
+        },
+        {
+          "value": "67",
+          "label": "Licensed Professional Counselor"
+        },
+        {
+          "value": "68",
+          "label": "Manipulative Therapy"
+        },
+        {
+          "value": "69",
+          "label": "Marriage and Family Counseling"
+        },
+        {
+          "value": "70",
+          "label": "Massage Therapy"
+        },
+        {
+          "value": "71",
+          "label": "Master of Arts Counseling"
+        },
+        {
+          "value": "72",
+          "label": "Master of Social Work"
+        },
+        {
+          "value": "73",
+          "label": "Maternal Fetal Medicine"
+        },
+        {
+          "value": "76",
+          "label": "MedSupply Certified Prosthetist"
+        },
+        {
+          "value": "77",
+          "label": "Medical Oncology"
+        },
+        {
+          "value": "78",
+          "label": "Medical Toxicology - Pediatric"
+        },
+        {
+          "value": "79",
+          "label": "Mental Health Counselor"
+        },
+        {
+          "value": "82",
+          "label": "Naturopathic Medicine"
+        },
+        {
+          "value": "83",
+          "label": "Neonatal/Perinatal Medicine"
+        },
+        {
+          "value": "84",
+          "label": "Nephrology"
+        },
+        {
+          "value": "85",
+          "label": "Nephrology - Pediatric"
+        },
+        {
+          "value": "86",
+          "label": "Neurodevelopmental Disability - Pediatric"
+        },
+        {
+          "value": "87",
+          "label": "Neurological Surgery"
+        },
+        {
+          "value": "88",
+          "label": "Neurology"
+        },
+        {
+          "value": "89",
+          "label": "Neurology - Pediatric"
+        },
+        {
+          "value": "90",
+          "label": "Neuro-Ophthalmology"
+        },
+        {
+          "value": "91",
+          "label": "Non-Provider/Newsletters Only"
+        },
+        {
+          "value": "92",
+          "label": "Nuclear Medicine"
+        },
+        {
+          "value": "93",
+          "label": "Nurse Midwife"
+        },
+        {
+          "value": "94",
+          "label": "Obstetrics and Gynecology"
+        },
+        {
+          "value": "95",
+          "label": "Occupational Medicine"
+        },
+        {
+          "value": "96",
+          "label": "Occupational Therapy"
+        },
+        {
+          "value": "97",
+          "label": "Occupational Therapy Assistant"
+        },
+        {
+          "value": "168",
+          "label": "Ophthalmology"
+        },
+        {
+          "value": "169",
+          "label": "Ophthalmology - Pediatric"
+        },
+        {
+          "value": "98",
+          "label": "Optometrist"
+        },
+        {
+          "value": "99",
+          "label": "Oral and Maxillofacial Surgery"
+        },
+        {
+          "value": "100",
+          "label": "Oral Pathology"
+        },
+        {
+          "value": "101",
+          "label": "Orthodontics"
+        },
+        {
+          "value": "102",
+          "label": "Orthopedic Surgery"
+        },
+        {
+          "value": "103",
+          "label": "Orthopedics - Pediatric"
+        },
+        {
+          "value": "104",
+          "label": "Otology/Neurotology"
+        },
+        {
+          "value": "105",
+          "label": "Outpatient Mental Health Therapist"
+        },
+        {
+          "value": "106",
+          "label": "Pain Management"
+        },
+        {
+          "value": "107",
+          "label": "Pathology"
+        },
+        {
+          "value": "108",
+          "label": "Pathology - Pediatric"
+        },
+        {
+          "value": "109",
+          "label": "Pediatric Dentistry"
+        },
+        {
+          "value": "110",
+          "label": "Pediatric Nurse"
+        },
+        {
+          "value": "111",
+          "label": "Pediatric Rehabilitation Medicine"
+        },
+        {
+          "value": "112",
+          "label": "Pediatric Surgery"
+        },
+        {
+          "value": "113",
+          "label": "Pediatrics"
+        },
+        {
+          "value": "114",
+          "label": "Periodontist"
+        },
+        {
+          "value": "115",
+          "label": "Phlebology"
+        },
+        {
+          "value": "116",
+          "label": "Physical Medicine and Rehabilitation"
+        },
+        {
+          "value": "117",
+          "label": "Physical Therapist"
+        },
+        {
+          "value": "118",
+          "label": "Physical Therapy Assistant"
+        },
+        {
+          "value": "170",
+          "label": "Physician Assistant"
+        },
+        {
+          "value": "119",
+          "label": "Plastic & Reconstructive Surgery"
+        },
+        {
+          "value": "120",
+          "label": "Podiatry"
+        },
+        {
+          "value": "121",
+          "label": "Prosthodontist"
+        },
+        {
+          "value": "122",
+          "label": "Psychiatric Nurse Practitioner"
+        },
+        {
+          "value": "124",
+          "label": "Psychiatry"
+        },
+        {
+          "value": "125",
+          "label": "Psychologist"
+        },
+        {
+          "value": "127",
+          "label": "Pulmonary Disease"
+        },
+        {
+          "value": "128",
+          "label": "Pulmonology - Pediatric"
+        },
+        {
+          "value": "129",
+          "label": "Radiation Oncology"
+        },
+        {
+          "value": "130",
+          "label": "Radiology - Vascular/Interventional"
+        },
+        {
+          "value": "131",
+          "label": "Reproductive Endocrinology & Infertility"
+        },
+        {
+          "value": "132",
+          "label": "Respiratory Therapist"
+        },
+        {
+          "value": "134",
+          "label": "Rheumatology"
+        },
+        {
+          "value": "135",
+          "label": "Rheumatology - Pediatric"
+        },
+        {
+          "value": "136",
+          "label": "Sleep Study"
+        },
+        {
+          "value": "137",
+          "label": "Social Work"
+        },
+        {
+          "value": "138",
+          "label": "Speech/Language Pathologist"
+        },
+        {
+          "value": "139",
+          "label": "Sports Medicine - Pediatric"
+        },
+        {
+          "value": "140",
+          "label": "Surgical Critical Care"
+        },
+        {
+          "value": "141",
+          "label": "Transplant Hepatology"
+        },
+        {
+          "value": "142",
+          "label": "Transplant Surgery (General Surgery)"
+        },
+        {
+          "value": "143",
+          "label": "Urology"
+        },
+        {
+          "value": "144",
+          "label": "Vascular Surgery"
+        }
+      ],
+      "pageStep": "Page 16",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: secondary specialty",
+      "suggestedToken": "provider.subSpecialty",
+      "evidence": "Claude: secondary specialty → provider.subSpecialty. Low: same profession-vs-specialty wording mismatch as Page 14, and an empty subSpecialty must become 'No secondary specialty' (171) — a fallback no transform provides. Note Blue KC reuses option codes: 171 is 'Durable Medical Equipment' on Page 14 but 'No secondary specialty' here, so match by label.",
+      "decision": "token",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Please provide the taxonomy code for  [Page 16 secondary specialty].",
+      "selector": "#QR\\~QID146",
+      "fieldType": "text",
+      "formSection": "Please provide the taxonomy code for [Page 16 secondary specialty].",
+      "pageStep": "Page 17a",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Provider 1: secondary taxonomy code",
+      "suggestedToken": null,
+      "evidence": "Claude: taxonomy code for the SECONDARY specialty; the panel holds one taxonomy code per provider (provider.taxonomyCode = primary), so a person enters this.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Does have admitting privileges at ?",
+      "selector": "#QR\\~QID215\\~1",
+      "fieldType": "radio",
+      "formSection": "Does have admitting privileges at ?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes"
+        },
+        {
+          "value": "2",
+          "label": "No"
+        }
+      ],
+      "pageStep": "Page 17b",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Admitting privileges (piped names empty on this path)",
+      "suggestedToken": null,
+      "evidence": "Claude: a second admitting-privileges question (cf. Page 11's QID214) whose piped provider and hospital names both resolve EMPTY on the 'No secondary specialty' path, so it is unclear whom it asks about — likely survey logic pointing at a source this path never filled. A person answers; worth raising with Blue KC.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Does have admitting privileges at ?",
+      "selector": "#QR\\~QID216\\~1",
+      "fieldType": "radio",
+      "formSection": "Does have admitting privileges at ?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes"
+        },
+        {
+          "value": "2",
+          "label": "No"
+        }
+      ],
+      "pageStep": "Page 18",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Admitting privileges, slot 3 (piped names empty)",
+      "suggestedToken": null,
+      "evidence": "Claude: third admitting-privileges question (QID214 Page 11 → QID215 Page 17b → QID216 here), apparently one per provider/hospital slot and shown even when only one provider was counted; both piped names are empty. Unlike QID215 it is REQUIRED. A person answers; worth raising with Blue KC.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Number of locations:",
+      "selector": "#QR\\~QID160\\~1",
+      "fieldType": "text",
+      "formSection": "How many practice locations will you be adding through this form?",
+      "pageStep": "Page 19",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Number of practice locations being added",
+      "suggestedToken": null,
+      "evidence": "Claude: a per-submission count of practice locations; no token holds it (a fill targets exactly one facility, so '1' per case is likely but the form may list several). Likely drives how many location sections follow, like Page 7's provider count.",
+      "decision": "human",
+      "confidence": "high",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location 1 Recipient Line:",
+      "selector": "#QR\\~QID161\\~1",
+      "fieldType": "text",
+      "formSection": "Please provide the street address of the location(s) being added to this form. The address(es) must be in the style of Postal Service standardized style, which includes all required elements and the use of Postal Service standard abbreviations. See the image below for an example.",
+      "pageStep": "Page 20",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1: recipient line (location name)",
+      "suggestedToken": "facility.name",
+      "evidence": "Claude: USPS recipient line = the practice location's name → facility.name (group.name if Blue KC wants the billing entity). Medium.",
+      "decision": "token",
+      "confidence": "medium",
+      "revealedBy": "Page 19 'Number of locations' ≥ 1 — one Location k block (recipient / delivery / last line) per location counted there",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location 1 Delivery Address Line:",
+      "selector": "#QR\\~QID161\\~13",
+      "fieldType": "text",
+      "formSection": "Please provide the street address of the location(s) being added to this form. The address(es) must be in the style of Postal Service standardized style, which includes all required elements and the use of Postal Service standard abbreviations. See the image below for an example.",
+      "pageStep": "Page 20",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1: delivery address line",
+      "suggestedToken": "facility.street",
+      "evidence": "Claude: USPS delivery line = street plus unit ('123 MAIN ST STE 200'); facility.street holds the street but the suite lives in facility.suite, so a combined line needs a transform. Medium.",
+      "decision": "token",
+      "confidence": "medium",
+      "revealedBy": "Page 19 'Number of locations' ≥ 1 — one Location k block (recipient / delivery / last line) per location counted there",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Location 1 Last Line:",
+      "selector": "#QR\\~QID161\\~14",
+      "fieldType": "text",
+      "formSection": "Please provide the street address of the location(s) being added to this form. The address(es) must be in the style of Postal Service standardized style, which includes all required elements and the use of Postal Service standard abbreviations. See the image below for an example.",
+      "pageStep": "Page 20",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1: last line (City ST ZIP)",
+      "suggestedToken": null,
+      "evidence": "Claude: USPS last line = 'CITY ST ZIP' — facility.city + facility.state + facility.zip on one line; no single token composes it (facility.address includes the street).",
+      "decision": "undecided",
+      "confidence": "low",
+      "revealedBy": "Page 19 'Number of locations' ≥ 1 — one Location k block (recipient / delivery / last line) per location counted there",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Is the practice located at [Location 1 recipient line] Handicap Accessible?",
+      "selector": "#QR\\~QID175\\~1",
+      "fieldType": "radio",
+      "formSection": "Is the practice located at [Location 1 recipient line] Handicap Accessible?",
+      "options": [
+        {
+          "value": "1",
+          "label": "Yes"
+        },
+        {
+          "value": "2",
+          "label": "No"
+        }
+      ],
+      "pageStep": "Page 21",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1: handicap accessible?",
+      "suggestedToken": null,
+      "evidence": "Claude: the panel tracks this as facility.adaCompliance, but that column is structured JSON and resolves to no token value; a yes/no derivation (transform) would make it fillable. Until then a person answers.",
+      "decision": "undecided",
+      "confidence": "low",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Hospital or Facility Services",
+      "selector": "#QR\\~QID162\\~1",
+      "fieldType": "checkbox",
+      "formSection": "What type of practice is located at [Location 1 recipient line]?",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Hospital or Facility Services"
+        }
+      ],
+      "pageStep": "Page 22",
+      "sortOrder": 0,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1 practice type: Hospital or Facility Services",
+      "suggestedToken": null,
+      "evidence": "Claude: practice-type checklist for the location. A therapy org's locations are office/clinic settings, so this box stays unchecked as an org default — medium until the org confirms for every location. Fixed values are Yes/No because the fill engine checks a box only on a truthy word.",
+      "decision": "fixed",
+      "suggestedValue": "No",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Ambulatory Surgery Center Services",
+      "selector": "#QR\\~QID162\\~2",
+      "fieldType": "checkbox",
+      "formSection": "What type of practice is located at [Location 1 recipient line]?",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Ambulatory Surgery Center Services"
+        }
+      ],
+      "pageStep": "Page 22",
+      "sortOrder": 1,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1 practice type: Ambulatory Surgery Center Services",
+      "suggestedToken": null,
+      "evidence": "Claude: practice-type checklist for the location. A therapy org's locations are office/clinic settings, so this box stays unchecked as an org default — medium until the org confirms for every location. Fixed values are Yes/No because the fill engine checks a box only on a truthy word.",
+      "decision": "fixed",
+      "suggestedValue": "No",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Diagnostic Imaging Center Services",
+      "selector": "#QR\\~QID162\\~3",
+      "fieldType": "checkbox",
+      "formSection": "What type of practice is located at [Location 1 recipient line]?",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Diagnostic Imaging Center Services"
+        }
+      ],
+      "pageStep": "Page 22",
+      "sortOrder": 2,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1 practice type: Diagnostic Imaging Center Services",
+      "suggestedToken": null,
+      "evidence": "Claude: practice-type checklist for the location. A therapy org's locations are office/clinic settings, so this box stays unchecked as an org default — medium until the org confirms for every location. Fixed values are Yes/No because the fill engine checks a box only on a truthy word.",
+      "decision": "fixed",
+      "suggestedValue": "No",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Office/Clinic",
+      "selector": "#QR\\~QID162\\~4",
+      "fieldType": "checkbox",
+      "formSection": "What type of practice is located at [Location 1 recipient line]?",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Office/Clinic"
+        }
+      ],
+      "pageStep": "Page 22",
+      "sortOrder": 3,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1 practice type: Office/Clinic",
+      "suggestedToken": null,
+      "evidence": "Claude: practice-type checklist for the location. A therapy org's locations are office/clinic settings, so 'Office/Clinic' is checked as an org default — medium until the org confirms for every location. Fixed values are Yes/No because the fill engine checks a box only on a truthy word.",
+      "decision": "fixed",
+      "suggestedValue": "Yes",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    },
+    {
+      "label": "Dental Office",
+      "selector": "#QR\\~QID162\\~5",
+      "fieldType": "checkbox",
+      "formSection": "What type of practice is located at [Location 1 recipient line]?",
+      "options": [
+        {
+          "value": "Selected",
+          "label": "Dental Office"
+        }
+      ],
+      "pageStep": "Page 22",
+      "sortOrder": 4,
+      "required": false,
+      "origin": "auto_detected",
+      "displayLabel": "Location 1 practice type: Dental Office",
+      "suggestedToken": null,
+      "evidence": "Claude: practice-type checklist for the location. A therapy org's locations are office/clinic settings, so this box stays unchecked as an org default — medium until the org confirms for every location. Fixed values are Yes/No because the fill engine checks a box only on a truthy word.",
+      "decision": "fixed",
+      "suggestedValue": "No",
+      "confidence": "medium",
+      "chosenToken": null,
+      "sent": false
+    }
+  ]
+}

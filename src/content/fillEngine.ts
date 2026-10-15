@@ -27,7 +27,16 @@ import { HIDDEN_KIND, HIDDEN_REASON } from "../shared/hiddenField";
 // deliberately NOT applied here; see isHiddenControl's own comment.
 import { BOOLEAN_SENTINELS, canonicalControl, hostLabel, isHiddenControl } from "./captureScan";
 import { FILLABLE, querySelectorAllDeep, querySelectorDeep } from "./deepDom";
-import { primeFacesSelectMenu } from "./primeFaces";
+import {
+  isListItemChosen,
+  listClickClearsOthers,
+  primeFacesListItems,
+  primeFacesSelectManyMenu,
+  primeFacesSelectMenu,
+  primeFacesWidget,
+  toggleListItem,
+  type PrimeFacesSelectManyMenu,
+} from "./primeFaces";
 
 // Label text comparison: case- and whitespace-insensitive, trailing
 // colons/required-markers stripped ("First Name *" matches "First Name").
@@ -85,6 +94,7 @@ const probedTargets = new Map<string, ProbedTarget>();
 let probeMutationObserver: MutationObserver | null = null;
 let probeMutationVersion = 0;
 let activePrimeFacesMenu: NonNullable<ReturnType<typeof primeFacesSelectMenu>> | null = null;
+let activePrimeFacesList: PrimeFacesSelectManyMenu | null = null;
 
 function isDecorationMutation(record: MutationRecord, decorated: Fillable, title: string | undefined): boolean {
   if (record.type === "childList") {
@@ -112,6 +122,18 @@ function isDecorationMutation(record: MutationRecord, decorated: Fillable, title
 }
 
 function isPrimeFacesInteractionMutation(record: MutationRecord): boolean {
+  const list = activePrimeFacesList;
+  if (list) {
+    // A SelectManyMenu click only restyles its own items (highlight, hover,
+    // the optional checkbox) and focuses the widget; option.selected is a
+    // property, not an attribute. The change event's AJAX update is NOT
+    // exempt: it lands after this window closes.
+    const target = record.target as Element;
+    return record.type === "attributes" &&
+      ["class", "style", "aria-selected"].includes(record.attributeName ?? "") &&
+      (target === list.wrapper ||
+        (list.wrapper.contains(target) && target.matches(".ui-selectlistbox-item, .ui-chkbox-box, .ui-chkbox-icon")));
+  }
   const menu = activePrimeFacesMenu;
   if (!menu) return false;
   const panel = primeFacesPanel(menu);
@@ -187,8 +209,8 @@ function asFillable(el: Element | null): Fillable | null {
 }
 
 function isHiddenTarget(el: Fillable): boolean {
-  const menu = el instanceof HTMLSelectElement ? primeFacesSelectMenu(el) : null;
-  return menu ? isHiddenControl(menu.wrapper) : isHiddenControl(el);
+  const widget = primeFacesWidget(el);
+  return widget ? isHiddenControl(widget) : isHiddenControl(el);
 }
 
 function controlForLabel(label: HTMLLabelElement): Fillable | null {
@@ -411,6 +433,17 @@ export function clearPortalForm(): number {
       } else if (isCustomCheckboxElement(el)) {
         if (!isCheckboxChecked(el)) continue;
         toggleCheckbox(el, false);
+      } else if (el instanceof HTMLSelectElement && el.multiple) {
+        // `selectedIndex = 0` on a multi-select would CHOOSE option 1.
+        const list = primeFacesSelectManyMenu(el);
+        if (list) {
+          if (!clearPrimeFacesList(list)) continue;
+        } else {
+          const chosen = Array.from(el.selectedOptions);
+          if (chosen.length === 0) continue;
+          for (const option of chosen) option.selected = false;
+          fireChanged(el);
+        }
       } else if (el instanceof HTMLSelectElement) {
         if (el.selectedIndex <= 0 && el.value === "") continue;
         // Index 0 is the placeholder on a portal select; -1 (nothing chosen)
@@ -425,6 +458,22 @@ export function clearPortalForm(): number {
     } catch {
       // One stubborn widget must not abort the reset of the rest.
     }
+  }
+  return cleared;
+}
+
+/** Clear a SelectManyMenu through its own list — ctrl-click each chosen item
+ * off — so the widget and the posted select agree. A list whose clicks clear
+ * the others (`metaKeySelection` off) can't be emptied that way; it is left
+ * alone and not counted. */
+function clearPrimeFacesList(list: PrimeFacesSelectManyMenu): boolean {
+  const pairs = primeFacesListItems(list);
+  if (!pairs || list.select.disabled || listClickClearsOthers(list)) return false;
+  let cleared = false;
+  for (const pair of pairs) {
+    if (!isListItemChosen(pair) || pair.item.classList.contains("ui-state-disabled")) continue;
+    toggleListItem(pair.item);
+    cleared ||= !pair.option.selected;
   }
   return cleared;
 }
@@ -567,6 +616,16 @@ function applyCheckbox(el: Fillable, value: string, markAttempted: () => void): 
 }
 
 function applySelect(el: HTMLSelectElement, instruction: FillInstruction, markAttempted: () => void): ApplyOutcome {
+  // Writing a SelectManyMenu's backing select would post an answer its list
+  // never shows; only `applyPrimeFacesList` (the async path) clicks the list.
+  if (primeFacesSelectManyMenu(el)) {
+    return {
+      ok: false,
+      reason: "multi-select list can only be filled through its visible items",
+      outcome: "unsupported",
+      reasonCode: "unsupported_control",
+    };
+  }
   const value = instruction.value;
   const menu = primeFacesSelectMenu(el);
   if (menu && (menu.wrapper.matches(":disabled, .ui-state-disabled") || menu.wrapper.getAttribute("aria-disabled") === "true")) {
@@ -597,6 +656,20 @@ function applySelect(el: HTMLSelectElement, instruction: FillInstruction, markAt
       outcome: "option_mismatch",
       reasonCode: "option_missing",
     };
+  }
+  if (el.multiple) {
+    // A value names ONE option; a multi-select fill adds it and never clears
+    // the others (`select.value = …` would deselect every other choice).
+    const added = !match.selected;
+    if (added) {
+      markAttempted();
+      match.selected = true;
+      fireChanged(el);
+    }
+    if (!match.selected) {
+      return { ok: false, reason: "field did not retain the requested value", target: el };
+    }
+    return { ok: true, attempted: added, changed: added, target: el, expectedValue: match.value };
   }
   const changed = el.value !== match.value;
   if (changed) {
@@ -1327,42 +1400,50 @@ function rejectPostFill(
   }
 }
 
-/** Apply PrimeFaces menus through their actual visible options. Writing the
- * aria-hidden backing select first leaves PrimeFaces' internal value stale. */
-async function applyPrimeFacesSelect(
+type PrimeFacesTarget =
+  | { ok: true; select: HTMLSelectElement; pageUrl: string | null; probe: ProbedTarget | undefined }
+  | { ok: false; result: FillPageResult };
+
+/** What every PrimeFaces widget fill checks before it touches the widget:
+ * the page is this mapping's, the selector resolves to ONE visible, enabled
+ * backing select of the expected widget kind, and — under strict
+ * revalidation — it is exactly the control the shape probe saw. */
+function preparePrimeFacesTarget(
   instruction: FillInstruction,
   strictRevalidation: boolean,
-): Promise<FillPageResult> {
+  widgetOf: (select: HTMLSelectElement) => HTMLElement | null,
+): PrimeFacesTarget {
+  const skip = (result: FillPageResult): PrimeFacesTarget => ({ ok: false, result });
   const pageUrl = typeof location !== "undefined" ? location.href : null;
   const probedTarget = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
   const currentPage = instruction.resolvedPage ?? probedTarget?.resolvedPage ?? resolveFillPage(pageUrl, [instruction.pageStep]);
   if (isOtherPageInstruction(instruction, currentPage)) {
-    return skippedResult(instruction, "field belongs to another page", "other_page", "other_page", "other_page");
+    return skip(skippedResult(instruction, "field belongs to another page", "other_page", "other_page", "other_page"));
   }
   if (!pageScopeMatches(instruction.pageUrlScope, pageUrl)) {
-    return skippedResult(instruction, "mapping is scoped to a different page", "other_page", "other_page", "other_page");
+    return skip(skippedResult(instruction, "mapping is scoped to a different page", "other_page", "other_page", "other_page"));
   }
   if (currentPage == null && Boolean(instruction.pageStep?.trim()) && !probedTarget) {
-    return skippedResult(instruction, "current wizard page could not be confirmed", "page_unknown", "page_unknown", "page_unknown");
+    return skip(skippedResult(instruction, "current wizard page could not be confirmed", "page_unknown", "page_unknown", "page_unknown"));
   }
   const resolution = resolveTarget(instruction);
   if (resolution.status !== "unique" || !(resolution.target instanceof HTMLSelectElement)) {
     const hidden = resolution.status === "hidden";
     const ambiguous = resolution.status === "ambiguous";
-    return skippedResult(
+    return skip(skippedResult(
       instruction,
       hidden ? HIDDEN_REASON : ambiguous ? "multiple visible controls match this mapping" : "mapping does not resolve to one visible dropdown",
       hidden ? HIDDEN_KIND : ambiguous ? "no_mapping" : "unverified",
       hidden ? "hidden" : ambiguous ? "needs_mapping" : "unverified",
       hidden ? "field_hidden" : ambiguous ? "ambiguous_target" : "context_changed",
-    );
+    ));
   }
   const select = resolution.target;
-  const menu = primeFacesSelectMenu(select);
-  if (!menu) return skippedResult(instruction, "mapping does not resolve to one visible dropdown", "unverified", "unsupported", "unsupported_control");
-  if (isHiddenTarget(select)) return skippedResult(instruction, HIDDEN_REASON, HIDDEN_KIND, "hidden", "field_hidden");
-  if (select.disabled || menu.wrapper.matches(":disabled, .ui-state-disabled") || menu.wrapper.getAttribute("aria-disabled") === "true") {
-    return skippedResult(instruction, "field is disabled or read-only", "unverified", "unsupported", "unsupported_control");
+  const wrapper = widgetOf(select);
+  if (!wrapper) return skip(skippedResult(instruction, "mapping does not resolve to one visible dropdown", "unverified", "unsupported", "unsupported_control"));
+  if (isHiddenTarget(select)) return skip(skippedResult(instruction, HIDDEN_REASON, HIDDEN_KIND, "hidden", "field_hidden"));
+  if (select.disabled || wrapper.matches(":disabled, .ui-state-disabled") || wrapper.getAttribute("aria-disabled") === "true") {
+    return skip(skippedResult(instruction, "field is disabled or read-only", "unverified", "unsupported", "unsupported_control"));
   }
 
   const probe = instruction.probeKey ? probedTargets.get(instruction.probeKey) : undefined;
@@ -1379,8 +1460,46 @@ async function applyPrimeFacesSelect(
     probe.pageUrl !== pageUrl || probe.target !== select || probe.mutationVersion !== mutationVersion ||
     !labelMatches || !optionsMatch
   )) {
-    return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed");
+    return skip(skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed"));
   }
+  return { ok: true, select, pageUrl, probe };
+}
+
+/** A widget fill that landed: `decorated` is what was changed (null when the
+ * field already held the value, so nothing was written). */
+function widgetFilledResult(instruction: FillInstruction, decorated: Fillable | null): FillPageResult {
+  const unchanged = decorated === null;
+  if (decorated) decorateFill(decorated, instruction.kind ?? "static", instruction.token);
+  return {
+    filled: [instruction.label],
+    attemptedLabels: unchanged ? [] : [instruction.label],
+    writes: unchanged ? [] : [{
+      selector: instruction.selector,
+      kind: instruction.kind ?? "static" as const,
+      ...(instruction.token ? { token: instruction.token } : {}),
+      ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
+    }],
+    skipped: [],
+    pageFields: countPageFields(),
+    fieldOutcomes: outcomeFor(instruction, !unchanged, unchanged ? "unchanged" : "unverified", unchanged ? "unchanged_value" : "readback_unavailable"),
+  };
+}
+
+/** Apply PrimeFaces menus through their actual visible options. Writing the
+ * aria-hidden backing select first leaves PrimeFaces' internal value stale. */
+async function applyPrimeFacesSelect(
+  instruction: FillInstruction,
+  strictRevalidation: boolean,
+): Promise<FillPageResult> {
+  const prepared = preparePrimeFacesTarget(
+    instruction,
+    strictRevalidation,
+    (candidate) => primeFacesSelectMenu(candidate)?.wrapper ?? null,
+  );
+  if (!prepared.ok) return prepared.result;
+  const { select, pageUrl, probe } = prepared;
+  const menu = primeFacesSelectMenu(select);
+  if (!menu) return skippedResult(instruction, "mapping does not resolve to one visible dropdown", "unverified", "unsupported", "unsupported_control");
 
   const selection = selectOptionForInstruction(select, instruction);
   if (!selection.option) {
@@ -1429,23 +1548,88 @@ async function applyPrimeFacesSelect(
       );
     }
   }
-  const writes = unchanged ? [] : [{
-    selector: instruction.selector,
-    kind: instruction.kind ?? "static" as const,
-    ...(instruction.token ? { token: instruction.token } : {}),
-    ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
-  }];
-  if (!unchanged) {
-    decorateFill(select, instruction.kind ?? "static", instruction.token);
+  return widgetFilledResult(instruction, unchanged ? null : select);
+}
+
+/** Add ONE option to a PrimeFaces SelectManyMenu by ctrl-clicking its visible
+ * list item, the way a person adds to a multi-selection. A value names one
+ * option — a profile token resolves to a single string, and the wire has no
+ * list-valued token — so the fill adds that option and never removes another
+ * choice: clearing what a coordinator picked is not a write it can justify. */
+async function applyPrimeFacesList(
+  instruction: FillInstruction,
+  strictRevalidation: boolean,
+): Promise<FillPageResult> {
+  const prepared = preparePrimeFacesTarget(
+    instruction,
+    strictRevalidation,
+    (candidate) => primeFacesSelectManyMenu(candidate)?.wrapper ?? null,
+  );
+  if (!prepared.ok) return prepared.result;
+  const { select, pageUrl, probe } = prepared;
+  const list = primeFacesSelectManyMenu(select);
+  const pairs = list ? primeFacesListItems(list) : null;
+  if (!list || !pairs) {
+    return skippedResult(instruction, "list items do not line up with the field's options; review this field on the portal", "unverified", "unsupported", "unsupported_control");
   }
-  return {
-    filled: [instruction.label],
-    attemptedLabels: unchanged ? [] : [instruction.label],
-    writes,
-    skipped: [],
-    pageFields: countPageFields(),
-    fieldOutcomes: outcomeFor(instruction, !unchanged, unchanged ? "unchanged" : "unverified", unchanged ? "unchanged_value" : "readback_unavailable"),
+
+  const selection = selectOptionForInstruction(select, instruction);
+  if (!selection.option) {
+    return selection.ambiguous
+      ? skippedResult(instruction, "dropdown: multiple options match the mapped value", "no_mapping", "needs_mapping", "ambiguous_target")
+      : skippedResult(instruction, vocabularyMismatchReason("dropdown"), "skipped", "option_mismatch", "option_missing");
+  }
+  const pair = pairs.find((candidate) => candidate.option === selection.option);
+  if (!pair) {
+    return skippedResult(instruction, "list items do not line up with the field's options; review this field on the portal", "unverified", "unsupported", "unsupported_control");
+  }
+  // DYN-PAGE-02, guarded on the item about to be CLICKED (a list filter hides
+  // items while the widget stays visible) — the same rule as a radio option.
+  if (isHiddenControl(pair.item)) return skippedResult(instruction, HIDDEN_REASON, HIDDEN_KIND, "hidden", "field_hidden");
+  if (pair.item.matches(".ui-state-disabled, [aria-disabled='true']")) {
+    return skippedResult(instruction, "field is disabled or read-only", "unverified", "unsupported", "unsupported_control");
+  }
+  if (isListItemChosen(pair)) return widgetFilledResult(instruction, null);
+  // Highlighted but not posted: a ctrl-click would toggle it OFF.
+  if (pair.item.classList.contains("ui-state-highlight")) {
+    return skippedResult(instruction, "list selection disagrees with the field; review this field on the portal", "unverified", "unverified", "readback_mismatch");
+  }
+  const others = pairs.filter((candidate) => candidate !== pair && candidate.option.selected).map(({ option }) => option);
+  if (others.length > 0 && listClickClearsOthers(list)) {
+    return skippedResult(instruction, "this list replaces its other choices on click; review this field on the portal", "unverified", "unsupported", "unsupported_control");
+  }
+
+  const optionSetSignature = probe?.probedOptionsSignature ?? getOptionsSignature(select);
+  const isCurrent = (): boolean => {
+    if (typeof location !== "undefined" && location.href !== pageUrl) return false;
+    const current = resolveTarget(instruction);
+    return current.status === "unique" && current.target === select && select.isConnected &&
+      pair.item.isConnected && getOptionsSignature(select) === optionSetSignature &&
+      !isHiddenTarget(select) && !isHiddenControl(pair.item) && !select.disabled;
   };
+  let chosen: boolean;
+  activePrimeFacesList = list;
+  try {
+    toggleListItem(pair.item);
+    chosen = (await waitForValue(() => (isCurrent() && isListItemChosen(pair) ? true : null), 500)) === true;
+  } catch {
+    return skippedResult(instruction, "field could not be applied; review it on the portal", "unverified", "unverified", "context_changed", true);
+  } finally {
+    // Drain this interaction's records while its narrow widget scope is active.
+    currentProbeMutationVersion();
+    activePrimeFacesList = null;
+  }
+  if (!isCurrent()) {
+    return skippedResult(instruction, "form changed during fill; review this field on the portal", "unverified", "unverified", "context_changed", true);
+  }
+  if (!chosen) {
+    return skippedResult(instruction, "list selection did not remain visible; review this field on the portal", "unverified", "write_rejected", "readback_mismatch", true);
+  }
+  if (others.some((option) => !option.selected)) {
+    return skippedResult(instruction, "selecting it cleared the list's other choices; review this field on the portal", "unverified", "write_rejected", "readback_mismatch", true);
+  }
+  // Outline the list the coordinator reviews, not its 0×0 backing select.
+  return widgetFilledResult(instruction, list.wrapper);
 }
 
 /** Production fill path. Generic fields keep the synchronous engine; date
@@ -1455,12 +1639,17 @@ export async function applyFillSettled(
   strictRevalidation = false,
 ): Promise<FillPageResult> {
   const regular: FillInstruction[] = [];
-  const widgets: FillInstruction[] = [];
+  const widgets: Array<{ instruction: FillInstruction; apply: typeof applyPrimeFacesSelect }> = [];
   const dateTargets: Array<{ instruction: FillInstruction; target: Fillable }> = [];
   for (const instruction of instructions) {
     const resolution = resolveTarget(instruction);
-    if (resolution.status === "unique" && resolution.target instanceof HTMLSelectElement && primeFacesSelectMenu(resolution.target)) {
-      widgets.push(instruction);
+    const select = resolution.status === "unique" && resolution.target instanceof HTMLSelectElement
+      ? resolution.target
+      : null;
+    if (select && primeFacesSelectManyMenu(select)) {
+      widgets.push({ instruction, apply: applyPrimeFacesList });
+    } else if (select && primeFacesSelectMenu(select)) {
+      widgets.push({ instruction, apply: applyPrimeFacesSelect });
     } else {
       regular.push(instruction);
       if (resolution.status === "unique") {
@@ -1473,10 +1662,10 @@ export async function applyFillSettled(
     }
   }
   const result = applyFill(regular, strictRevalidation);
-  for (const instruction of widgets) {
+  for (const { instruction, apply } of widgets) {
     let widgetResult: FillPageResult;
     try {
-      widgetResult = await applyPrimeFacesSelect(instruction, strictRevalidation);
+      widgetResult = await apply(instruction, strictRevalidation);
     } catch {
       // Keep one misbehaving widget from discarding successful writes to
       // unrelated fields. Exception text can contain provider data.

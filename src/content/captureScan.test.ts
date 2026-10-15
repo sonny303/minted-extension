@@ -7,8 +7,16 @@ import {
   compareVisualPosition,
   isCapturableControl,
   isHiddenControl,
+  nearestCapturableControl,
   scanCapturableFields,
 } from "./captureScan";
+import {
+  BCBSKS_AREAS_ID,
+  BCBSKS_AREAS_LABEL,
+  BCBSKS_AREAS_SELECTOR,
+  BCBSKS_BEHAVIORAL_AREAS,
+  selectManyMenuMarkup,
+} from "../__fixtures__/dom/primeFacesSelectManyMenu";
 
 // jsdom does not provide CSS.escape; captureScan uses it for ids/names.
 if (typeof CSS === "undefined" || typeof CSS.escape !== "function") {
@@ -172,6 +180,8 @@ describe("scanCapturableFields", () => {
     const captured = scanCapturableFields()[0]?.options;
     expect(captured).toHaveLength(CONTROL_OPTIONS_CAP);
     expect(captured?.at(-1)).toEqual({ value: "v999", label: "Option 999" });
+    // A caller that never proposes (the capture probe) can take them all.
+    expect(scanCapturableFields({ optionsCap: Infinity })[0]?.options).toHaveLength(CONTROL_OPTIONS_CAP + 1);
   });
 
   it("keeps only visible fillable controls and still collapses radio groups", () => {
@@ -460,5 +470,179 @@ describe("scanCapturableFields — labelling and selector durability", () => {
     const [field] = scanCapturableFields();
     expect(field!.selector.startsWith("body > ")).toBe(true);
     expect(document.querySelector(field!.selector)).toBe(el);
+  });
+});
+
+describe("scanCapturableFields — page-drawn controls (Qualtrics)", () => {
+  /** BlueKC's Qualtrics interest form, 2026-10-14: the real radio is 0×0 /
+   * opacity 0, and TWO labels point at it — an empty one Qualtrics draws the
+   * circle in, then the one carrying the answer text. */
+  function qualtricsRadioGroup(): string {
+    return `
+      <fieldset>
+        <legend>Please indicate if you are located within these counties:</legend>
+        <ul>
+          <li>
+            <input type="radio" class="radio" id="QR~QID180~1" name="QR~QID180" value="1" />
+            <label for="QR~QID180~1" class="q-radio" id="circle1"></label>
+            <label for="QR~QID180~1" class="SingleAnswer" id="text1"><span>Yes, I am located in one of the counties listed above.</span></label>
+          </li>
+          <li>
+            <input type="radio" class="radio" id="QR~QID180~2" name="QR~QID180" value="2" />
+            <label for="QR~QID180~2" class="q-radio" id="circle2"></label>
+            <label for="QR~QID180~2" class="SingleAnswer" id="text2"><span>No, I am not located in one of the counties listed above.</span></label>
+          </li>
+        </ul>
+      </fieldset>`;
+  }
+
+  it("captures a zero-size radio group whose labels are visible, named by question with real option text", () => {
+    document.body.innerHTML = `${qualtricsRadioGroup()}<input type="text" id="before" />`;
+    for (const radio of document.querySelectorAll('input[type="radio"]')) stubZeroBox(radio);
+    stubVisibleBox(document.getElementById("circle1")!, { top: 50, width: 18, height: 18 });
+    stubVisibleBox(document.getElementById("text1")!, { top: 50, left: 30 });
+    stubVisibleBox(document.getElementById("circle2")!, { top: 80, width: 18, height: 18 });
+    stubVisibleBox(document.getElementById("text2")!, { top: 80, left: 30 });
+    // Later in the DOM but painted ABOVE the question: reading order must come
+    // from the label's box, since the 0×0 input's own rect means nothing.
+    stubVisibleBox(document.getElementById("before")!, { top: 10 });
+
+    const fields = scanCapturableFields();
+    expect(fields.map((f) => [f.selector, f.fieldType])).toEqual([
+      ["#before", "text"],
+      ["#QR\\~QID180\\~1", "radio"],
+    ]);
+    expect(fields[1]?.label).toBe("Please indicate if you are located within these counties:");
+    expect(fields[1]?.options).toEqual([
+      { value: "1", label: "Yes, I am located in one of the counties listed above." },
+      { value: "2", label: "No, I am not located in one of the counties listed above." },
+    ]);
+  });
+
+  it("still skips a zero-size choice whose labels are invisible or positively hidden", () => {
+    document.body.innerHTML = `
+      ${qualtricsRadioGroup()}
+      <div style="display:none">
+        <input type="checkbox" id="parked" value="x" />
+        <label for="parked" id="parkedLabel">Parked option</label>
+      </div>`;
+    // No label geometry at all: an orphaned control, still noise.
+    for (const el of document.querySelectorAll("input, label")) stubZeroBox(el);
+    // A visible-looking label cannot rescue a control under display:none.
+    stubVisibleBox(document.getElementById("parkedLabel")!);
+    expect(scanCapturableFields()).toEqual([]);
+  });
+
+  it("leaves an embedded calendar widget out of the label", () => {
+    document.body.innerHTML = `
+      <label for="QR~QID185" class="QuestionText">Today's Date:<link rel="stylesheet" href="cal.css" /><div class="yui-skin-sam"><div class="yui-calcontainer single"><table><thead><tr><th><a class="calnavleft">Previous Month (September 2026)</a>October 2026<a class="calnavright">Next Month (November 2026)</a></th></tr><tr><th>Su</th><th>Mo</th></tr></thead><tbody><tr><td>27</td><td>28</td></tr></tbody></table></div></div></label>
+      <input type="text" id="QR~QID185" />`;
+    stubVisibleBox(document.getElementById("QR~QID185")!);
+    expect(scanCapturableFields()[0]?.label).toBe("Today's Date:");
+  });
+
+  it("leaves the calendar out of the field's section too (Qualtrics legend)", () => {
+    document.body.innerHTML = `
+      <fieldset>
+        <legend><label for="QR~QID185">Today's Date:<div class="yui-skin-sam"><table><tbody><tr><td>Previous Month</td><td>27</td></tr></tbody></table></div></label></legend>
+        <input type="text" id="QR~QID185" />
+      </fieldset>`;
+    stubVisibleBox(document.getElementById("QR~QID185")!);
+    expect(scanCapturableFields()[0]?.formSection).toBe("Today's Date:");
+  });
+
+  it("keeps link text that is part of the caption", () => {
+    document.body.innerHTML = `
+      <label for="agree">I accept the <a href="#t">terms</a></label>
+      <input type="checkbox" id="agree" value="yes" />`;
+    stubVisibleBox(document.getElementById("agree")!);
+    expect(scanCapturableFields()[0]?.label).toBe("I accept the terms");
+  });
+});
+
+// The BCBSKS behavioral-health list: PrimeFaces 10's `<select multiple>` sits
+// 0×0 inside `.ui-helper-hidden-accessible`; the person sees and clicks the
+// list beside it. Markup provenance: src/__fixtures__/dom/primeFacesSelectManyMenu.ts.
+describe("scanCapturableFields — PrimeFaces SelectManyMenu", () => {
+  const wrapper = (id = BCBSKS_AREAS_ID): HTMLElement => document.getElementById(id)!;
+
+  it("captures the list as ONE select row: backing selector, full vocabulary, widget visibility", () => {
+    document.body.innerHTML = `
+      <label for="npi">NPI</label><input id="npi" type="text" />
+      ${selectManyMenuMarkup({ filter: true })}
+      <label for="email">Email</label><input id="email" type="text" />
+    `;
+    // Reading order is the widget's; the backing select keeps jsdom's 0×0 at
+    // top 0, so ordering by it would put the list first.
+    stubVisibleBox(document.getElementById("npi")!, { top: 100 });
+    stubVisibleBox(wrapper(), { top: 200, height: 200 });
+    stubVisibleBox(document.getElementById(`${BCBSKS_AREAS_ID}_filter`)!, { top: 200 });
+    stubVisibleBox(document.getElementById("email")!, { top: 450 });
+
+    const fields = scanCapturableFields({ optionsCap: Infinity });
+    expect(fields.map((field) => field.selector)).toEqual(["#npi", BCBSKS_AREAS_SELECTOR, "#email"]);
+    expect(fields[1]).toEqual({
+      label: `${BCBSKS_AREAS_LABEL}*`,
+      selector: BCBSKS_AREAS_SELECTOR,
+      fieldType: "select",
+      formSection: null,
+      options: BCBSKS_BEHAVIORAL_AREAS.map(([code, area]) => ({ value: code, label: `${code} - ${area}` })),
+    });
+    // The list's filter box is a widget helper, never a row.
+    expect(fields.some((field) => field.selector.includes("_filter"))).toBe(false);
+  });
+
+  it("is shape-only: what is already selected never changes the row", () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    stubVisibleBox(wrapper());
+    const blank = scanCapturableFields({ optionsCap: Infinity });
+
+    document.body.innerHTML = selectManyMenuMarkup({ selected: ["A03", "A12", "A40"] });
+    stubVisibleBox(wrapper());
+    expect(scanCapturableFields({ optionsCap: Infinity })).toEqual(blank);
+  });
+
+  it("judges visibility by the widget, not the 0×0 select", () => {
+    document.body.innerHTML = selectManyMenuMarkup();
+    const select = document.querySelector<HTMLSelectElement>("select[multiple]")!;
+    stubZeroBox(select);
+    // Not revealed yet (the AJAX panel has no layout): skipped, like any control.
+    expect(isCapturableControl(select)).toBe(false);
+    stubVisibleBox(wrapper());
+    expect(isCapturableControl(select)).toBe(true);
+    // A visible widget inside a positively hidden panel is still hidden.
+    wrapper().parentElement!.style.display = "none";
+    expect(isCapturableControl(select)).toBe(false);
+  });
+
+  it("reads a caption beside the widget when no label is wired", () => {
+    document.body.innerHTML = `
+      <div><span>Areas of expertise</span>${selectManyMenuMarkup({ label: null })}</div>
+    `;
+    stubVisibleBox(wrapper());
+    expect(scanCapturableFields()[0]?.label).toBe("Areas of expertise");
+  });
+
+  it("resolves a pick on the list (item, filter) to the backing select", () => {
+    document.body.innerHTML = selectManyMenuMarkup({ filter: true });
+    const select = document.querySelector("select[multiple]");
+    expect(nearestCapturableControl(document.querySelectorAll(".ui-selectlistbox-item")[11]!)).toBe(select);
+    expect(nearestCapturableControl(document.getElementById(`${BCBSKS_AREAS_ID}_filter`))).toBe(select);
+    expect(nearestCapturableControl(wrapper())).toBe(select);
+  });
+
+  it("resolves a pick on a SelectOneMenu's visible label to its backing select", () => {
+    document.body.innerHTML = `
+      <div id="degree" class="ui-selectonemenu" role="combobox">
+        <div class="ui-helper-hidden-accessible"><input id="degree_focus" type="text" /></div>
+        <div class="ui-helper-hidden-accessible"><select id="degree_input" aria-hidden="true"><option value="APRN">APRN</option></select></div>
+        <label class="ui-selectonemenu-label">Select One</label>
+        <div class="ui-selectonemenu-trigger"><span></span></div>
+      </div>
+    `;
+    const select = document.getElementById("degree_input");
+    expect(nearestCapturableControl(document.querySelector(".ui-selectonemenu-label"))).toBe(select);
+    expect(nearestCapturableControl(document.getElementById("degree_focus"))).toBe(select);
+    expect(nearestCapturableControl(document.getElementById("degree"))).toBe(select);
   });
 });
