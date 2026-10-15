@@ -211,11 +211,26 @@ describe("probePage — navigation, dialogs, errors", () => {
     ]);
   });
 
+  it("reads a PrimeFaces button's caption past its empty aria-label (BCBSKS Submit)", () => {
+    render(`
+      <form id="networkEnrollmentForm">
+        <input type="text" id="networkEnrollmentForm:ContactFirstName" />
+        <button id="networkEnrollmentForm:submitBtn" name="networkEnrollmentForm:submitBtn" type="submit"
+          class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only bcbsks-button blue-button"
+          aria-label=""><span class="ui-button-text ui-c">Submit</span></button>
+      </form>`);
+    expect(probePage().navigation).toEqual([
+      { kind: "submit", caption: "Submit", selector: "#networkEnrollmentForm\\:submitBtn", disabled: false },
+    ]);
+  });
+
   it("classifies captions conservatively", () => {
     expect(classifyAction("Save and Continue", "", false)).toBe("advance");
     expect(classifyAction("Save for later", "", false)).toBe("save");
     expect(classifyAction("Complete Application", "NextButton", false)).toBe("submit");
     expect(classifyAction("", "NextButton", false)).toBe("advance");
+    expect(classifyAction("", "networkEnrollmentForm:submitBtn ui-button", false)).toBe("submit");
+    expect(classifyAction("", "wizardNextOrFinish", false)).toBe("submit");
     expect(classifyAction("OK", "", false)).toBe("other");
     expect(classifyAction("OK", "", true)).toBe("dismiss");
   });

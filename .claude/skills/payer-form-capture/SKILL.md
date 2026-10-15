@@ -83,8 +83,30 @@ kind ∈ advance | back | submit | save | dismiss | other
 `kind: "submit"` is classified by **caption first** (a Qualtrics last page keeps
 `#NextButton` but says "Submit"), and then by **page copy**: a page that says
 'Click "Next" … to submit' (BlueKC's last page — the button still reads
-"Next") reports its advance as `submit` with `submitWarning: true`. Never click
+"Next") reports its advance as `submit` with `submitWarning: true`. An
+uncaptioned button whose id/class says submit/finish is `submit` too, and an
+empty `aria-label` falls through to the text (PrimeFaces CommandButtons render
+`aria-label=""` — BCBSKS's Submit read as `other` before that fix). Never click
 a `submit`, whatever its id or caption.
+
+**Getting a big result out of Claude in Chrome.** Its `javascript_tool` result
+is cut at about 1 KB, so a long form (BCBSKS: 108 fields, two 855-option
+taxonomy lists) can't be read back in one call. Write a compact listing into a
+temporary `<article>` and read it with `get_page_text` (no cut), then remove
+it. For the full rows, when the form is server-rendered, save its static HTML
+and replay the same `dist-probe/capture-probe.js` in jsdom. Use the replay's
+fields only if they hash byte-identical to the live scan (FNV over
+`JSON.stringify(fields)`, computed in the page). Take `navigation` from the
+live page, because script-added buttons aren't in the static HTML.
+
+**PrimeFaces / JSF (`.faces`).** Answers redraw panels through AJAX
+(`PrimeFaces.ab(… u: "…Panel")` in an `onchange`). Grep the page for those
+calls to find every answer that reveals, hides, disables, or flips `required`
+on other fields. A disabled field isn't a removed one, so the fingerprint
+doesn't change. After each change, wait for `pfAjaxComplete` instead of
+sleeping. A `SelectManyMenu` (`<select multiple>` that PrimeFaces renders as
+0×0) is invisible to the scanner: list it under `uncapturedQuestions` with
+`kind: "widget"`.
 
 - `fields: []` with a non-empty `frames` → the form lives in an iframe. A
   same-origin frame: navigate the tab to the frame URL and re-probe. A

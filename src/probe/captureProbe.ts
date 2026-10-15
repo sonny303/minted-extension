@@ -178,7 +178,9 @@ function pageHeading(): string | null {
 
 function actionCaption(el: Element): string {
   if (el instanceof HTMLInputElement) return collapse(el.value || el.alt);
-  return collapse(el.getAttribute("aria-label") ?? el.textContent);
+  // An EMPTY aria-label names nothing: PrimeFaces renders aria-label="" on its
+  // CommandButton, whose caption lives in a child span (BCBSKS "Submit").
+  return collapse(el.getAttribute("aria-label")?.trim() || el.textContent);
 }
 
 export function classifyAction(caption: string, hint: string, inDialog: boolean): ActionKind {
@@ -187,8 +189,10 @@ export function classifyAction(caption: string, hint: string, inDialog: boolean)
   if (ADVANCE.test(caption)) return "advance";
   if (BACK.test(caption)) return "back";
   if (SAVE.test(caption)) return "save";
-  // Icon-only buttons: fall back to the control's own id/class.
+  // Icon-only buttons: fall back to the control's own id/class — submit first,
+  // so an uncaptioned submitBtn can never read as a harmless "other".
   if (!caption || caption.length <= 2) {
+    if (/submit|finish/i.test(hint)) return "submit";
     if (/next|continue|forward/i.test(hint)) return "advance";
     if (/prev|back/i.test(hint)) return "back";
   }
