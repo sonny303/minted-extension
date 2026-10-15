@@ -131,6 +131,12 @@ import {
   type CaptureSession,
 } from "../shared/capture";
 import {
+  CAPTURE_FILE_MAX_BYTES,
+  captureImportConfirmation,
+  captureImportSummaryText,
+  parseCaptureFile,
+} from "../shared/captureImport";
+import {
   draftEdit,
   draftForRow,
   draftTestReport,
@@ -310,6 +316,8 @@ const captureSummary = el<HTMLElement>("capture-summary");
 const captureStart = el<HTMLButtonElement>("capture-start");
 const captureNextPage = el<HTMLButtonElement>("capture-next-page");
 const captureAddField = el<HTMLButtonElement>("capture-add-field");
+const captureImport = el<HTMLButtonElement>("capture-import");
+const captureImportFile = el<HTMLInputElement>("capture-import-file");
 const capturePickStatus = el<HTMLElement>("capture-pick-status");
 const captureBatch = el<HTMLElement>("capture-batch");
 const captureBatchCount = el<HTMLElement>("capture-batch-count");
@@ -5745,6 +5753,8 @@ function clearTrainTargetLocalState(): void {
   captureStart.textContent = "Capture this form";
   captureSend.disabled = false;
   captureSend.textContent = "Send for approval";
+  captureImport.disabled = false;
+  captureImport.textContent = "Import file";
   trainRecognition.textContent = "Looking up the selected form…";
   trainHint.textContent = "";
   renderTrainDryRun();
@@ -5908,7 +5918,8 @@ function renderCapture(): void {
   captureRows.replaceChildren();
   captureActions.hidden = !canSendCapture(captureSession);
   captureSend.disabled = false;
-  captureSent.hidden = counts.sent === 0;
+  captureSent.hidden = counts.sent === 0 && counts.held === 0;
+  captureSent.replaceChildren();
   if (counts.sent > 0) {
     // Training writes the SHARED library, so the review happens in the web
     // app's Submit-form task editor (D18) — say where, and TAKE them there.
@@ -5917,7 +5928,7 @@ function renderCapture(): void {
     // the payer id, so the link costs nothing.
     const note = document.createElement("span");
     note.textContent = `${counts.sent} sent to the shared form library. Nothing fills until they are mapped in the web app's Submit-form task editor.`;
-    captureSent.replaceChildren(note);
+    captureSent.append(note);
     if (portal?.payerId) {
       captureSent.append(
         " ",
@@ -5927,6 +5938,17 @@ function renderCapture(): void {
         ),
       );
     }
+  }
+  if (counts.held > 0) {
+    // Held rows are the send's one partial outcome: say how many and why in
+    // one place, beside what DID go; each row carries its own reason too.
+    captureSent.append(
+      `${counts.sent > 0 ? " " : ""}${counts.held} ${
+        counts.held === 1 ? "field was" : "fields were"
+      } not sent: ${
+        counts.held === 1 ? "its option list is" : "their option lists are"
+      } longer than Minted Panel accepts today. Send for approval again once the panel takes longer lists.`,
+    );
   }
   renderBatchBar();
   for (const group of groupCaptureRowsByPage(listRows)) {
@@ -6025,11 +6047,27 @@ function renderCaptureRow(entry: CaptureListRow): HTMLDivElement {
     item.append(chip);
   }
 
+  // Only an imported capture file carries a suggestion (Claude's): shown for
+  // the trainer to weigh, never sent. The decision is made in the web app.
+  if (row?.suggestedToken) {
+    const suggestion = document.createElement("span");
+    suggestion.className = "capture-row-evidence mono";
+    suggestion.textContent = `Suggested token: ${row.suggestedToken}`;
+    item.append(suggestion);
+  }
+
   if (row?.evidence) {
     const evidence = document.createElement("span");
     evidence.className = "capture-row-evidence";
     evidence.textContent = row.evidence;
     item.append(evidence);
+  }
+
+  if (row && !row.sent && row.heldReason) {
+    const held = document.createElement("span");
+    held.className = "capture-row-evidence capture-row-held";
+    held.textContent = row.heldReason;
+    item.append(held);
   }
 
   if (row?.sent) {
@@ -6639,6 +6677,9 @@ captureSend.addEventListener("click", () => {
     }
     if (!captureSessionMatchesTrainTarget(response.data, target)) return;
     captureSession = response.data;
+    // The restore / import line describes the capture BEFORE a send ("nothing
+    // is sent until…"); the sent and held counts below it say what happened.
+    captureRestored.hidden = true;
     renderCapture();
   })();
 });
@@ -6658,6 +6699,82 @@ captureClear.addEventListener("click", () => {
     captureRestored.hidden = true;
     renderCapture();
   })();
+});
+
+/**
+ * Load a Claude-written capture file (form-captures/*.capture.json) as the
+ * selected form's capture. The panel only reads the file and asks what needs
+ * asking; the worker re-parses the text, checks the registry, and writes the
+ * session. Nothing reaches Minted Panel until Send for approval.
+ */
+async function importCaptureFile(file: File): Promise<void> {
+  const target = currentTrainTargetRequest();
+  if (!target) return;
+  const generation = loadGeneration;
+  setPickStatus(null);
+  if (file.size > CAPTURE_FILE_MAX_BYTES) {
+    setPickStatus("That file is too large to be a form capture.", true);
+    return;
+  }
+  let text: string;
+  try {
+    text = await file.text();
+  } catch {
+    setPickStatus("Minted couldn't read that file. Choose it again.", true);
+    return;
+  }
+  if (!isCurrent(generation) || !isCurrentTrainTargetRequest(target)) return;
+  // A local read first, so a wrong file is named before anything is asked.
+  const parsed = parseCaptureFile(text);
+  if (!parsed.ok) {
+    setPickStatus(parsed.reason, true);
+    return;
+  }
+  const existing = captureSessionMatchesTrainTarget(captureSession, target)
+    ? captureSession
+    : null;
+  const ask = captureImportConfirmation(parsed.file, target, existing);
+  if (ask != null && !window.confirm(ask)) return;
+
+  captureImport.disabled = true;
+  captureImport.textContent = "Importing…";
+  const response = await sendToBackground({
+    type: "IMPORT_CAPTURE",
+    ...target,
+    fileText: text,
+    // Both are only ever the answer to the confirmation just shown.
+    replaceExisting: ask != null && (existing?.rows.length ?? 0) > 0,
+    acceptPortalKey: ask != null ? parsed.file.portalKey : null,
+  });
+  if (!isCurrent(generation) || !isCurrentTrainTargetRequest(target)) return;
+  captureImport.disabled = false;
+  captureImport.textContent = "Import file";
+  if (!response.ok) {
+    discardStaleTrainCaptureFromResponse(response);
+    setPickStatus(response.error, true);
+    return;
+  }
+  if (!captureSessionMatchesTrainTarget(response.data.session, target)) return;
+  captureSession = response.data.session;
+  captureAddedPage = false;
+  batchSelection.clear();
+  editingSelector = null;
+  selectorTestResult = null;
+  rowDraft = null;
+  captureRestored.hidden = false;
+  captureRestored.textContent = captureImportSummaryText(response.data.summary);
+  renderCapture();
+}
+
+captureImport.addEventListener("click", () => {
+  // Reset first: picking the same file twice must still fire `change`.
+  captureImportFile.value = "";
+  captureImportFile.click();
+});
+
+captureImportFile.addEventListener("change", () => {
+  const file = captureImportFile.files?.[0];
+  if (file) void importCaptureFile(file);
 });
 
 // Restore in-flight capture session after a worker restart / panel reopen,

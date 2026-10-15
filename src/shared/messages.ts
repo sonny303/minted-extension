@@ -29,6 +29,7 @@ import type {
 } from "./fill";
 import type { ActiveCaseState } from "./handoff";
 import type { CaptureSession } from "./capture";
+import type { CaptureImportSummary } from "./captureImport";
 import type { QuickCards } from "./quickCards";
 import type { StructuredTouchDraft } from "./structuredTouch";
 import type { PanelMode } from "./panelMode";
@@ -168,6 +169,21 @@ export type BgRequest =
       facilityId: string | null;
     }
   | { type: "SEND_CAPTURE"; portalKey: string; mappingGeneration: number; targetRevision: number }
+  // Load a Claude-written capture file (form-captures/*.capture.json) as the
+  // selected form's capture. The worker parses `fileText` itself
+  // (parseCaptureFile) and writes nothing to the panel: the rows reach it
+  // only through SEND_CAPTURE, the same propose-only path a scan uses.
+  // `replaceExisting` / `acceptPortalKey` carry the trainer's confirmation
+  // (captureImportConfirmation); without them the import is refused.
+  | {
+      type: "IMPORT_CAPTURE";
+      portalKey: string;
+      mappingGeneration: number;
+      targetRevision: number;
+      fileText: string;
+      replaceExisting?: boolean;
+      acceptPortalKey?: string | null;
+    }
   | { type: "CLEAR_CAPTURE"; portalKey: string; mappingGeneration: number; targetRevision: number }
   // S4.3: tick one SOP step complete. The server enforces the ordering rule
   // and returns a 409 naming the blocker — the panel never re-derives it.
@@ -425,6 +441,7 @@ export interface BgResponseMap {
   SANDBOX_FILL: SandboxFillSummary;
   TEST_CAPTURE_SELECTOR: SelectorTestResult;
   SEND_CAPTURE: CaptureSession;
+  IMPORT_CAPTURE: { session: CaptureSession; summary: CaptureImportSummary };
   CLEAR_CAPTURE: null;
   COMPLETE_TASK_STEP: { allDone: boolean };
   GET_PROVIDER_FACILITIES: ProviderFacilitiesInfo;

@@ -25,6 +25,10 @@ export interface CaptureRow {
   chosenToken: string | null;
   /** Set once the row has been sent to the server as a proposal. */
   sent: boolean;
+  /** Why the last send left this row unsent while the rest went (an option
+   * list longer than the panel accepts). Cleared when the row sends; absent on
+   * rows never held. A send always retries a held row. */
+  heldReason?: string | null;
   /** E6.9 F6.9.8 — the wizard page this row was scanned from, and its DOM
    * position within that page. Both are shape facts, like the selector, and
    * both ride the proposal so the editor can group and order a multi-page
@@ -171,6 +175,8 @@ export interface CaptureCounts {
   /** Rows with neither: the gaps the human must resolve or skip. */
   gaps: number;
   sent: number;
+  /** Rows the last send held back (see `CaptureRow.heldReason`). */
+  held: number;
 }
 
 export function captureCounts(session: CaptureSession | null): CaptureCounts {
@@ -181,6 +187,7 @@ export function captureCounts(session: CaptureSession | null): CaptureCounts {
     recognized,
     gaps: rows.length - recognized,
     sent: rows.filter((r) => r.sent).length,
+    held: rows.filter((r) => !r.sent && r.heldReason != null).length,
   };
 }
 
@@ -239,6 +246,7 @@ export function parseCaptureSession(raw: unknown): CaptureSession | null {
       evidence: typeof r.evidence === "string" ? r.evidence : null,
       chosenToken: typeof r.chosenToken === "string" ? r.chosenToken : null,
       sent: r.sent === true,
+      heldReason: typeof r.heldReason === "string" ? r.heldReason : null,
       pageStep: typeof r.pageStep === "string" ? r.pageStep : null,
       sortOrder: typeof r.sortOrder === "number" ? r.sortOrder : null,
       // Legacy rows predate the picker and are auto by definition.

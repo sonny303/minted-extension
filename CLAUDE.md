@@ -471,6 +471,53 @@ panel, and nothing else would catch it.
 - **The selector IS the row's key.** `applyRowEdit` (`shared/capture.ts`)
   refuses a rewrite that collides with another row, and lives beside
   `mergePageCapture` because they guard the same invariant.
+- **A send holds an over-cap option list instead of failing.** The panel
+  REJECTS a longer list (422 `control_options cannot exceed N entries`) rather
+  than truncating it. `SEND_CAPTURE` keeps that row unsent with a
+  `heldReason` (`optionListHeldReason`, `src/shared/captureImport.ts`) and
+  sends the rest; every other failure still stops the send. The next send
+  retries held rows only, so a raised panel cap needs no re-capture. The card
+  counts them (`captureCounts().held`) and each row says why.
+
+### Importing a Claude capture file
+
+A capture file written by the `payer-form-capture` skill
+(`form-captures/<portalKey>.capture.json`) is already a `CaptureSession`.
+**Import file** in the Train-forms capture card loads it as the selected
+form's capture; from there it is the ordinary trainer flow: the same list,
+editor, Selector Workshop, re-capture, and the same propose-only **Send for
+approval** (`POST /api/shared-field-maps`). Approval stays in the web app.
+
+- **Where:** the button lives in `#capture-section`, so it shows when the
+  capture card does (Train forms, a form selected, its page open). The panel
+  only reads the file (`File.text()`, ≤ `CAPTURE_FILE_MAX_BYTES`) and asks
+  what needs asking; the worker's `IMPORT_CAPTURE` re-parses the text
+  (`parseCaptureFile`) and never trusts the panel's check.
+- **Registry first:** the worker runs `exactTrainPortal` before writing, so a
+  form that isn't in the `portals` registry at its current generation can't
+  take an import. The session takes the **Train target's** key and current
+  `mappingGeneration`; the file carries no generation and may carry a
+  provisional key.
+- **Asked, never assumed** (`captureImportConfirmation`, re-checked by
+  `planCaptureImport`): a file captured under a different key (compared
+  trim + lowercase, the panel's `normalizePortalKey`), and an existing
+  capture the import would replace. Without the answer the worker refuses.
+  Replacing drops local `sent` flags only; a re-send is idempotent.
+- **Page model:** a file row maps one-to-one. `pageStep` stays the page name
+  (the page heading, else "Page 1"… in walk order — the trainer's own
+  `derivePageStep` order), `sortOrder` stays the position within that page;
+  rows regroup by page in first-appearance order, then by `sortOrder`. A page
+  with no capturable row (intro, signature-only) has nothing to propose and
+  doesn't appear. "Page N" names are sequence labels, so DYN-PAGE-01's exact
+  URL-page skip treats them as ambiguous — right for Qualtrics, where every
+  page shares one URL. A heading-named page is an exact identity, the same as
+  a heading-named page from the extension's own capture. A later re-capture finds an imported page by selector
+  overlap (`identifyCapturePage`) and drift-repairs it in place.
+- **What comes across:** the row contract only (`parseCaptureSession` drops
+  `pages`, `routes`, `notes`, `decision`, `confidence`, `suggestedValue`).
+  `chosenToken` is forced null and `sent` false whatever the file says. A
+  repeated selector keeps its first row. Claude's `suggestedToken` and
+  `evidence` show on the row ("Suggested token: …") and are **never sent**.
 
 ### Selector Workshop
 
@@ -597,7 +644,8 @@ they carry procedure:
   per-page fingerprint, labeled navigation, gates and branch — the data a
   future automated walk needs, with readiness the test recomputes. Nothing
   automates Next today. `src/probe/formCaptures.test.ts` holds every capture
-  file to that contract.
+  file to that contract. Train forms → **Import file** loads one for review
+  and proposal (see "Importing a Claude capture file").
 
 The panel repo (`sonny303/mintedpanel`) carries the same three plus
 `supabase-migrations`, `api-isolation-gate`, `e2e-harness`, and

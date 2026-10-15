@@ -165,6 +165,18 @@
                 <button id="capture-add-field" class="link" type="button" hidden>
                   + Add field
                 </button>
+                <!-- A Claude-written capture file (form-captures/*.capture.json)
+                     loads as this form's capture: same review, same
+                     propose-only Send for approval as a scan. -->
+                <button id="capture-import" class="link" type="button">
+                  Import file
+                </button>
+                <input
+                  id="capture-import-file"
+                  type="file"
+                  accept=".json,application/json"
+                  hidden
+                />
               </div>
             </div>
             <p id="capture-restored" class="capture-restored" hidden></p>

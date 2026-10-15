@@ -46,12 +46,12 @@ describe("captureCounts / recognitionSummary (S5.4)", () => {
         row({ selector: "#mystery" }),
       ]),
     );
-    expect(counts).toEqual({ total: 3, recognized: 2, gaps: 1, sent: 0 });
+    expect(counts).toEqual({ total: 3, recognized: 2, gaps: 1, sent: 0, held: 0 });
     expect(recognitionSummary(counts)).toBe("We recognise 2 of 3.");
   });
 
   it("handles an empty/absent session without dividing by zero", () => {
-    expect(captureCounts(null)).toEqual({ total: 0, recognized: 0, gaps: 0, sent: 0 });
+    expect(captureCounts(null)).toEqual({ total: 0, recognized: 0, gaps: 0, sent: 0, held: 0 });
   });
 });
 
