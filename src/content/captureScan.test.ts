@@ -151,7 +151,10 @@ describe("scanCapturableFields", () => {
       selector: "#ProviderTaxonomy_input",
       fieldType: "select",
     });
+    // Default = the panel's write-boundary cap: the extension proposes these.
     expect(fields[0]?.options).toHaveLength(50);
+    // A caller that never proposes (the capture probe) can take them all.
+    expect(scanCapturableFields({ optionsCap: Infinity })[0]?.options).toHaveLength(856);
     expect(fields.some((field) => field.selector === "#ProviderTaxonomy_focus")).toBe(false);
   });
 
@@ -441,5 +444,92 @@ describe("scanCapturableFields — labelling and selector durability", () => {
     const [field] = scanCapturableFields();
     expect(field!.selector.startsWith("body > ")).toBe(true);
     expect(document.querySelector(field!.selector)).toBe(el);
+  });
+});
+
+describe("scanCapturableFields — page-drawn controls (Qualtrics)", () => {
+  /** BlueKC's Qualtrics interest form, 2026-10-14: the real radio is 0×0 /
+   * opacity 0, and TWO labels point at it — an empty one Qualtrics draws the
+   * circle in, then the one carrying the answer text. */
+  function qualtricsRadioGroup(): string {
+    return `
+      <fieldset>
+        <legend>Please indicate if you are located within these counties:</legend>
+        <ul>
+          <li>
+            <input type="radio" class="radio" id="QR~QID180~1" name="QR~QID180" value="1" />
+            <label for="QR~QID180~1" class="q-radio" id="circle1"></label>
+            <label for="QR~QID180~1" class="SingleAnswer" id="text1"><span>Yes, I am located in one of the counties listed above.</span></label>
+          </li>
+          <li>
+            <input type="radio" class="radio" id="QR~QID180~2" name="QR~QID180" value="2" />
+            <label for="QR~QID180~2" class="q-radio" id="circle2"></label>
+            <label for="QR~QID180~2" class="SingleAnswer" id="text2"><span>No, I am not located in one of the counties listed above.</span></label>
+          </li>
+        </ul>
+      </fieldset>`;
+  }
+
+  it("captures a zero-size radio group whose labels are visible, named by question with real option text", () => {
+    document.body.innerHTML = `${qualtricsRadioGroup()}<input type="text" id="before" />`;
+    for (const radio of document.querySelectorAll('input[type="radio"]')) stubZeroBox(radio);
+    stubVisibleBox(document.getElementById("circle1")!, { top: 50, width: 18, height: 18 });
+    stubVisibleBox(document.getElementById("text1")!, { top: 50, left: 30 });
+    stubVisibleBox(document.getElementById("circle2")!, { top: 80, width: 18, height: 18 });
+    stubVisibleBox(document.getElementById("text2")!, { top: 80, left: 30 });
+    // Later in the DOM but painted ABOVE the question: reading order must come
+    // from the label's box, since the 0×0 input's own rect means nothing.
+    stubVisibleBox(document.getElementById("before")!, { top: 10 });
+
+    const fields = scanCapturableFields();
+    expect(fields.map((f) => [f.selector, f.fieldType])).toEqual([
+      ["#before", "text"],
+      ["#QR\\~QID180\\~1", "radio"],
+    ]);
+    expect(fields[1]?.label).toBe("Please indicate if you are located within these counties:");
+    expect(fields[1]?.options).toEqual([
+      { value: "1", label: "Yes, I am located in one of the counties listed above." },
+      { value: "2", label: "No, I am not located in one of the counties listed above." },
+    ]);
+  });
+
+  it("still skips a zero-size choice whose labels are invisible or positively hidden", () => {
+    document.body.innerHTML = `
+      ${qualtricsRadioGroup()}
+      <div style="display:none">
+        <input type="checkbox" id="parked" value="x" />
+        <label for="parked" id="parkedLabel">Parked option</label>
+      </div>`;
+    // No label geometry at all: an orphaned control, still noise.
+    for (const el of document.querySelectorAll("input, label")) stubZeroBox(el);
+    // A visible-looking label cannot rescue a control under display:none.
+    stubVisibleBox(document.getElementById("parkedLabel")!);
+    expect(scanCapturableFields()).toEqual([]);
+  });
+
+  it("leaves an embedded calendar widget out of the label", () => {
+    document.body.innerHTML = `
+      <label for="QR~QID185" class="QuestionText">Today's Date:<link rel="stylesheet" href="cal.css" /><div class="yui-skin-sam"><div class="yui-calcontainer single"><table><thead><tr><th><a class="calnavleft">Previous Month (September 2026)</a>October 2026<a class="calnavright">Next Month (November 2026)</a></th></tr><tr><th>Su</th><th>Mo</th></tr></thead><tbody><tr><td>27</td><td>28</td></tr></tbody></table></div></div></label>
+      <input type="text" id="QR~QID185" />`;
+    stubVisibleBox(document.getElementById("QR~QID185")!);
+    expect(scanCapturableFields()[0]?.label).toBe("Today's Date:");
+  });
+
+  it("leaves the calendar out of the field's section too (Qualtrics legend)", () => {
+    document.body.innerHTML = `
+      <fieldset>
+        <legend><label for="QR~QID185">Today's Date:<div class="yui-skin-sam"><table><tbody><tr><td>Previous Month</td><td>27</td></tr></tbody></table></div></label></legend>
+        <input type="text" id="QR~QID185" />
+      </fieldset>`;
+    stubVisibleBox(document.getElementById("QR~QID185")!);
+    expect(scanCapturableFields()[0]?.formSection).toBe("Today's Date:");
+  });
+
+  it("keeps link text that is part of the caption", () => {
+    document.body.innerHTML = `
+      <label for="agree">I accept the <a href="#t">terms</a></label>
+      <input type="checkbox" id="agree" value="yes" />`;
+    stubVisibleBox(document.getElementById("agree")!);
+    expect(scanCapturableFields()[0]?.label).toBe("I accept the terms");
   });
 });
