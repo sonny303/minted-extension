@@ -28,8 +28,12 @@ export interface CapturedField {
 
 export { FILLABLE };
 
-/** Max options stored per field — matches the panel write-boundary cap. */
-const CONTROL_OPTIONS_CAP = 50;
+/** Max options stored per field — matches the panel write-boundary cap
+ * (mintedpanel `CONTROL_OPTIONS_CAP`, which REJECTS a longer list, so a
+ * capture never sends more). 1000 holds every real vocabulary seen so far:
+ * a US-state dropdown, BlueKC's 146 specialties, an 856-entry taxonomy menu.
+ * Raise it only after the panel has deployed the same cap. */
+export const CONTROL_OPTIONS_CAP = 1000;
 
 /** True when the control has a non-zero layout box (trainer can see it).
  * JSF multi-panel forms leave inactive panels in the DOM with no rects. */

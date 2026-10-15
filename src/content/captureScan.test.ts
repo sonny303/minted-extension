@@ -3,6 +3,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  CONTROL_OPTIONS_CAP,
   compareVisualPosition,
   isCapturableControl,
   isHiddenControl,
@@ -151,8 +152,26 @@ describe("scanCapturableFields", () => {
       selector: "#ProviderTaxonomy_input",
       fieldType: "select",
     });
-    expect(fields[0]?.options).toHaveLength(50);
+    // The whole vocabulary, minus the empty placeholder: 856 is under the
+    // shared cap, so nothing a coordinator might pick is cut.
+    expect(fields[0]?.options).toHaveLength(856);
+    expect(fields[0]?.options?.at(-1)).toEqual({ value: "taxonomy-855", label: "taxonomy-855" });
     expect(fields.some((field) => field.selector === "#ProviderTaxonomy_focus")).toBe(false);
+  });
+
+  it("caps a vocabulary at the panel's write-boundary limit", () => {
+    // The panel 422s a list past its cap; the scanner must never send one.
+    expect(CONTROL_OPTIONS_CAP).toBe(1000);
+    const options = Array.from(
+      { length: CONTROL_OPTIONS_CAP + 1 },
+      (_, index) => `<option value="v${index}">Option ${index}</option>`,
+    ).join("");
+    document.body.innerHTML = `<select id="huge">${options}</select>`;
+    stubVisibleBox(document.getElementById("huge")!);
+
+    const captured = scanCapturableFields()[0]?.options;
+    expect(captured).toHaveLength(CONTROL_OPTIONS_CAP);
+    expect(captured?.at(-1)).toEqual({ value: "v999", label: "Option 999" });
   });
 
   it("keeps only visible fillable controls and still collapses radio groups", () => {
