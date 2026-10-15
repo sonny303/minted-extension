@@ -501,12 +501,14 @@ approval** (`POST /api/shared-field-maps`). Approval stays in the web app.
   capture the import would replace. Without the answer the worker refuses.
   Replacing drops local `sent` flags only; a re-send is idempotent.
 - **Page model:** a file row maps one-to-one. `pageStep` stays the page name
-  ("Page 1"… in walk order), `sortOrder` stays the position within that page;
+  (the page heading, else "Page 1"… in walk order — the trainer's own
+  `derivePageStep` order), `sortOrder` stays the position within that page;
   rows regroup by page in first-appearance order, then by `sortOrder`. A page
   with no capturable row (intro, signature-only) has nothing to propose and
   doesn't appear. "Page N" names are sequence labels, so DYN-PAGE-01's exact
   URL-page skip treats them as ambiguous — right for Qualtrics, where every
-  page shares one URL. A later re-capture finds an imported page by selector
+  page shares one URL. A heading-named page is an exact identity, the same as
+  a heading-named page from the extension's own capture. A later re-capture finds an imported page by selector
   overlap (`identifyCapturePage`) and drift-repairs it in place.
 - **What comes across:** the row contract only (`parseCaptureSession` drops
   `pages`, `routes`, `notes`, `decision`, `confidence`, `suggestedValue`).

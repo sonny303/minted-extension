@@ -5,11 +5,13 @@
 // file text it is handed and never trusts the side panel's own check.
 //
 // THE PAGE MODEL. A capture file names its pages the way the trainer does
-// ("Page 1", "Page 2", … in walk order) and stamps each row's DOM position
-// within its page, so a file row maps one-to-one: `pageStep` stays the page
-// name, `sortOrder` stays the position inside that page. Rows are regrouped by
-// page in first-appearance order and sorted by `sortOrder` inside a page, which
-// is the order `groupCaptureRowsByPage` and the panel's template editor read.
+// (the page heading, else "Page 1", "Page 2", … in walk order: BlueKC's
+// Qualtrics pages have no heading, BCBSKS's form does) and stamps each row's
+// DOM position within its page, so a file row maps one-to-one: `pageStep`
+// stays the page name, `sortOrder` stays the position inside that page. Rows
+// are regrouped by page in first-appearance order and sorted by `sortOrder`
+// inside a page, which is the order `groupCaptureRowsByPage` and the panel's
+// template editor read.
 // A page with no capturable row (an intro, a signature-only page) has nothing
 // to propose and does not appear: the trainer's page model is row-derived.
 //
