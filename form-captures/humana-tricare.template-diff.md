@@ -12,11 +12,11 @@ The template's library is the extension's one-scan capture of the same 60 contro
 
 | Field | Template now | Problem | Suggested |
 |---|---|---|---|
-| `#LicAnyDiscplinaryAction` "Any disciplinary action" | **fixed "Yes"** (approved) | Declares disciplinary action on every application, and "Yes" reveals a comments box and the license upload. | `human` (a per-provider disclosure). |
+| `#LicAnyDiscplinaryAction` "Any disciplinary action" and `#AcceptingNewPatients` "Accepting new patients" | `#LicAnyDiscplinaryAction` **fixed "Yes"** (approved 2026-08-31). `#AcceptingNewPatients` has no value (proposed). | The "Yes" is on the wrong row. It was almost certainly meant for **Accepting new patients**: the trainer shows both radio rows only as "yes" (no question text; sort order 58 vs 60), and the intended answers are Accepting = Yes, Disciplinary = No (the user's own selections on the live form, 2026-10-14). As stored, every application declares disciplinary action, which also reveals the comments box and upload, and leaves Accepting new patients blank. On the live form the ids match their questions: `#AcceptingNewPatients` is the "Accepting new patients" group and `#LicAnyDiscplinaryAction` is "Any disciplinary action"; each `#id` sits on the group's "Yes" radio. | Move the "Yes" to `#AcceptingNewPatients` (or map it to `facility.acceptingNewPatients`). Set `#LicAnyDiscplinaryAction` to `human`, or fixed "No" if the org confirms it per provider. Give both rows display labels so they can't be swapped again. |
 | `#dob`, `#LicenseEffDate`, `#LicenseExpDate` | shaped **Date → MM/DD/YYYY** | Humana's `isValiddate` only accepts `^\d{1,2}-\d{1,2}-\d{4}$` (dashes) and refuses slashes with "Invalid date: MM-DD-YYYY". | Shape **Date → MM-DD-YYYY**. |
 | `#NoLocfax_cd` "I do not have a fax number" (checkbox) | token `group.billingFax` | A fax number mapped onto a checkbox. The fill only ticks on a truthy word, so a location with no fax never gets ticked, and Continue is refused: "You must either provide a fax number or indicate that you do not have one". | `human`: tick only when the location has no fax. |
 | Point-of-contact address | street `group.billingStreet`, city `group.billingCity`, ZIP **`group.credentialingZip`**, apt human, state undecided | One address assembled from two different source addresses. Humana also checks the ZIP against the state server-side. | Use one source for the whole block (capture suggests `credentialingContact.*`, alternatively `group.correspondence*`). |
-| Option lists stored at the 50 cap | `#MaxAge` 50 of 99, `#MinAge` 50 of 99, `#PractBillingState` 50 of 51, `#CorrespondenceState` 50 of 51, `#providertype` 50 of 77 | The scanner keeps the first 50. `#MaxAge` can't hold any age above 50, so "all ages" (99) is impossible, and WYOMING is missing from both full-state lists. | Re-send the full lists from this capture once mintedpanel#518 deploys. |
+| Option lists stored at the 50 cap | `#MaxAge` 50 of 99, `#MinAge` 50 of 99, `#PractBillingState` 50 of 51, `#CorrespondenceState` 50 of 51, `#providertype` 50 of 77 | The scanner keeps the first 50. `#MaxAge` can't hold any age above 50, so the 1–99 range picked on the live form can't be stored, and WYOMING is missing from both full-state lists. | Re-send the full lists from this capture once mintedpanel#518 deploys. |
 
 ## On the portal, missing from the template
 
@@ -54,7 +54,7 @@ The template's library is the extension's one-scan capture of the same 60 contro
 | `#TelehealthCapabilities` | undecided: a yes/no practice fact with no token, likely fixed per org |
 | `#MedicareNumber` | human: optional, format-checked only when filled |
 | `#MaxAge` | undecided: needs the full 1–99 list first |
-| `#AcceptingNewPatients` | `facility.acceptingNewPatients` (medium) |
+| `#AcceptingNewPatients` | `facility.acceptingNewPatients` (medium), or fixed "Yes", the intended answer that currently sits on the disciplinary row (see "Fix first") |
 
 ## Agrees with the capture
 
@@ -62,7 +62,8 @@ The template's library is the extension's one-scan capture of the same 60 contro
 
 ## What the trainer needs to do
 
-1. Fix the five "Fix first" rows: disciplinary-action answer, date shaping, no-fax checkbox, point-of-contact source, and the truncated lists.
+1. Fix the five "Fix first" rows: move the swapped "Yes" from disciplinary action to accepting new patients, date shaping, no-fax checkbox, point-of-contact source, and the truncated lists.
+   The trainer shows all seven Yes/No radio rows only as "yes" (the four step-1 questions, telehealth, accepting new patients, disciplinary action), which is how the "Yes" landed on the wrong row. Give them display labels; the capture's `displayLabel`s name each question.
 2. Decide the 7 open rows and settle the "mapped differently" rows. Most are judgment calls; the point-of-contact phone and location fax look like slips.
 3. Add `#Selectedspecialty` once select2 support lands in the extension. Until then the fill can't get past step 2 without a person.
 4. Import: Train forms → Import file with this capture sends it under the registered key `humana-tricare`. Propose is idempotent on (portal_key, selector): existing rows keep their decisions and page_step, and only the new rows (`#Selectedspecialty` and the 10 time pickers) arrive as proposals. Option lists over 50 need mintedpanel#518.
