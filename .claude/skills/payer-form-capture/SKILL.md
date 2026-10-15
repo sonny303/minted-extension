@@ -259,8 +259,8 @@ Rules that bite:
 
 `sortOrder` restarts at 0 on each page (it's the position within the page).
 `options` hold the **full** vocabulary — the probe is uncapped. The extension's
-own capture and the panel's write boundary still cap lists at 50
-(`CONTROL_OPTIONS_CAP`, a longer list is rejected), so note any row over 50
+own capture and the panel's write boundary still cap lists at 1000
+(`CONTROL_OPTIONS_CAP`, a longer list is rejected), so note any row over 1000
 when handing a capture to the trainer.
 Selectors are the probe's, verbatim — the scanner's selector IS the row's key.
 `advance` is `null` only on the final (submit) page. On a page you couldn't get
