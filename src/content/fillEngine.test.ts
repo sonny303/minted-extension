@@ -1617,10 +1617,12 @@ describe("multi-select fill and clear", () => {
  * the live form (shape only, no portal markup): an OWN `value` accessor on the
  * input, re-masking of the raw DOM value on `input`, and — clearIncomplete +
  * clearMaskOnLostFocus — the widget writing its own buffer back on `blur`.
- * All four are red on purpose: they state the behaviour the fix should give.
+ * The fix writes a masked input through its own setter and judges retention
+ * by the mask's content (alphanumerics), reporting a rejected write as
+ * `write_rejected` / `readback_mismatch` instead of silence.
  * See docs/spike-context-changed-mask-dates.md.
  */
-describe("PrimeFaces InputMask readback (spike, expected to fail until fixed)", () => {
+describe("PrimeFaces InputMask readback", () => {
   const phoneMask = (raw: string): string => {
     const digits = raw.replace(/\D/g, "").slice(0, 10);
     return digits.length === 10 ? `(${digits.slice(0, 3)})${digits.slice(3, 6)}-${digits.slice(6)}` : digits;

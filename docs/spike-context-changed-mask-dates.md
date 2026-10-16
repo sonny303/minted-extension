@@ -5,6 +5,10 @@
 **Scope:** finding + failing tests only, no behaviour change. Branch
 `claude/spike-context-changed-dates-716311`.
 
+**Status:** the proposal below is implemented in `src/content/fillEngine.ts`
+(`hasInputMask`, `maskContent`, and the `write_rejected` / `readback_mismatch`
+readback return); the four tests are green.
+
 ## Finding in one paragraph
 
 The nine fields were never refused *before* the write. Every one of them went

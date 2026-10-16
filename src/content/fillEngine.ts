@@ -349,12 +349,38 @@ function setNativeValue(el: Fillable, value: string): void {
   }
   const proto = Object.getPrototypeOf(el) as object;
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-  if (descriptor?.set) {
+  // An inputmask (PrimeFaces p:inputMask, p:datePicker mask=…) defines its own
+  // `value` accessor that fills the mask's buffer; a prototype-setter write
+  // leaves that buffer empty and the widget writes the empty buffer back on
+  // blur (clearIncomplete). Gated on the mask itself: React's own accessor is
+  // a tracker, and bypassing it would hide the change from the framework.
+  const ownSetter = hasInputMask(el) ? Object.getOwnPropertyDescriptor(el, "value")?.set : undefined;
+  if (ownSetter) {
+    ownSetter.call(el, value);
+  } else if (descriptor?.set) {
     descriptor.set.call(el, value);
   } else if ("value" in el) {
     (el as HTMLElement & { value: string }).value = value;
   }
   fireChanged(el);
+}
+
+/** True when a jquery.inputmask instance owns this input: the plugin stores
+ * itself on `el.inputmask`, PrimeFaces marks p:inputMask with `ui-inputmask`,
+ * and a p:datePicker mask installs its own `value` accessor on the input. */
+function hasInputMask(el: Fillable): el is HTMLInputElement {
+  if (!(el instanceof HTMLInputElement)) return false;
+  if ((el as HTMLInputElement & { inputmask?: unknown }).inputmask) return true;
+  if (el.classList.contains("ui-inputmask")) return true;
+  return Boolean(el.closest(".p-datepicker.ui-calendar")) &&
+    Object.getOwnPropertyDescriptor(el, "value")?.set !== undefined;
+}
+
+/** A mask's readback is judged on content, not shape: "(555) 555-0100" and
+ * "(555)555-0100" post the same digits, while "n/a" into a digit mask leaves
+ * nothing, and a truncating mask keeps fewer characters than were asked for. */
+function maskContent(value: string): string {
+  return value.replace(/[^0-9a-z]/gi, "").toLowerCase();
 }
 
 function fireChanged(el: HTMLElement): void {
@@ -735,8 +761,17 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   const changed = el.value !== nextValue;
   markAttempted();
   setNativeValue(el, nextValue);
-  if (el.value !== nextValue) {
-    return { ok: false, reason: "field did not retain the requested value", target: el };
+  const retained = hasInputMask(el)
+    ? maskContent(el.value) === maskContent(nextValue)
+    : el.value === nextValue;
+  if (!retained) {
+    return {
+      ok: false,
+      reason: "field did not retain the requested value",
+      outcome: "write_rejected",
+      reasonCode: "readback_mismatch",
+      target: el,
+    };
   }
   if (el.willValidate && !el.validity.valid) {
     return {
