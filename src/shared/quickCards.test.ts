@@ -130,6 +130,23 @@ describe("projectQuickCards (TS-101)", () => {
     expect(caqh?.reason).toBe("empty on provider");
   });
 
+  it("renders a jsonb object value as an honest empty, never as \"[object Object]\"", () => {
+    const withObjects: ProfileToken[] = [
+      ...tokens,
+      { token: "facility.hours", value: {} },
+      { token: "facility.languagesOffered", value: ["English", "Spanish"] },
+    ];
+    const layoutWithFacility = {
+      fields: ["facility.hours", "facility.languagesOffered"],
+      source: "saved" as const,
+    };
+    const projected = projectQuickCards(withObjects, unresolved, layoutWithFacility, TODAY);
+    const hours = projected.type1Fields.find((f) => f.key === "facility.hours");
+    expect(hours?.value).toBeNull();
+    const languages = projected.type1Fields.find((f) => f.key === "facility.languagesOffered");
+    expect(languages?.value).toBe("English, Spanish");
+  });
+
   it("flags the license expiring inside 30 days", () => {
     expect(cards.license.expiry).toBe("expiring");
     expect(cards.license.number.value).toBe("KS-12345");

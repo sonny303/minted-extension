@@ -4,6 +4,7 @@
 // Field catalog comes from GET /api/me/view-prefs (server-derived).
 // The picker only offers keys the server will accept on PUT.
 import { labelForToken, tokenPrefix } from "./detailFields";
+import { tokenValueText } from "./tokenValue";
 import type { ProfileToken, UnresolvedToken } from "./apiTypes";
 
 // Default quick-card field keys when the user has no saved layout.
@@ -129,9 +130,10 @@ const LEGACY_FALLBACKS: Record<string, string> = {
   "license.expirationDate": "provider.licenseExpirationDate",
 };
 
+// A jsonb object (facility hours / ADA) renders as an honest empty, never as
+// "[object Object]" — the same rule the fill uses (shared/tokenValue.ts).
 function asDisplay(value: unknown): string | null {
-  if (value == null) return null;
-  const text = String(value).trim();
+  const text = tokenValueText(value)?.trim() ?? "";
   return text === "" ? null : text;
 }
 
