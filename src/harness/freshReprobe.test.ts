@@ -150,6 +150,58 @@ describe.each([
     expect(singleProbes(log).map((m) => m.settle)).toEqual([undefined, fastReprobe ? false : undefined]);
   });
 
+  it.each([
+    {
+      shape: "missing",
+      // The portal re-renders the dependent control after its round trip:
+      // gone the instant the first write lands, back 40 ms later.
+      disturb: (field: HTMLInputElement): (() => void) => {
+        const parent = field.parentElement!;
+        field.remove();
+        return () => parent.append(field);
+      },
+    },
+    {
+      shape: "hidden",
+      disturb: (field: HTMLInputElement): (() => void) => {
+        field.hidden = true;
+        return () => { field.hidden = false; };
+      },
+    },
+    {
+      shape: "ambiguous",
+      // A transient duplicate (a validation re-render) matches the same selector.
+      disturb: (field: HTMLInputElement): (() => void) => {
+        const twin = field.cloneNode() as HTMLInputElement;
+        twin.id = "";
+        field.after(twin);
+        return () => twin.remove();
+      },
+    },
+  ])("(a) re-sends the pre-apply probe settled when the fast probe finds the target $shape, and the field still fills", async ({ disturb }) => {
+    loadFixtureMarkup();
+    addTriggerField();
+    document.querySelector("#conditional-panel")?.remove();
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", '<label for="dependent">Dependent</label><input id="dependent" name="dependent" type="text">');
+    const dependent = document.querySelector<HTMLInputElement>("#dependent")!;
+    const dependentInstruction: FillInstruction = { ...coverageInstruction, label: "Dependent", selector: 'input[name="dependent"]', value: "second write" };
+    document.querySelector("#trigger")?.addEventListener("input", () => {
+      const undo = disturb(dependent);
+      setTimeout(undo, 40);
+    });
+
+    const result = await stack.applyFillAcrossFrames(TAB_ID, [triggerInstruction, dependentInstruction], { captureV2: true, validate });
+
+    expect(result.filled).toEqual(["Trigger", "Dependent"]);
+    expect(result.skipped).toEqual([]);
+    expect(dependent.value).toBe("second write");
+    expect(count(log, "APPLY_FILL")).toBe(2);
+    // Flag on: the fast probe did not find a unique target, so the settled
+    // probe went out as before and found it once the page had settled.
+    // Flag off: the settled probe alone, as before.
+    expect(singleProbes(log).map((m) => m.settle)).toEqual(fastReprobe ? [false, undefined] : [undefined]);
+  });
+
   it("(b) ends a truly absent field as not found with settled evidence", async () => {
     loadFixtureMarkup();
     addTriggerField();

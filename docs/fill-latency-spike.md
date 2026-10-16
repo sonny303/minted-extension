@@ -5,7 +5,13 @@
 **Update, 2026-10-15:** the proposal below is implemented behind
 `FAST_REPROBE_ENABLED` (`src/shared/config.ts`, OFF) with outcome pins in
 `src/harness/freshReprobe.test.ts`; the harness now runs every scenario flag
-off and on.
+off and on. **Flag-on risk (review, 2026-10-15):** with `settle: false` the
+probe takes the page as it is, so a pending ajax render from the previous
+write that started before the probe is accepted as the baseline; if that
+render lands after this field's successful write it can wipe the value with
+no `context_changed` raised. The staging acceptance for flipping the flag
+must therefore read back field values on the form, not only compare
+filled/skipped lists.
 
 A real fill of the BCBS Kansas Network Enrollment Form on 2026-10-15 took
 95 s for 70 attempted fields (about 1.3 s per field), with fields appearing one
