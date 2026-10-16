@@ -266,7 +266,7 @@ export function workFormUrlMatchesPage(
 function isWebMapForKey(value: unknown, portalKey: string): value is PortalFieldMap {
   if (!isObject(value) || value.portalKey !== portalKey || value.mapType !== "web") return false;
   return typeof value.id === "string" && UUID_RE.test(value.id) && typeof value.selector === "string" &&
-    ["token", "manual", "manual_partial", "hardcoded"].includes(String(value.source)) &&
+    ["token", "manual", "manual_partial", "hardcoded", "leave_blank"].includes(String(value.source)) &&
     ["proposed", "approved", "retired"].includes(String(value.status));
 }
 

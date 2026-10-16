@@ -140,6 +140,20 @@ fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`, plus
   fill. `POST /api/portal-field-maps` is **propose-only** (server forces
   `proposed`/`manual`/`token null` under the caller's org, whatever the body
   says); idempotent on `(portal_key, selector)`.
+- **Leave blank is a decision, not a gap.** `source: "leave_blank"` on an
+  approved map (panel-side contract; no new column) means the field was
+  reviewed and must stay empty. `planFill` and `planMockFill` plan no
+  instruction for it, put it in no `manual`/`gaps` bucket, and never send it
+  as a fill-event skip (the panel knows the map's own source; a skip row
+  would read as drift or a manual item). It rides the summaries as a
+  separate `leftBlank` list (`kind: "leave_blank"`, reason "intentionally
+  left blank", `src/shared/leaveBlank.ts`) and the panel shows a muted
+  count ("3 left blank on purpose") plus an admin-details bucket, never a
+  needs-you row. Leave blank wins over the file rule; a proposed
+  leave_blank row is still unreviewed and reports nothing. The classifier
+  (`fieldClassify.ts`, lockstep with the panel's `fieldRegistry.ts`) calls
+  it decision `blank`; `isWebMapForKey` accepts the source so a Work launch
+  carrying one still validates.
 - **Shared (org-free) training tier:** `GET /api/shared-portals`,
   `GET/POST /api/shared-field-maps?portal_key=`, `POST /api/shared-portals/prove`,
   `POST /api/shared-test-fills` — all on the panel's **user-scoped** guard.

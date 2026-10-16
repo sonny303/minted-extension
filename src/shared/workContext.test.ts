@@ -179,6 +179,9 @@ describe("work-context validation response", () => {
     };
     expect(parseWorkContextValidationResponse(response)).toMatchObject(response);
     expect(parseWorkContextValidationResponse({ ...response, effectiveWebMaps: [{ ...map, portalKey: "other" }] })).toBeNull();
+    // A launch whose effective maps carry a reviewed leave_blank row still parses.
+    expect(parseWorkContextValidationResponse({ ...response, effectiveWebMaps: [{ ...map, source: "leave_blank" }] })).not.toBeNull();
+    expect(parseWorkContextValidationResponse({ ...response, effectiveWebMaps: [{ ...map, source: "skip" }] })).toBeNull();
     expect(parseWorkContextValidationResponse({ ...response, formUrl: "https://user:secret@portal.example.com" })).toBeNull();
     expect(parseWorkContextValidationResponse({ ...response, tuple: { ...tuple, stepIdentity: "different" } })).not.toBeNull();
   });

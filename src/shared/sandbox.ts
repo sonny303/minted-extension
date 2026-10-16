@@ -15,6 +15,7 @@
 
 import type { ProviderListItem } from "./apiTypes";
 import type { ReportedField, ReportedFieldKind, SandboxFillSummary } from "./fill";
+import { isNothingToFillRun, leftBlankLine, NOTHING_TO_FILL_HEADLINE } from "./leaveBlank";
 
 export type { SandboxFillSummary };
 
@@ -114,8 +115,9 @@ function needsYouCount(manual: readonly ReportedField[]): number {
  * selectors, no values. */
 export interface SandboxFillView {
   filled: number;
-  /** Green when Minted wrote a field, red when it wrote none. */
-  tone: "ok" | "danger";
+  /** Green when Minted wrote a field, red when it wrote none, neutral when
+   * there was nothing to write because every map was left blank on purpose. */
+  tone: "ok" | "danger" | "neutral";
   /** Headline first, then one plain line. */
   lines: [string, string];
   /** Neutral lines about fields Minted did not fill. Empty when none. */
@@ -127,19 +129,24 @@ export interface SandboxFillView {
 export function sandboxFillView(
   summary: Pick<
     SandboxFillSummary,
-    "filled" | "fieldsAttempted" | "fieldsRejected" | "skipped" | "manual" | "logError"
+    "filled" | "fieldsAttempted" | "fieldsRejected" | "skipped" | "manual" | "leftBlank" | "logError"
   >,
 ): SandboxFillView {
   const filled = sandboxFilledCount(summary);
+  const leftBlank = leftBlankLine(summary.leftBlank);
+  // Every map left blank on purpose: the right answer, not a failure.
+  const nothingToFill = isNothingToFillRun({ ...summary, filled });
   const lines: [string, string] = filled > 0
     ? [
         `Filled ${filled} ${filled === 1 ? "field" : "fields"} on this page.`,
         "Green outline on the page = filled by Minted.",
       ]
-    : [
-        "Nothing was filled on this page.",
-        "Minted couldn't find this page's trained fields. The portal may have changed.",
-      ];
+    : nothingToFill
+      ? [NOTHING_TO_FILL_HEADLINE, `${leftBlank}.`]
+      : [
+          "Nothing was filled on this page.",
+          "Minted couldn't find this page's trained fields. The portal may have changed.",
+        ];
   const skipLines: string[] = [];
   const skipped = summary.skipped.length;
   if (skipped > 0) {
@@ -157,9 +164,12 @@ export function sandboxFillView(
         : `${needs} fields on this form need you: not on file, or filled by hand.`,
     );
   }
+  // Reviewed "leave blank" maps: a muted count, never a needs-you line
+  // (already the headline's second line when nothing was there to fill).
+  if (leftBlank && !nothingToFill) skipLines.push(`${leftBlank}.`);
   return {
     filled,
-    tone: filled > 0 ? "ok" : "danger",
+    tone: filled > 0 ? "ok" : nothingToFill ? "neutral" : "danger",
     lines,
     skipLines,
     recordLine: summary.logError != null
