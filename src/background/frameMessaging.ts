@@ -14,6 +14,7 @@ import { createFillEventV2OpaqueKey, isFillEventV2FieldOutcome, type FillEventV2
 import { isExactFillPageIdentity, OTHER_PAGE_REASON, PAGE_UNKNOWN_REASON } from "../shared/fillPage";
 import type { ControlSummary } from "../shared/nanoAi";
 import { pageScopeMatches } from "../shared/pageScope";
+import { fillTimingEnabled, fillTimingNow, reportFillTiming, type FillTimingRow } from "../shared/fillTiming"; // SPIKE(fill-latency)
 
 export interface TabFrame {
   frameId: number;
@@ -528,6 +529,7 @@ export async function applyFillAcrossFrames(
     ? { validate: optionsOrValidate, captureV2: "captureV2" in optionsOrValidate ? Boolean((optionsOrValidate as { captureV2?: boolean }).captureV2) : false }
     : optionsOrValidate;
   const { captureV2 = false, validate } = options;
+  const runStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   if (instructions.length === 0) {
     const frames = await listTabFrames(tabId);
     const responses: FrameResponse[] = [];
@@ -572,6 +574,7 @@ export async function applyFillAcrossFrames(
     fieldType: instruction.fieldType,
     pageStep: instruction.pageStep,
   }));
+  const batchProbeStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   const responses = await Promise.all(frames.map(async (frame): Promise<FrameResponse> => {
     await validate?.();
     const scopedProbes = probes.filter((probe) => {
@@ -587,6 +590,7 @@ export async function applyFillAcrossFrames(
       return { frameId: frame.frameId, ok: false };
     }
   }));
+  const batchProbeMs = fillTimingNow() - batchProbeStartedAt; // SPIKE(fill-latency)
   // The probes may have awaited a slow or changing page. Re-check the caller's
   // owner/configuration guard before interpreting their snapshots.
   await validate?.();
@@ -651,7 +655,19 @@ export async function applyFillAcrossFrames(
     pushOutcome(instruction, outcome, reasonCode, frameId, stepKey, evidence);
   };
 
+  // SPIKE(fill-latency): one value-free row per instruction.
+  const timingRows: FillTimingRow[] = [];
+  let row: FillTimingRow | null = null;
+  let rowStartedAt = 0;
+  const finishRow = (): void => {
+    if (row) row.totalMs = fillTimingNow() - rowStartedAt;
+    row = null;
+  };
   for (const instruction of instructions) {
+    finishRow();
+    rowStartedAt = fillTimingNow();
+    row = { mapId: instruction.mapId, kind: "skipped", listFramesMs: 0, validateMs: 0, freshProbeMs: 0, applyMs: 0, menuWaitMs: null, valueWaitMs: null, totalMs: 0 };
+    timingRows.push(row);
     const inaccessibleFrames = responses
       .filter((response) => !response.ok)
       .map((response) => frames.find((frame) => frame.frameId === response.frameId))
@@ -787,7 +803,9 @@ export async function applyFillAcrossFrames(
     };
     // A frame may navigate into this mapping's scope while probes run, so
     // validate the full inventory before each value-bearing dispatch.
+    const listFramesStartedAt = fillTimingNow(); // SPIKE(fill-latency)
     const liveFrames = await listTabFrames(tabId);
+    row.listFramesMs = fillTimingNow() - listFramesStartedAt; // SPIKE(fill-latency)
     const sameInventory = sameFrameInventory(frames, liveFrames);
     const hiddenAtDispatch = sameInventory && inaccessibleFrames.length > 0
       ? await Promise.all(inaccessibleFrames.map((frame) => {
@@ -801,7 +819,10 @@ export async function applyFillAcrossFrames(
     }
     // Inspection above may await browser APIs. Revalidate the active case and
     // mapping generation after those awaits, immediately before value dispatch.
+    const validateStartedAt = fillTimingNow(); // SPIKE(fill-latency)
     await validate?.();
+    row.validateMs = fillTimingNow() - validateStartedAt; // SPIKE(fill-latency)
+    const freshProbeStartedAt = fillTimingNow(); // SPIKE(fill-latency)
     if (priorApplyMayHaveChangedPage) {
       try {
         const freshProbeRaw = (await sendToFrame(tabId, targetFrame.frameId, {
@@ -825,11 +846,23 @@ export async function applyFillAcrossFrames(
         // proceed with original probe
       }
     }
+    row.freshProbeMs = fillTimingNow() - freshProbeStartedAt; // SPIKE(fill-latency)
     try {
       priorApplyMayHaveChangedPage = true;
+      const applyStartedAt = fillTimingNow(); // SPIKE(fill-latency)
       const raw = (await sendToFrame(tabId, targetFrame.frameId, { type: "APPLY_FILL", instructions: [routed], requireUniqueTarget: true })) as
         | { ok?: boolean; data?: unknown }
         | undefined;
+      row.applyMs = fillTimingNow() - applyStartedAt; // SPIKE(fill-latency)
+      row.kind = "regular";
+      if (raw?.ok && isFillPageResult(raw.data)) { // SPIKE(fill-latency): PrimeFaces split
+        const widgetTiming = raw.data.timing?.widgets.find((widget) => widget.mapId === instruction.mapId);
+        if (widgetTiming) {
+          row.kind = "primefaces";
+          row.menuWaitMs = widgetTiming.menuWaitMs;
+          row.valueWaitMs = widgetTiming.valueWaitMs;
+        }
+      }
       if (!raw?.ok || !isFillPageResult(raw.data)) {
         skip(instruction, "unverified", "context_changed", "form changed while the field was being applied", "unverified", targetFrame.frameId, stepKey);
         continue;
@@ -876,6 +909,8 @@ export async function applyFillAcrossFrames(
     }
   }
 
+  finishRow(); // SPIKE(fill-latency)
+  if (fillTimingEnabled()) reportFillTiming({ batchProbeMs, rows: timingRows, totalMs: fillTimingNow() - runStartedAt });
   return { filled, attemptedLabels, writes, skipped, pageFields, fieldOutcomes };
 }
 

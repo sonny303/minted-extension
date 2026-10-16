@@ -3,6 +3,7 @@
 // field is wrapped so one bad selector or odd widget skips-and-reports
 // instead of aborting the run. Nothing here reads storage, fetches, or sees
 // anything beyond the values it is handed.
+import { fillTimingEnabled, fillTimingNow, type FillTimingWidget } from "../shared/fillTiming"; // SPIKE(fill-latency)
 import type {
   FillInstruction,
   FillPageResult,
@@ -93,6 +94,8 @@ interface ProbedTarget {
 const probedTargets = new Map<string, ProbedTarget>();
 let probeMutationObserver: MutationObserver | null = null;
 let probeMutationVersion = 0;
+// SPIKE(fill-latency): the two waitForValue durations of the widget being applied.
+const spikeWidgetTiming: { menuWaitMs: number | null; valueWaitMs: number | null } = { menuWaitMs: null, valueWaitMs: null };
 let activePrimeFacesMenu: NonNullable<ReturnType<typeof primeFacesSelectMenu>> | null = null;
 let activePrimeFacesList: PrimeFacesSelectManyMenu | null = null;
 
@@ -1290,21 +1293,26 @@ async function selectPrimeFacesItem(
   const trigger = menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger") ??
     menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label") ?? menu.wrapper;
   trigger.click();
+  const menuWaitStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   const items = await waitForValue(() => {
     if (!isCurrent()) return null;
     const matches = primeFacesItems(menu, option);
     return matches.length > 0 ? matches : null;
   }, 700);
+  spikeWidgetTiming.menuWaitMs = fillTimingNow() - menuWaitStartedAt; // SPIKE(fill-latency)
   if (!items || items.length !== 1 || !isCurrent()) return false;
   const item = items[0];
   if (!item || item.matches(":disabled, .ui-state-disabled, [aria-disabled='true']")) return false;
   item.click();
   if (!isCurrent()) return false;
-  return (await waitForValue(() =>
+  const valueWaitStartedAt = fillTimingNow(); // SPIKE(fill-latency)
+  const selected = (await waitForValue(() =>
     isCurrent() && menu.select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text)
       ? true
       : null,
   500)) === true;
+  spikeWidgetTiming.valueWaitMs = fillTimingNow() - valueWaitStartedAt; // SPIKE(fill-latency)
+  return selected;
 }
 
 function selectOptionForInstruction(
@@ -1661,9 +1669,15 @@ export async function applyFillSettled(
       }
     }
   }
+  const settledStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   const result = applyFill(regular, strictRevalidation);
+  const regularMs = fillTimingNow() - settledStartedAt; // SPIKE(fill-latency)
+  const widgetTimings: FillTimingWidget[] = []; // SPIKE(fill-latency)
   for (const { instruction, apply } of widgets) {
     let widgetResult: FillPageResult;
+    const widgetStartedAt = fillTimingNow(); // SPIKE(fill-latency)
+    spikeWidgetTiming.menuWaitMs = null;
+    spikeWidgetTiming.valueWaitMs = null;
     try {
       widgetResult = await apply(instruction, strictRevalidation);
     } catch {
@@ -1676,13 +1690,21 @@ export async function applyFillSettled(
     result.writes?.push(...(widgetResult.writes ?? []));
     result.skipped.push(...widgetResult.skipped);
     result.fieldOutcomes?.push(...(widgetResult.fieldOutcomes ?? []));
+    widgetTimings.push({ // SPIKE(fill-latency)
+      mapId: instruction.mapId,
+      applyMs: fillTimingNow() - widgetStartedAt,
+      menuWaitMs: spikeWidgetTiming.menuWaitMs,
+      valueWaitMs: spikeWidgetTiming.valueWaitMs,
+    });
   }
 
   const writtenDates = dateTargets.filter(({ instruction }) =>
     !result.skipped.some((field) => field.mapId === instruction.mapId) &&
     result.filled.includes(instruction.label),
   );
+  const dateSettleStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   if (writtenDates.length > 0) await new Promise((resolve) => setTimeout(resolve, 125));
+  const dateSettleMs = fillTimingNow() - dateSettleStartedAt; // SPIKE(fill-latency)
   for (const { instruction, target } of writtenDates) {
     const currentResolution = resolveTarget(instruction);
     if (currentResolution.status !== "unique" || currentResolution.target !== target || !target.isConnected || isHiddenTarget(target)) {
@@ -1700,6 +1722,9 @@ export async function applyFillSettled(
     if (isInputOrTextarea && target.willValidate && !target.validity.valid) {
       rejectPostFill(result, instruction, target, "form rejected the field format; review this field on the portal", "write_rejected", "invalid_format");
     }
+  }
+  if (fillTimingEnabled()) { // SPIKE(fill-latency)
+    result.timing = { regularMs, widgets: widgetTimings, dateSettleMs, totalMs: fillTimingNow() - settledStartedAt };
   }
   return result;
 }

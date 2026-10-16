@@ -625,6 +625,12 @@ others is left alone and not counted.
   capture is deliberately shape-only. Documented in-code as a known gap.
 - **`PICK_ELEMENT` is the one async `ContentRequest`** (its listener returns
   true). `MATCH_SELECTOR` backs "Re-test on page".
+- **Fill timing is gated, off by default** (`src/shared/fillTiming.ts`,
+  touch points marked `SPIKE(fill-latency)`). When on, the worker logs a
+  value-free per-field table (ids + ms). The per-field fresh `PROBE_FILL`
+  settle wait (120–700 ms × every field after the first) is the measured top
+  cost of a fill — see `docs/fill-latency-spike.md`; the harness is
+  `FILL_LATENCY_SPIKE=1 npx vitest run src/harness/fillLatencySpike.test.ts`.
 
 ## Skills reference
 
