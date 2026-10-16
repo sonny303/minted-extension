@@ -17,3 +17,11 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://minted
 // designed review step (PM decision, Oct 14 2026). The code is kept; this one
 // gate skips the model check, the page scan, and the review card.
 export const AI_FILL_ENABLED = false;
+
+// The per-field fresh PROBE_FILL the worker sends before every write after
+// the first is the measured top cost of a fill (docs/fill-latency-spike.md):
+// each one waits for a 120 ms mutation-quiet window, capped at 700 ms. On,
+// that re-probe goes out unsettled first and is re-sent settled only when the
+// fast probe finds no unique target. Off until a staging fill of a real form
+// shows identical filled/skipped lists with the flag on and off.
+export const FAST_REPROBE_ENABLED = false;
