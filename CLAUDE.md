@@ -631,6 +631,19 @@ others is left alone and not counted.
 
 ## Gotchas
 
+- **A token value is text only through `tokenValueText`** (`src/shared/tokenValue.ts`).
+  The profile pushes raw column values, and `facilities.hours` / `ada_compliance`
+  are jsonb that default to `{}` — `String(raw)` typed "[object Object]" into
+  payer forms for every facility, hours or not. Objects are a `no_value` gap,
+  primitive arrays join with ", " (the panel PDF rule); booleans still read
+  "true"/"false" (changing that changes checkbox semantics — a separate call).
+  Used by the static plan, the AI candidates and the quick cards; add any new
+  coercion site to that helper, not beside it.
+- **The mock profile is versioned in lockstep with the panel.** `MOCK_FILL_PROFILE_VERSION`
+  (`src/shared/mockFillProfile.ts`) must equal `mintedpanel/src/lib/mockFillProfile.ts`;
+  both are 4 as of 2026-10-15 (per-day `facility.hours{Day}{Status|Open|Close}` keys,
+  `facility.hours` as the panel's `hoursSummary()` text, no `group.npi` — the
+  column is `npi_type2`). Bump both in one coordinated change.
 - **A list read that renders must never trust an `ok` envelope's `data`.** A
   null `data` is a shape the wire permits; `for (… of null)` during render
   takes the **whole panel** down, not just one control. Coerce with

@@ -154,6 +154,63 @@ describe("planFill", () => {
     ]);
   });
 
+  it("treats a jsonb object value as a data gap, never as \"[object Object]\"", () => {
+    // facilities.hours defaults to {} and the profile pushes it raw, so even a
+    // facility with no hours used to type "[object Object]" into the form.
+    const withObjects: ProviderProfileResponse = {
+      ...profile,
+      tokens: [
+        ...profile.tokens,
+        { token: "facility.hours", value: {} },
+        { token: "facility.adaCompliance", value: { accessible: true, notes: "ramp" } },
+        { token: "provider.additionalCertifications", value: [{ name: "OCS" }] },
+      ],
+    };
+    const plan = planFill(
+      [
+        map({ id: "hours", selector: "#hours", token: "facility.hours" }),
+        map({ id: "ada", selector: "#ada", token: "facility.adaCompliance" }),
+        map({ id: "certs", selector: "#certs", token: "provider.additionalCertifications" }),
+      ],
+      withObjects,
+    );
+    expect(plan.staticFills).toEqual([]);
+    expect(plan.manual.map((m) => [m.mapId, m.kind, m.reason])).toEqual([
+      ["hours", "no_value", "no value in Minted Panel"],
+      ["ada", "no_value", "no value in Minted Panel"],
+      ["certs", "no_value", "no value in Minted Panel"],
+    ]);
+    expect(plan.staticFills.some((f) => f.value.includes("[object"))).toBe(false);
+  });
+
+  it("joins a primitive array with a comma and a space, and keeps booleans and numbers as text", () => {
+    const withArrays: ProviderProfileResponse = {
+      ...profile,
+      tokens: [
+        ...profile.tokens,
+        { token: "facility.languagesOffered", value: ["English", " Spanish", ""] },
+        { token: "facility.acceptingNewPatients", value: true },
+        { token: "assignment.practiceFrequency", value: 3 },
+        { token: "provider.languages", value: [] },
+      ],
+    };
+    const plan = planFill(
+      [
+        map({ id: "langs", selector: "#langs", token: "facility.languagesOffered" }),
+        map({ id: "accepting", selector: "#accepting", token: "facility.acceptingNewPatients" }),
+        map({ id: "freq", selector: "#freq", token: "assignment.practiceFrequency" }),
+        map({ id: "none", selector: "#none", token: "provider.languages" }),
+      ],
+      withArrays,
+    );
+    expect(plan.staticFills.map((f) => [f.mapId, f.value])).toEqual([
+      ["langs", "English, Spanish"],
+      ["accepting", "true"],
+      ["freq", "3"],
+    ]);
+    expect(plan.manual).toEqual([expect.objectContaining({ mapId: "none", kind: "no_value" })]);
+  });
+
   it("partially fills an authorized Contract profile without substituting signer or submitter", () => {
     const contractProfile: ProviderProfileResponse = {
       provider: { id: "p1" },

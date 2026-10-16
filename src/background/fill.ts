@@ -57,6 +57,7 @@ import {
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
 import { isExactGroupRecordPath } from "../shared/fixit";
+import { tokenValueText } from "../shared/tokenValue";
 import { localIsoToday, SYSTEM_TODAY_TOKEN, type DeviceResolvedWrite } from "../shared/systemTokens";
 import {
   canonicalizeWorkContextTuple,
@@ -381,7 +382,11 @@ export function planFill(
       });
       continue;
     }
-    if (raw == null || raw === "") {
+    // Objects (jsonb such as facilities.hours, which defaults to {}) and
+    // non-primitive arrays have no single-line text: they are DATA gaps,
+    // never "[object Object]" typed into a payer form (shared/tokenValue.ts).
+    const rawString = tokenValueText(raw);
+    if (rawString == null) {
       const unresolved = map.source !== "hardcoded" && map.token != null
         ? unresolvedByToken.get(map.token)
         : undefined;
@@ -406,7 +411,6 @@ export function planFill(
       continue;
     }
 
-    const rawString = String(raw);
     const canonicalNativeDate = nativeDateValue(rawString);
     const value = applyTransform(rawString, map.transform);
     if (map.source !== "hardcoded" && map.token === SYSTEM_TODAY_TOKEN) {
@@ -1029,8 +1033,8 @@ export async function fillPortal(
   const controlTypes = new Map((prepared?.controls ?? []).map((control) => [control.selector, control.controlType]));
   const aiInstructions: FillInstruction[] = [];
   for (const candidate of options.candidates ?? []) {
-    const raw = tokenValues.get(candidate.token);
-    if (raw == null || raw === "" || !["string", "number", "boolean"].includes(typeof raw)) continue;
+    const candidateText = tokenValueText(tokenValues.get(candidate.token));
+    if (candidateText == null) continue;
     const type = controlTypes.get(candidate.selector);
     if (!type) continue;
     aiInstructions.push({
@@ -1039,7 +1043,7 @@ export async function fillPortal(
       selector: candidate.selector,
       selectorFallbacks: [],
       fieldType: type === "select" ? "select" : type === "radio" ? "radio" : type === "checkbox" ? "checkbox" : type === "date" ? "date" : "text",
-      value: String(raw),
+      value: candidateText,
       pageStep: null,
       kind: "ai",
       token: candidate.token,
