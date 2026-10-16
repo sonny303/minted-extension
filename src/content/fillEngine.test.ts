@@ -1607,3 +1607,119 @@ describe("multi-select fill and clear", () => {
     expect(postedCodes(wrapper)).toEqual(["A03", "A12"]);
   });
 });
+
+/**
+ * Spike 2026-10-15 — BCBS KS Network Enrollment Form, fill 21813fea.
+ * Nine mapped inputs (five phone/fax masks, three DatePicker inputs, one NPI
+ * mask) were logged `context_changed`, attempted=false. The live page shows no
+ * DOM mutation at all during a write; what differs is what the PrimeFaces 10
+ * InputMask does to the VALUE. These tests mimic that widget as measured on
+ * the live form (shape only, no portal markup): an OWN `value` accessor on the
+ * input, re-masking of the raw DOM value on `input`, and — clearIncomplete +
+ * clearMaskOnLostFocus — the widget writing its own buffer back on `blur`.
+ * All four are red on purpose: they state the behaviour the fix should give.
+ * See docs/spike-context-changed-mask-dates.md.
+ */
+describe("PrimeFaces InputMask readback (spike, expected to fail until fixed)", () => {
+  const phoneMask = (raw: string): string => {
+    const digits = raw.replace(/\D/g, "").slice(0, 10);
+    return digits.length === 10 ? `(${digits.slice(0, 3)})${digits.slice(3, 6)}-${digits.slice(6)}` : digits;
+  };
+  const npiMask = (raw: string): string => raw.replace(/\D/g, "").slice(0, 10);
+  const dateMask = (raw: string): string => (/^\d{2}\/\d{2}\/\d{4}$/.test(raw) ? raw : "");
+
+  /** `complete` says whether the widget's buffer satisfies the mask; an
+   * incomplete buffer is cleared on blur (jquery.inputmask clearIncomplete).
+   * `syncOnInput` false mimics the datetime alias, whose buffer the engine's
+   * synthetic `input` event did not update on the live form. */
+  function installInputMask(
+    input: HTMLInputElement,
+    mask: (raw: string) => string,
+    complete: (masked: string) => boolean,
+    { syncOnInput = true }: { syncOnInput?: boolean } = {},
+  ): void {
+    const proto = Object.getPrototypeOf(input) as object;
+    const native = Object.getOwnPropertyDescriptor(proto, "value");
+    if (!native?.get || !native.set) throw new Error("jsdom input has no prototype value accessor");
+    const read = (): string => native.get!.call(input) as string;
+    const write = (next: string): void => { native.set!.call(input, next); };
+    let buffer = "";
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get: read,
+      set(raw: string) { buffer = mask(String(raw)); write(buffer); },
+    });
+    input.addEventListener("input", () => {
+      if (!syncOnInput) return;
+      buffer = mask(read());
+      write(buffer);
+    });
+    input.addEventListener("blur", () => {
+      if (!complete(buffer)) write("");
+    });
+    input.classList.add("ui-inputmask");
+  }
+
+  const telemetry = () => ({
+    targetKey: createFillEventV2OpaqueKey("t"),
+    frameKey: createFillEventV2OpaqueKey("f"),
+    stepKey: null,
+  });
+
+  it("reports a mask's canonical readback as an attempted write, never as silence the worker files under context_changed", () => {
+    document.body.innerHTML = `<label for="phone">Phone number</label><input id="phone" type="text" />`;
+    installInputMask(document.querySelector("#phone")!, phoneMask, (m) => m.length === 13);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#phone", value: "(555) 555-0100", telemetry: telemetry() }),
+    ], window.location.href);
+    // Today: the retain check (fillEngine.ts applyValue) returns ok:false with
+    // no outcome/reasonCode, so applyFillOnPage records nothing and
+    // applyFillAcrossFrames labels the empty outcome list context_changed.
+    expect(applied.fieldOutcomes).toHaveLength(1);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true });
+    expect(applied.fieldOutcomes?.[0]?.reasonCode).not.toBe("context_changed");
+  });
+
+  it("counts a phone the mask re-formatted as filled: the digits the portal will post are the digits asked for", () => {
+    document.body.innerHTML = `<label for="phone">Phone number</label><input id="phone" type="text" />`;
+    const phone = document.querySelector<HTMLInputElement>("#phone")!;
+    installInputMask(phone, phoneMask, (m) => m.length === 13);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#phone", value: "(555) 555-0100", telemetry: telemetry() }),
+    ], window.location.href);
+    // The value IS on the page in the mask's own shape…
+    expect(phone.value).toBe("(555)555-0100");
+    // …and the engine should say so instead of "field did not retain the requested value".
+    expect(applied.filled).toEqual(["Phone number"]);
+    expect(applied.skipped).toEqual([]);
+  });
+
+  it("keeps a PrimeFaces DatePicker's masked date through the engine's synthetic blur", async () => {
+    document.body.innerHTML = `
+      <label id="dob-label">Date of birth</label>
+      <span class="p-datepicker ui-calendar"><input id="dob" type="text" aria-labelledby="dob-label" inputmode="numeric" /></span>
+    `;
+    const dob = document.querySelector<HTMLInputElement>("#dob")!;
+    installInputMask(dob, dateMask, (m) => m.length === 10, { syncOnInput: false });
+    const applied = await applyFillSettled([
+      instr({ label: "Date of birth", selector: "#dob", fieldType: "date", value: "02/02/1980", telemetry: telemetry() }),
+    ]);
+    // Live form, 2026-10-15: the prototype-setter write survives input/change
+    // and is emptied by the widget on blur; a write through the input's own
+    // (mask-installed) setter survives the same blur.
+    expect(dob.value).toBe("02/02/1980");
+    expect(applied.filled).toEqual(["Date of birth"]);
+  });
+
+  it("files a value the mask cannot hold as a rejected write with a reason (an 'n/a' into a 10-digit NPI mask)", () => {
+    document.body.innerHTML = `<label for="npi">Supervising physician NPI</label><input id="npi" type="text" />`;
+    const npi = document.querySelector<HTMLInputElement>("#npi")!;
+    installInputMask(npi, npiMask, (m) => m.length === 10);
+    const applied = applyFillOnPage([
+      instr({ label: "Supervising physician NPI", selector: "#npi", value: "n/a", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(npi.value).toBe("");
+    expect(applied.filled).toEqual([]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected" });
+  });
+});
