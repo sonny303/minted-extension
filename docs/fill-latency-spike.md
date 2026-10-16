@@ -76,10 +76,11 @@ Notes on reading the table:
 - Scenario C costs the same as A because the ajax render lands *after* the
   next probe has already satisfied its 120 ms window. It would cost the full
   cap if the render took longer than the probe or arrived in pieces.
-- Scenario B's 55 refusals are a second effect of a never-quiet page: the
-  apply path's own revalidation reads the mutations as "form changed" (see the
-  skip reasons printed by the harness). That overlaps the sibling
-  context_changed spike and is recorded here, not investigated.
+- Scenario B's refusals (55 in one run, 50 in a repeat; every one of them
+  `form changed during fill (context_changed)`) are a second effect of a
+  never-quiet page: every `APPLY_FILL` went out, and the content script's own
+  revalidation read the ticker's mutations as a changed form. That overlaps
+  the sibling context_changed spike and is recorded here, not investigated.
 
 ## Extrapolation to the real 95 s
 
