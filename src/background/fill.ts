@@ -1171,12 +1171,12 @@ export async function fillPortal(
   });
   let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
-  // Audit the device-resolved dates that really landed: a date is not PHI, and
+  // Audit the device-resolved date that really landed: a date is not PHI, and
   // "what did the extension sign this with?" must be answerable from the log.
+  // One value per fill event (every system.today field shares it), sent only
+  // when at least one such field was written.
   const writtenSelectorSet = new Set((pageResult.writes ?? []).map((write) => write.selector));
-  const recordedDeviceWrites = deviceWrites
-    .filter((write) => writtenSelectorSet.has(write.selector))
-    .map(({ mapId, token, value }) => ({ mapId, token, value }));
+  const systemTodayDate = deviceWrites.find((write) => writtenSelectorSet.has(write.selector))?.value ?? null;
   const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
@@ -1217,7 +1217,7 @@ export async function fillPortal(
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ]),
       ...(telemetry ? { v2: telemetry } : {}),
-      ...(recordedDeviceWrites.length > 0 ? { writes: recordedDeviceWrites } : {}),
+      ...(systemTodayDate ? { systemTodayDate } : {}),
       ...(workContext ? { workContext } : {}),
     }, { signal: operation?.abortController.signal });
   } catch (error) {

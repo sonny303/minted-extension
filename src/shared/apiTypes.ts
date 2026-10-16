@@ -229,6 +229,10 @@ export interface QuickCardCatalogField {
   label: string;
   group: string;
   groupLabel: string;
+  /** `"device"` = resolved on the coordinator's device at fill time, never by
+   * the profile endpoint (`system.today`, mintedpanel PR #523). Optional:
+   * an older panel sends no key. */
+  resolution?: "device";
 }
 
 export interface ViewPrefsResponse {
@@ -567,17 +571,6 @@ export interface ProviderListItem {
   updatedAt: string;
 }
 
-/** One device-resolved value the fill wrote, for audit. Today the only such
- * token is `system.today`, and a date is not PHI; profile values never ride
- * the fill event. */
-export interface FillEventWrite {
-  mapId: string;
-  token: "system.today";
-  /** Canonical `yyyy-mm-dd` the device resolved and wrote (the map's
-   * `transform` chose the page spelling). The panel validates this shape. */
-  value: string;
-}
-
 export interface FillEventBody {
   id: string;
   caseId?: string | null;
@@ -588,8 +581,11 @@ export interface FillEventBody {
   completedAt: string;
   fieldsFilled: number;
   fieldsSkipped: unknown;
-  /** OPTIONAL on the wire (panel-first contract, mintedpanel PR TBD): only
-   * sent when a device-resolved value was written; an older panel ignores
-   * the key. */
-  writes?: FillEventWrite[];
+  /** The canonical LOCAL `yyyy-mm-dd` the device resolved `system.today` to,
+   * sent only when a `system.today` field was actually written (every such
+   * field in one fill shares the date; a date is not PHI). Panel-first
+   * contract (mintedpanel PR #523): a value that is not a calendar date is a
+   * 422; an older panel without the column drops it and still records the
+   * fill. The map's `transform` says how the page spelled it. */
+  systemTodayDate?: string | null;
 }

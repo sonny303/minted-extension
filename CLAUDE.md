@@ -115,11 +115,12 @@ bump_status? }`. Server sets org + user from the JWT.
   are a loud 422 on this kind. Sets mirrored in `src/shared/structuredTouch.ts`.
 - **Fill-events body is camelCase** — `{ id, caseId, providerId, portalKey,
 fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`, plus
-  optional `writes[{ mapId, token, value }]` — ONLY device-resolved values
-  that were actually written (today: `system.today`), `value` the canonical
-  `yyyy-mm-dd` the token resolved to (the panel validates a calendar date;
-  the map's `transform` says how the page spelled it); omitted when none,
-  so an older panel ignores it. Profile values never ride the event.
+  optional `systemTodayDate` — the canonical local `yyyy-mm-dd` that
+  `system.today` resolved to, sent ONLY when such a field was actually
+  written (one value per fill; the map's `transform` says how the page
+  spelled it). The panel 422s a non-calendar value and, without the column,
+  drops it and still records the fill (mintedpanel PR #523). Profile values
+  never ride the event.
 - **`system.today` is resolved on the DEVICE, never by the profile endpoint.**
   `planFill` (`src/background/fill.ts`) injects the coordinator's local
   calendar date as canonical `yyyy-mm-dd` (`localIsoToday`,

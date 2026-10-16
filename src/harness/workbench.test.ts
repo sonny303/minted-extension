@@ -3200,7 +3200,7 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       // The page got the transformed local date; the profile had nothing to say.
       expect(applied).toContainEqual({ selector: "#signature-date", value: expectedWritten });
       const stored = mock.state.fillSessions.get(summary.fillSessionId!);
-      expect(stored?.writes).toEqual([{ mapId: signatureMapId, token: "system.today", value: expectedAudited }]);
+      expect(stored?.systemTodayDate).toBe(expectedAudited);
 
       // Not written (drifted selector) => nothing to audit, and no key at all.
       dateFieldOnPage = false;
@@ -3209,7 +3209,7 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       expect(second.skipped).toContainEqual(expect.objectContaining({ mapId: signatureMapId }));
       const storedSecond = mock.state.fillSessions.get(second.fillSessionId!);
       expect(storedSecond).toBeDefined();
-      expect(storedSecond).not.toHaveProperty("writes");
+      expect(storedSecond).not.toHaveProperty("systemTodayDate");
     } finally {
       mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
     }

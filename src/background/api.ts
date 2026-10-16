@@ -17,7 +17,6 @@ import type {
   NextBestActionResult,
   PortalFieldMap,
   ProviderListItem,
-  FillEventWrite,
   ProviderProfileResponse,
   SubmissionTouch,
   UserOrgMembership,
@@ -540,9 +539,9 @@ export interface FillEventBody {
   fieldsFilled: number;
   fieldsSkipped: unknown;
   v2?: FillEventV2Metadata;
-  /** Device-resolved values that were written (`system.today` only). Omitted
-   * when none; mirrors `FillEventWrite` in shared/apiTypes.ts. */
-  writes?: FillEventWrite[];
+  /** Canonical local date `system.today` resolved to, only when such a field
+   * was written. Mirrors `FillEventBody.systemTodayDate` in shared/apiTypes.ts. */
+  systemTodayDate?: string | null;
   /** Canonical tuple copied from the validated worker Work guard. */
   workContext?: CanonicalWorkContextTuple;
 }
