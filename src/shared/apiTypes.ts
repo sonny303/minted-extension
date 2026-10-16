@@ -189,7 +189,9 @@ export interface ProviderProfileResponse {
 // this repo used to carry in quickCards.ts). The catalog is the SINGLE source
 // for the picker AND the PUT validator, served together so they can never
 // disagree. `group` is the token family (provider/group/facility/license/
-// assignment/groupInsurance/user); `groupLabel` is its section heading.
+// assignment/groupInsurance/user, and `system` for device-resolved tokens
+// such as `system.today`); `groupLabel` is its section heading. The picker
+// renders whatever families the server serves — no local family list.
 // GET /api/portals — the DB-driven payer-portal registry (2026-07-28), so
 // portal identity stops being a hardcoded list in this bundle. Own-org rows
 // plus global (orgId null) registry rows, the shared-catalog pattern the
@@ -565,6 +567,17 @@ export interface ProviderListItem {
   updatedAt: string;
 }
 
+/** One device-resolved value the fill wrote, for audit. Today the only such
+ * token is `system.today`, and a date is not PHI; profile values never ride
+ * the fill event. */
+export interface FillEventWrite {
+  mapId: string;
+  token: "system.today";
+  /** Canonical `yyyy-mm-dd` the device resolved and wrote (the map's
+   * `transform` chose the page spelling). The panel validates this shape. */
+  value: string;
+}
+
 export interface FillEventBody {
   id: string;
   caseId?: string | null;
@@ -575,4 +588,8 @@ export interface FillEventBody {
   completedAt: string;
   fieldsFilled: number;
   fieldsSkipped: unknown;
+  /** OPTIONAL on the wire (panel-first contract, mintedpanel PR TBD): only
+   * sent when a device-resolved value was written; an older panel ignores
+   * the key. */
+  writes?: FillEventWrite[];
 }

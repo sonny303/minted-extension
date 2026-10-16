@@ -48,6 +48,7 @@ function instr(
     ...(over.telemetry ? { telemetry: over.telemetry } : {}),
     ...(over.nativeDateValue ? { nativeDateValue: over.nativeDateValue } : {}),
     ...(over.exactSelectValue ? { exactSelectValue: true } : {}),
+    ...(over.token ? { token: over.token } : {}),
     ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
     ...(over.resolvedPage ? { resolvedPage: over.resolvedPage } : {})
   };
@@ -529,6 +530,62 @@ describe("applyFill", () => {
     expect(result.filled).toEqual(["Effective date"]);
     expect(input.value).toBe("02/02/2026");
     expect(modelValue).toBe("02/02/2026");
+  });
+
+  describe("system.today lands in each date control kind", () => {
+    // The planner resolves system.today on the device as canonical ISO and
+    // shapes it through the map's transform; the engine sees an ordinary
+    // instruction. Three shapes a signature-date field takes on real forms.
+    const today = "2026-10-15";
+
+    it("writes the transformed string into a plain text box", () => {
+      document.body.innerHTML = `<input id="signature-date" type="text" />`;
+      const result = applyFill([
+        instr({ label: "Signature date", selector: "#signature-date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Signature date"]);
+      expect(result.writes).toEqual([{ selector: "#signature-date", kind: "static", token: "system.today" }]);
+      expect(document.querySelector<HTMLInputElement>("#signature-date")?.value).toBe("10/15/2026");
+    });
+
+    it("feeds a masked date widget and survives its blur readback", async () => {
+      document.body.innerHTML = `<span class="p-datepicker ui-calendar"><input id="attest-date" type="text" /></span>`;
+      const input = document.querySelector<HTMLInputElement>("#attest-date")!;
+      let keydownSeen = false;
+      let modelValue = "";
+      input.addEventListener("keydown", () => { keydownSeen = true; });
+      input.addEventListener("input", () => {
+        if (!keydownSeen) return;
+        keydownSeen = false;
+        modelValue = input.value;
+      });
+      input.addEventListener("blur", () => { input.value = modelValue; });
+      const result = await applyFillSettled([
+        instr({ label: "Attestation date", selector: "#attest-date", fieldType: "date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Attestation date"]);
+      expect(result.skipped).toEqual([]);
+      expect(input.value).toBe("10/15/2026");
+      expect(modelValue).toBe("10/15/2026");
+    });
+
+    it("writes the canonical ISO date into an HTML5 date input whatever the display shape", () => {
+      document.body.innerHTML = `<input id="signed-on" type="date" />`;
+      const result = applyFill([
+        instr({ label: "Signed on", selector: "#signed-on", fieldType: "date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Signed on"]);
+      expect(document.querySelector<HTMLInputElement>("#signed-on")?.value).toBe(today);
+    });
+
+    it("still fills an HTML5 date input from an untransformed map (ISO value, no nativeDateValue hint)", () => {
+      document.body.innerHTML = `<input id="signed-on" type="date" />`;
+      const result = applyFill([
+        instr({ label: "Signed on", selector: "#signed-on", fieldType: "date", token: "system.today", value: today }),
+      ]);
+      expect(result.filled).toEqual(["Signed on"]);
+      expect(document.querySelector<HTMLInputElement>("#signed-on")?.value).toBe(today);
+    });
   });
 
   it("selects a taxonomy code from a lazy PrimeFaces menu beyond the capture option cap", async () => {

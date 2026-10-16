@@ -3127,6 +3127,94 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
     expect(await handleRequest({ type: "GET_SELECTED_GROUP", providerId: FIXTURES.PROVIDER_ID })).toBeNull();
   });
 
+  it("logs the device-resolved signature date on the fill event, and only when it was written", async () => {
+    const { handleRequest } = await import("../background/index");
+    const originalMaps = [...mock.state.fieldMaps];
+    const baseMap = originalMaps[0];
+    if (!baseMap) throw new Error("mock panel needs its base approved field map");
+    const signatureMapId = "7b3f2a10-5c1e-4d2a-9f3b-2e8c6a1d4f90";
+    // The panel's catalog offers system.today; the profile endpoint never
+    // returns it. The map is an ordinary approved token map with a transform.
+    mock.state.fieldMaps.push({
+      ...baseMap,
+      id: signatureMapId,
+      selector: "#signature-date",
+      token: "system.today",
+      transform: "date_mmddyyyy",
+      fieldType: "date",
+    });
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const expectedWritten = `${pad(now.getMonth() + 1)}/${pad(now.getDate())}/${now.getFullYear()}`;
+    const expectedAudited = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    const applied: Array<{ selector: string; value: string }> = [];
+    let dateFieldOnPage = true;
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown, options?: chrome.tabs.MessageSendOptions) => {
+      const message = rawMessage as {
+        type: string;
+        instructions?: Array<{ mapId: string; label: string; selector: string; value: string }>;
+      };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: "eligible",
+            targetStatus: frameId === 0 ? "unique" : "missing",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 5,
+          })),
+        };
+      }
+      if (message.type === "APPLY_FILL" && frameId === 0) {
+        const written = (message.instructions ?? []).filter((i) => dateFieldOnPage || i.selector !== "#signature-date");
+        const missed = (message.instructions ?? []).filter((i) => !written.includes(i));
+        applied.push(...written.map(({ selector, value }) => ({ selector, value })));
+        return {
+          ok: true,
+          data: {
+            filled: written.map((i) => i.label),
+            attemptedLabels: written.map((i) => i.label),
+            writes: written.map((i) => ({ selector: i.selector, kind: "static" })),
+            skipped: missed.map((i) => ({ label: i.label, mapId: i.mapId, reason: "field not found on this page", kind: "skipped" })),
+            pageFields: 5,
+          },
+        };
+      }
+      return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+    }) as typeof chrome.tabs.sendMessage;
+
+    try {
+      const request = {
+        type: "FILL" as const, tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+        caseId: FIXTURES.CASE_ID, facilityId: FIXTURES.FACILITY_ID,
+        state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+        portalId: "portal-1", mappingGeneration: 1,
+      };
+      const summary = (await handleRequest(request)) as import("../shared/fill").FillSummary;
+      expect(summary.eventRecorded).toBe(true);
+      // The page got the transformed local date; the profile had nothing to say.
+      expect(applied).toContainEqual({ selector: "#signature-date", value: expectedWritten });
+      const stored = mock.state.fillSessions.get(summary.fillSessionId!);
+      expect(stored?.writes).toEqual([{ mapId: signatureMapId, token: "system.today", value: expectedAudited }]);
+
+      // Not written (drifted selector) => nothing to audit, and no key at all.
+      dateFieldOnPage = false;
+      const second = (await handleRequest(request)) as import("../shared/fill").FillSummary;
+      expect(second.eventRecorded).toBe(true);
+      expect(second.skipped).toContainEqual(expect.objectContaining({ mapId: signatureMapId }));
+      const storedSecond = mock.state.fillSessions.get(second.fillSessionId!);
+      expect(storedSecond).toBeDefined();
+      expect(storedSecond).not.toHaveProperty("writes");
+    } finally {
+      mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
+    }
+  });
+
   it.each([
     [null, "group-A", FIXTURES.FACILITY_ID],
     ["__ad_hoc__", null, FIXTURES.FACILITY_ID],
