@@ -349,12 +349,51 @@ function setNativeValue(el: Fillable, value: string): void {
   }
   const proto = Object.getPrototypeOf(el) as object;
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-  if (descriptor?.set) {
+  // An inputmask (PrimeFaces p:inputMask, p:datePicker mask=…) defines its own
+  // `value` accessor that fills the mask's buffer; a prototype-setter write
+  // leaves that buffer empty and the widget writes the empty buffer back on
+  // blur (clearIncomplete). Gated on the mask itself: React's own accessor is
+  // a tracker, and bypassing it would hide the change from the framework.
+  const ownSetter = hasInputMask(el) ? Object.getOwnPropertyDescriptor(el, "value")?.set : undefined;
+  if (ownSetter) {
+    ownSetter.call(el, value);
+  } else if (descriptor?.set) {
     descriptor.set.call(el, value);
   } else if ("value" in el) {
     (el as HTMLElement & { value: string }).value = value;
   }
   fireChanged(el);
+}
+
+/** True when a jquery.inputmask instance owns this input: the plugin stores
+ * itself on `el.inputmask`, PrimeFaces marks p:inputMask with `ui-inputmask`,
+ * and a p:datePicker mask installs its own `value` accessor on the input. */
+function hasInputMask(el: Fillable): el is HTMLInputElement {
+  if (!(el instanceof HTMLInputElement)) return false;
+  if ((el as HTMLInputElement & { inputmask?: unknown }).inputmask) return true;
+  if (el.classList.contains("ui-inputmask")) return true;
+  return Boolean(el.closest(".p-datepicker.ui-calendar")) &&
+    Object.getOwnPropertyDescriptor(el, "value")?.set !== undefined;
+}
+
+/** A mask's readback is judged on content, not shape: "(555) 555-0100" and
+ * "(555)555-0100" post the same digits. Letters and digits in any script
+ * count ("José" truncated to "Jos" must not compare equal), case does not. */
+function maskContent(value: string): string {
+  return value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+/** True when the masked input holds what was asked for. The readback must
+ * CONTAIN the requested content — a mask may add literal characters
+ * ("+1 (999) 999-9999" posts a leading 1) — and both sides must be non-empty:
+ * "--" into a mask that clears to "" is a rejected write, not a match.
+ * Truncation ("12345-6789" into five digits) and leftover placeholders
+ * ("10/02/02__" for an ISO date) both fail because the requested digits are
+ * not all there. */
+function maskRetained(readback: string, requested: string): boolean {
+  const want = maskContent(requested);
+  const have = maskContent(readback);
+  return want.length > 0 && have.length > 0 && have.includes(want);
 }
 
 function fireChanged(el: HTMLElement): void {
@@ -735,8 +774,17 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   const changed = el.value !== nextValue;
   markAttempted();
   setNativeValue(el, nextValue);
-  if (el.value !== nextValue) {
-    return { ok: false, reason: "field did not retain the requested value", target: el };
+  const retained = hasInputMask(el)
+    ? maskRetained(el.value, nextValue)
+    : el.value === nextValue;
+  if (!retained) {
+    return {
+      ok: false,
+      reason: "field did not retain the requested value",
+      outcome: "write_rejected",
+      reasonCode: "readback_mismatch",
+      target: el,
+    };
   }
   if (el.willValidate && !el.validity.valid) {
     return {
@@ -1693,7 +1741,9 @@ export async function applyFillSettled(
     const expected = target instanceof HTMLInputElement && target.type === "date"
       ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
       : instruction.value;
-    if (isInputOrTextarea && target.value !== expected) {
+    const reverted = (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      (hasInputMask(target) ? !maskRetained(target.value, expected) : target.value !== expected);
+    if (reverted) {
       rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
       continue;
     }
