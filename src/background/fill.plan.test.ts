@@ -360,6 +360,67 @@ describe("planFill", () => {
   });
 });
 
+describe("planFill system.today", () => {
+  it("resolves system.today on the device and never from the profile", () => {
+    const plan = planFill(
+      [
+        map({ id: "sig", selector: "#signature-date", token: "system.today" }),
+        map({ id: "sig-us", selector: "#attest-date", token: "system.today", transform: "date_mmddyyyy" }),
+      ],
+      profile,
+      { today: "2026-10-15" },
+    );
+    expect(plan.staticFills).toEqual([
+      expect.objectContaining({ mapId: "sig", value: "2026-10-15", nativeDateValue: "2026-10-15" }),
+      expect.objectContaining({ mapId: "sig-us", value: "10/15/2026", nativeDateValue: "2026-10-15" }),
+    ]);
+    expect(plan.manual).toEqual([]);
+    // Audited as the canonical date whatever the page spelling was.
+    expect(plan.deviceWrites).toEqual([
+      { mapId: "sig", selector: "#signature-date", token: "system.today", value: "2026-10-15" },
+      { mapId: "sig-us", selector: "#attest-date", token: "system.today", value: "2026-10-15" },
+    ]);
+  });
+
+  it("defaults to the local calendar date, not the UTC date", () => {
+    // Pinned west of UTC at 23:30 local so toISOString() would really differ.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-16T06:30:00Z"));
+      expect(new Date().toISOString().slice(0, 10)).toBe("2026-10-16");
+      const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], profile);
+      expect(plan.staticFills[0]?.value).toBe("2026-10-15");
+    } finally {
+      vi.useRealTimers();
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
+  it("lets the device value win over a profile that unexpectedly carries the key", () => {
+    const stale: ProviderProfileResponse = {
+      ...profile,
+      tokens: [...profile.tokens, { token: "system.today", value: "1999-12-31" }],
+    };
+    const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], stale, {
+      today: "2026-10-15",
+    });
+    expect(plan.staticFills[0]?.value).toBe("2026-10-15");
+  });
+
+  it("does not audit a profile-token date as a device write", () => {
+    const plan = planFill(
+      [map({ id: "d", selector: "label:DOB", token: "provider.dob", transform: "date_mmddyyyy" })],
+      profile,
+      { today: "2026-10-15" },
+    );
+    expect(plan.staticFills[0]?.value).toBe("05/04/1980");
+    expect(plan.deviceWrites).toEqual([]);
+  });
+});
+
 describe("computeCoverage", () => {
   it("derives available/total from the same planFill rules", () => {
     const coverage = computeCoverage(

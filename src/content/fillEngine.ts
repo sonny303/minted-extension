@@ -1234,6 +1234,7 @@ export function applyFillOnPage(
           decorateFill(outcome.target, kind, instruction.token);
           writes.push({
             selector: instruction.selector,
+            mapId: instruction.mapId,
             kind,
             ...(instruction.token ? { token: instruction.token } : {}),
             ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
@@ -1534,6 +1535,7 @@ function widgetFilledResult(instruction: FillInstruction, decorated: Fillable | 
     attemptedLabels: unchanged ? [] : [instruction.label],
     writes: unchanged ? [] : [{
       selector: instruction.selector,
+      mapId: instruction.mapId,
       kind: instruction.kind ?? "static" as const,
       ...(instruction.token ? { token: instruction.token } : {}),
       ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),

@@ -54,6 +54,7 @@ import {
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
 import { isExactGroupRecordPath } from "../shared/fixit";
+import { localIsoToday, SYSTEM_TODAY_TOKEN, type DeviceResolvedWrite } from "../shared/systemTokens";
 import {
   canonicalizeWorkContextTuple,
   type WorkContextTuple,
@@ -298,14 +299,33 @@ export interface FillPlan {
   staticFills: FillInstruction[];
   aiFills: FillInstruction[];
   manual: ReportedField[];
+  /** Planned writes whose value the DEVICE resolved (`system.today`), with the
+   * string that will reach the page. The fill event carries the ones that
+   * were actually written. */
+  deviceWrites: DeviceResolvedWrite[];
 }
 
-export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
+export interface PlanFillOptions {
+  /** The local calendar date for `system.today`; defaults to now. Tests pin it. */
+  today?: string;
+}
+
+export function planFill(
+  maps: PortalFieldMap[],
+  profile: ProviderProfileResponse,
+  options: PlanFillOptions = {},
+): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
+  // system.today is resolved HERE, on the device, from the coordinator's local
+  // calendar — never by the profile endpoint (BITE-DYN-TODAY-01). It enters
+  // the same map as a profile token so the join below, the transform, and the
+  // native-date path treat it exactly like any other canonical date.
+  tokenValues.set(SYSTEM_TODAY_TOKEN, options.today ?? localIsoToday());
   const unresolvedByToken = new Map(profile.unresolved.map((entry) => [entry.token, entry]));
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
+  const deviceWrites: DeviceResolvedWrite[] = [];
 
   for (const map of maps) {
     // S5.1 invariant (2026-07-28, supersedes the v0 posture): ONLY approved
@@ -374,13 +394,20 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
 
     const rawString = String(raw);
     const canonicalNativeDate = nativeDateValue(rawString);
+    const value = applyTransform(rawString, map.transform);
+    if (map.source !== "hardcoded" && map.token === SYSTEM_TODAY_TOKEN) {
+      // Audited as the canonical date, not the transformed spelling: the
+      // panel validates a calendar date, and the map's transform says how it
+      // was spelled on the page.
+      deviceWrites.push({ mapId: map.id, selector: map.selector, token: SYSTEM_TODAY_TOKEN, value: rawString });
+    }
     staticFills.push({
       mapId: map.id,
       label,
       selector: map.selector,
       selectorFallbacks: map.selectorFallbacks ?? [],
       fieldType: map.fieldType,
-      value: applyTransform(rawString, map.transform),
+      value,
       ...(canonicalNativeDate ? { nativeDateValue: canonicalNativeDate } : {}),
       ...(map.token?.toLowerCase().endsWith("taxonomycode") ? { exactSelectValue: true } : {}),
       pageStep: map.pageStep ?? null,
@@ -397,7 +424,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     }
   }
 
-  return { staticFills, aiFills: [], manual };
+  return { staticFills, aiFills: [], manual, deviceWrites };
 }
 
 // The coverage sensor (Epic 3a): reuse planFill so the "we can supply M of N"
@@ -948,7 +975,7 @@ export async function fillPortal(
         ]);
         return { maps, profile, fillEventV2, mappingFingerprint };
       })();
-  const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+  const { staticFills, manual, deviceWrites } = planFill(resolvedData.maps, resolvedData.profile);
   const fillEventV2 = resolvedData.fillEventV2;
 
   const assertPreparedCurrent = async (): Promise<void> => {
@@ -1144,6 +1171,14 @@ export async function fillPortal(
   });
   let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
+  // Audit the device-resolved date that really landed: a date is not PHI, and
+  // "what did the extension sign this with?" must be answerable from the log.
+  // One value per fill event (every system.today field shares it), sent only
+  // when at least one such field was written.
+  // Joined on map id, never selector: a `label:Date` selector can belong to a
+  // system.today map on another page AND a written map on this one.
+  const writtenMapIds = new Set((pageResult.writes ?? []).flatMap((write) => write.mapId ? [write.mapId] : []));
+  const systemTodayDate = deviceWrites.find((write) => writtenMapIds.has(write.mapId))?.value ?? null;
   const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
@@ -1184,6 +1219,7 @@ export async function fillPortal(
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ]),
       ...(telemetry ? { v2: telemetry } : {}),
+      ...(systemTodayDate ? { systemTodayDate } : {}),
       ...(workContext ? { workContext } : {}),
     }, { signal: operation?.abortController.signal });
   } catch (error) {

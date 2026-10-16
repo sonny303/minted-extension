@@ -114,7 +114,22 @@ bump_status? }`. Server sets org + user from the JWT.
   required (one of seven canonical types); the portal_submission-only fields
   are a loud 422 on this kind. Sets mirrored in `src/shared/structuredTouch.ts`.
 - **Fill-events body is camelCase** — `{ id, caseId, providerId, portalKey,
-fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
+fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`, plus
+  optional `systemTodayDate` — the canonical local `yyyy-mm-dd` that
+  `system.today` resolved to, sent ONLY when such a field was actually
+  written (one value per fill; the map's `transform` says how the page
+  spelled it). The panel 422s a non-calendar value and, without the column,
+  drops it and still records the fill (mintedpanel PR #523). Profile values
+  never ride the event.
+- **`system.today` is resolved on the DEVICE, never by the profile endpoint.**
+  `planFill` (`src/background/fill.ts`) injects the coordinator's local
+  calendar date as canonical `yyyy-mm-dd` (`localIsoToday`,
+  `src/shared/systemTokens.ts` — local parts, never `toISOString`, which is
+  already tomorrow in UTC after 7 pm Eastern) into the token map before the
+  field-map join, so the map's `transform` shapes it and a native
+  `input[type=date]` still gets the ISO form. The panel's catalog serves the
+  key; the quick-card picker is data-driven from the served catalog, so a
+  System family needs no extension change.
 - **Idempotency:** fill-events — the client-generated `id` is both idempotency
   key and row PK. Touches — `idempotency_id` becomes the anchor touch's PK; the
   worker reuses it on retries, and a replay short-circuits at the anchor
