@@ -124,6 +124,9 @@ export interface FillPageResult {
   /** Successful writes keyed by selector identity, never display label. */
   writes?: Array<{
     selector: string;
+    /** The instruction's map id, so the worker can tell two maps on one
+     * selector apart (a `label:` selector is not unique across pages). */
+    mapId?: string;
     kind: "static" | "ai";
     token?: string;
     confidence?: number;

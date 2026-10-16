@@ -1175,8 +1175,10 @@ export async function fillPortal(
   // "what did the extension sign this with?" must be answerable from the log.
   // One value per fill event (every system.today field shares it), sent only
   // when at least one such field was written.
-  const writtenSelectorSet = new Set((pageResult.writes ?? []).map((write) => write.selector));
-  const systemTodayDate = deviceWrites.find((write) => writtenSelectorSet.has(write.selector))?.value ?? null;
+  // Joined on map id, never selector: a `label:Date` selector can belong to a
+  // system.today map on another page AND a written map on this one.
+  const writtenMapIds = new Set((pageResult.writes ?? []).flatMap((write) => write.mapId ? [write.mapId] : []));
+  const systemTodayDate = deviceWrites.find((write) => writtenMapIds.has(write.mapId))?.value ?? null;
   const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;

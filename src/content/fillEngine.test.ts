@@ -165,7 +165,7 @@ describe("applyFill", () => {
     });
 
     const samePage = applyFillOnPage([scoped], "https://portal.example/provider?case=private#step");
-    expect(samePage.writes).toEqual([{ selector: "#field", kind: "static" }]);
+    expect(samePage.writes).toEqual([{ selector: "#field", mapId: "m1", kind: "static" }]);
     expect((document.querySelector("#field") as HTMLInputElement).value).toBe("Ada");
 
     document.body.innerHTML = '<input id="field" type="text" />';
@@ -544,7 +544,7 @@ describe("applyFill", () => {
         instr({ label: "Signature date", selector: "#signature-date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
       ]);
       expect(result.filled).toEqual(["Signature date"]);
-      expect(result.writes).toEqual([{ selector: "#signature-date", kind: "static", token: "system.today" }]);
+      expect(result.writes).toEqual([{ selector: "#signature-date", mapId: "m1", kind: "static", token: "system.today" }]);
       expect(document.querySelector<HTMLInputElement>("#signature-date")?.value).toBe("10/15/2026");
     });
 
@@ -1485,7 +1485,7 @@ describe("PrimeFaces SelectManyMenu fill", () => {
     const result = await applyFillSettled([areas({ value: "A12" })]);
     expect(result.filled).toEqual(["Areas of expertise"]);
     expect(result.skipped).toEqual([]);
-    expect(result.writes).toEqual([{ selector: BCBSKS_AREAS_SELECTOR, kind: "static" }]);
+    expect(result.writes).toEqual([{ selector: BCBSKS_AREAS_SELECTOR, mapId: "m1", kind: "static" }]);
     expect(postedCodes(wrapper())).toEqual(["A03", "A12"]);
     expect(highlightedCodes(wrapper())).toEqual(["A03", "A12"]);
     expect(widget.changes()).toBe(2);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { localIsoToday } from "./systemTokens";
 
 describe("localIsoToday", () => {
@@ -7,13 +7,27 @@ describe("localIsoToday", () => {
     expect(localIsoToday(new Date(2026, 9, 15, 23, 59, 59))).toBe("2026-10-15");
   });
 
-  it("uses the local day even when UTC has already rolled over", () => {
-    // 11:30 pm local on the 15th. Anywhere west of UTC the ISO instant is the
-    // 16th; the signature date must still read the 15th.
-    const lateLocal = new Date(2026, 9, 15, 23, 30);
-    expect(localIsoToday(lateLocal)).toBe("2026-10-15");
-    if (lateLocal.getTimezoneOffset() > 0) {
-      expect(lateLocal.toISOString().slice(0, 10)).toBe("2026-10-16");
-    }
+  describe("west of UTC, late evening", () => {
+    // Pinned, not inherited from the CI host: in UTC the local and ISO dates
+    // agree and a regression to toISOString() would pass unnoticed.
+    const originalTz = process.env.TZ;
+    beforeEach(() => {
+      process.env.TZ = "America/Los_Angeles";
+      vi.useFakeTimers();
+      // 06:30Z on the 16th is 23:30 PDT on the 15th.
+      vi.setSystemTime(new Date("2026-10-16T06:30:00Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    });
+
+    it("uses the local day even though UTC has already rolled over", () => {
+      const now = new Date();
+      expect(now.toISOString().slice(0, 10)).toBe("2026-10-16");
+      expect(localIsoToday(now)).toBe("2026-10-15");
+      expect(localIsoToday()).toBe("2026-10-15");
+    });
   });
 });

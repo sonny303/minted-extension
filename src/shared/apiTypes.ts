@@ -586,6 +586,7 @@ export interface FillEventBody {
    * field in one fill shares the date; a date is not PHI). Panel-first
    * contract (mintedpanel PR #523): a value that is not a calendar date is a
    * 422; an older panel without the column drops it and still records the
-   * fill. The map's `transform` says how the page spelled it. */
-  systemTodayDate?: string | null;
+   * fill. The map's `transform` says how the page spelled it. Never sent as
+   * null: absent means no such field was written. */
+  systemTodayDate?: string;
 }

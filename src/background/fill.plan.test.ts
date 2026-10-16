@@ -383,11 +383,20 @@ describe("planFill system.today", () => {
   });
 
   it("defaults to the local calendar date, not the UTC date", () => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const local = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], profile);
-    expect(plan.staticFills[0]?.value).toBe(local);
+    // Pinned west of UTC at 23:30 local so toISOString() would really differ.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-16T06:30:00Z"));
+      expect(new Date().toISOString().slice(0, 10)).toBe("2026-10-16");
+      const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], profile);
+      expect(plan.staticFills[0]?.value).toBe("2026-10-15");
+    } finally {
+      vi.useRealTimers();
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
   });
 
   it("lets the device value win over a profile that unexpectedly carries the key", () => {

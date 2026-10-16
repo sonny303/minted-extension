@@ -3179,7 +3179,7 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
           data: {
             filled: written.map((i) => i.label),
             attemptedLabels: written.map((i) => i.label),
-            writes: written.map((i) => ({ selector: i.selector, kind: "static" })),
+            writes: written.map((i) => ({ selector: i.selector, mapId: i.mapId, kind: "static" })),
             skipped: missed.map((i) => ({ label: i.label, mapId: i.mapId, reason: "field not found on this page", kind: "skipped" })),
             pageFields: 5,
           },
@@ -3210,6 +3210,74 @@ describe("Astra F2 — worker cancellation stays live through delayed frame appl
       const storedSecond = mock.state.fillSessions.get(second.fillSessionId!);
       expect(storedSecond).toBeDefined();
       expect(storedSecond).not.toHaveProperty("systemTodayDate");
+    } finally {
+      mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
+    }
+  });
+
+  it("does not audit a date when only ANOTHER map on the same selector was written", async () => {
+    const { handleRequest } = await import("../background/index");
+    const originalMaps = [...mock.state.fieldMaps];
+    const baseMap = originalMaps[0];
+    if (!baseMap) throw new Error("mock panel needs its base approved field map");
+    // Two maps share the generic selector: the signature date lives on page 2
+    // (skipped here), the DOB on this page (written). Selector-only matching
+    // would call the DOB write a system.today write.
+    const signatureMapId = "9d1c4e22-8a7b-4f0e-b1c3-5e6f7a8b9c0d";
+    const dobMapId = "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b";
+    mock.state.fieldMaps.push(
+      { ...baseMap, id: signatureMapId, selector: "label:Date", token: "system.today", pageStep: "2", fieldType: "date" },
+      { ...baseMap, id: dobMapId, selector: "label:Date", token: "provider.dateOfBirth", pageStep: "1", fieldType: "date" },
+    );
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown, options?: chrome.tabs.MessageSendOptions) => {
+      const message = rawMessage as {
+        type: string;
+        instructions?: Array<{ mapId: string; label: string; selector: string; pageStep: string | null }>;
+      };
+      const frameId = options?.frameId ?? 0;
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId,
+            pageStatus: mapId === signatureMapId ? "other_page" : "eligible",
+            targetStatus: frameId === 0 ? "unique" : "missing",
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: 5,
+          })),
+        };
+      }
+      if (message.type === "APPLY_FILL" && frameId === 0) {
+        const written = (message.instructions ?? []).filter((i) => i.mapId !== signatureMapId);
+        const missed = (message.instructions ?? []).filter((i) => i.mapId === signatureMapId);
+        return {
+          ok: true,
+          data: {
+            filled: written.map((i) => i.label),
+            attemptedLabels: written.map((i) => i.label),
+            writes: written.map((i) => ({ selector: i.selector, mapId: i.mapId, kind: "static" })),
+            skipped: missed.map((i) => ({ label: i.label, mapId: i.mapId, reason: "field belongs to another page", kind: "other_page" })),
+            pageFields: 5,
+          },
+        };
+      }
+      return { ok: true, data: { filled: [], writes: [], skipped: [], pageFields: 0 } };
+    }) as typeof chrome.tabs.sendMessage;
+
+    try {
+      const summary = (await handleRequest({
+        type: "FILL", tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+        caseId: FIXTURES.CASE_ID, facilityId: FIXTURES.FACILITY_ID,
+        state: "CO", portalKey: FIXTURES.PORTAL_KEY,
+        portalId: "portal-1", mappingGeneration: 1,
+      })) as import("../shared/fill").FillSummary;
+      expect(summary.eventRecorded).toBe(true);
+      expect(summary.writtenSelectors).toContain("label:Date");
+      const stored = mock.state.fillSessions.get(summary.fillSessionId!);
+      expect(stored).toBeDefined();
+      expect(stored).not.toHaveProperty("systemTodayDate");
     } finally {
       mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
     }
