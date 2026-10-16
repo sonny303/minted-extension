@@ -1678,8 +1678,9 @@ describe("PrimeFaces InputMask readback", () => {
     // no outcome/reasonCode, so applyFillOnPage records nothing and
     // applyFillAcrossFrames labels the empty outcome list context_changed.
     expect(applied.fieldOutcomes).toHaveLength(1);
-    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true });
-    expect(applied.fieldOutcomes?.[0]?.reasonCode).not.toBe("context_changed");
+    // The synchronous path records every successful write as unverified /
+    // readback_unavailable; applyFillSettled is what upgrades it to filled.
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "unverified", reasonCode: "readback_unavailable" });
   });
 
   it("counts a phone the mask re-formatted as filled: the digits the portal will post are the digits asked for", () => {
@@ -1722,6 +1723,67 @@ describe("PrimeFaces InputMask readback", () => {
     ], window.location.href);
     expect(npi.value).toBe("");
     expect(applied.filled).toEqual([]);
-    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected" });
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("rejects a value a mask truncates (ZIP+4 into a 5-digit mask): the digits on the page are not the digits asked for", () => {
+    document.body.innerHTML = `<label for="zip">ZIP code</label><input id="zip" type="text" />`;
+    const zip = document.querySelector<HTMLInputElement>("#zip")!;
+    installInputMask(zip, (raw) => raw.replace(/\D/g, "").slice(0, 5), (m) => m.length === 5);
+    const applied = applyFillOnPage([
+      instr({ label: "ZIP code", selector: "#zip", value: "12345-6789", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(zip.value).toBe("12345");
+    expect(applied.filled).toEqual([]);
+    expect(applied.skipped.map((field) => field.reason)).toEqual(["field did not retain the requested value"]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("counts a mask that adds a literal as filled when the readback contains the requested digits (+1 (999) 999-9999)", () => {
+    document.body.innerHTML = `<label for="intl">Phone number</label><input id="intl" type="text" />`;
+    const intl = document.querySelector<HTMLInputElement>("#intl")!;
+    installInputMask(intl, (raw) => {
+      const digits = raw.replace(/\D/g, "").replace(/^1/, "").slice(0, 10);
+      return digits.length === 10 ? `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}` : digits;
+    }, (m) => m.length === 17);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#intl", value: "5555550100", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(intl.value).toBe("+1 (555) 555-0100");
+    expect(applied.filled).toEqual(["Phone number"]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "unverified", reasonCode: "readback_unavailable" });
+  });
+
+  it("rejects a value with no letters or digits into a mask that clears it: an empty readback never matches", () => {
+    document.body.innerHTML = `<label for="npi">Supervising physician NPI</label><input id="npi" type="text" />`;
+    const npi = document.querySelector<HTMLInputElement>("#npi")!;
+    installInputMask(npi, npiMask, (m) => m.length === 10);
+    const applied = applyFillOnPage([
+      instr({ label: "Supervising physician NPI", selector: "#npi", value: "--", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(npi.value).toBe("");
+    expect(applied.filled).toEqual([]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("keeps the prototype setter for an unmasked input with its own value accessor (a React-style value tracker)", () => {
+    document.body.innerHTML = `<label for="first">First name</label><input id="first" type="text" />`;
+    const first = document.querySelector<HTMLInputElement>("#first")!;
+    const proto = Object.getPrototypeOf(first) as object;
+    const native = Object.getOwnPropertyDescriptor(proto, "value")!;
+    const trackerWrites: string[] = [];
+    // React's inputValueTracking installs an own accessor to RECORD writes; a
+    // write through it would hide the change from the framework's onChange.
+    Object.defineProperty(first, "value", {
+      configurable: true,
+      get: () => native.get!.call(first) as string,
+      set(next: string) { trackerWrites.push(String(next)); native.set!.call(first, next); },
+    });
+    const applied = applyFillOnPage([
+      instr({ label: "First name", selector: "#first", value: "Taylor", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(first.value).toBe("Taylor");
+    expect(applied.filled).toEqual(["First name"]);
+    expect(trackerWrites).toEqual([]);
   });
 });

@@ -377,10 +377,23 @@ function hasInputMask(el: Fillable): el is HTMLInputElement {
 }
 
 /** A mask's readback is judged on content, not shape: "(555) 555-0100" and
- * "(555)555-0100" post the same digits, while "n/a" into a digit mask leaves
- * nothing, and a truncating mask keeps fewer characters than were asked for. */
+ * "(555)555-0100" post the same digits. Letters and digits in any script
+ * count ("José" truncated to "Jos" must not compare equal), case does not. */
 function maskContent(value: string): string {
-  return value.replace(/[^0-9a-z]/gi, "").toLowerCase();
+  return value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+/** True when the masked input holds what was asked for. The readback must
+ * CONTAIN the requested content — a mask may add literal characters
+ * ("+1 (999) 999-9999" posts a leading 1) — and both sides must be non-empty:
+ * "--" into a mask that clears to "" is a rejected write, not a match.
+ * Truncation ("12345-6789" into five digits) and leftover placeholders
+ * ("10/02/02__" for an ISO date) both fail because the requested digits are
+ * not all there. */
+function maskRetained(readback: string, requested: string): boolean {
+  const want = maskContent(requested);
+  const have = maskContent(readback);
+  return want.length > 0 && have.length > 0 && have.includes(want);
 }
 
 function fireChanged(el: HTMLElement): void {
@@ -762,7 +775,7 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   markAttempted();
   setNativeValue(el, nextValue);
   const retained = hasInputMask(el)
-    ? maskContent(el.value) === maskContent(nextValue)
+    ? maskRetained(el.value, nextValue)
     : el.value === nextValue;
   if (!retained) {
     return {
@@ -1728,7 +1741,9 @@ export async function applyFillSettled(
     const expected = target instanceof HTMLInputElement && target.type === "date"
       ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
       : instruction.value;
-    if (isInputOrTextarea && target.value !== expected) {
+    const reverted = (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      (hasInputMask(target) ? !maskRetained(target.value, expected) : target.value !== expected);
+    if (reverted) {
       rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
       continue;
     }
