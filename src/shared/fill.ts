@@ -2,6 +2,7 @@
 // field maps + profile values), content script (applies them to the page),
 // side panel (renders the outcome). Instructions carry only what the page
 // needs — selectors and final values — never tokens or auth material.
+import type { FillTimingContent } from "./fillTiming"; // SPIKE(fill-latency)
 import type { PortalFieldType } from "./apiTypes";
 import type { FillEventV2FieldOutcome, FillEventV2Metadata } from "./fillEventV2";
 import type { CanonicalWorkContextTuple, WorkContextValidationResponse } from "./workContext";
@@ -124,10 +125,16 @@ export interface ReportedField {
 // What the content script did with the instructions it was handed.
 export interface FillPageResult {
   filled: string[]; // labels
+  /** SPIKE(fill-latency): content-side durations, present only while the
+   * timing gate is on (`src/shared/fillTiming.ts`). Numbers and map ids only. */
+  timing?: FillTimingContent;
   attemptedLabels?: string[];
   /** Successful writes keyed by selector identity, never display label. */
   writes?: Array<{
     selector: string;
+    /** The instruction's map id, so the worker can tell two maps on one
+     * selector apart (a `label:` selector is not unique across pages). */
+    mapId?: string;
     kind: "static" | "ai";
     token?: string;
     confidence?: number;
@@ -295,7 +302,15 @@ export interface FillReportRecord {
 export type ContentRequest =
   | { type: "PING" }
   | { type: "APPLY_FILL"; instructions: FillInstruction[]; requireUniqueTarget?: boolean }
-  | { type: "PROBE_FILL"; instructions: FillProbeInstruction[] }
+  | {
+      type: "PROBE_FILL";
+      instructions: FillProbeInstruction[];
+      /** Default true: wait for the page's mutation-quiet window before
+       * resolving. The worker sends `false` only for its per-field re-probe of
+       * a target the batch probe already resolved (`FAST_REPROBE_ENABLED`);
+       * the result then reports `pageSettled: false`. */
+      settle?: boolean;
+    }
   | {
       type: "SCAN_UNMAPPED_CONTROLS";
       scanId: string;

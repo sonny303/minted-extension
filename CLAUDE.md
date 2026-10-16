@@ -114,7 +114,22 @@ bump_status? }`. Server sets org + user from the JWT.
   required (one of seven canonical types); the portal_submission-only fields
   are a loud 422 on this kind. Sets mirrored in `src/shared/structuredTouch.ts`.
 - **Fill-events body is camelCase** — `{ id, caseId, providerId, portalKey,
-fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`.
+fillMode, startedAt, completedAt, fieldsFilled, fieldsSkipped }`, plus
+  optional `systemTodayDate` — the canonical local `yyyy-mm-dd` that
+  `system.today` resolved to, sent ONLY when such a field was actually
+  written (one value per fill; the map's `transform` says how the page
+  spelled it). The panel 422s a non-calendar value and, without the column,
+  drops it and still records the fill (mintedpanel PR #523). Profile values
+  never ride the event.
+- **`system.today` is resolved on the DEVICE, never by the profile endpoint.**
+  `planFill` (`src/background/fill.ts`) injects the coordinator's local
+  calendar date as canonical `yyyy-mm-dd` (`localIsoToday`,
+  `src/shared/systemTokens.ts` — local parts, never `toISOString`, which is
+  already tomorrow in UTC after 7 pm Eastern) into the token map before the
+  field-map join, so the map's `transform` shapes it and a native
+  `input[type=date]` still gets the ISO form. The panel's catalog serves the
+  key; the quick-card picker is data-driven from the served catalog, so a
+  System family needs no extension change.
 - **Idempotency:** fill-events — the client-generated `id` is both idempotency
   key and row PK. Touches — `idempotency_id` becomes the anchor touch's PK; the
   worker reuses it on retries, and a replay short-circuits at the anchor
@@ -639,6 +654,20 @@ others is left alone and not counted.
   capture is deliberately shape-only. Documented in-code as a known gap.
 - **`PICK_ELEMENT` is the one async `ContentRequest`** (its listener returns
   true). `MATCH_SELECTOR` backs "Re-test on page".
+- **Fill timing is gated, off by default** (`src/shared/fillTiming.ts`,
+  touch points marked `SPIKE(fill-latency)`). When on, the worker logs a
+  value-free per-field table (ids + ms). The per-field fresh `PROBE_FILL`
+  settle wait (120–700 ms × every field after the first) is the measured top
+  cost of a fill — see `docs/fill-latency-spike.md`; the harness is
+  `FILL_LATENCY_SPIKE=1 npx vitest run src/harness/fillLatencySpike.test.ts`.
+- **`FAST_REPROBE_ENABLED` is OFF** (`src/shared/config.ts`). On, that
+  per-field re-probe goes out as `PROBE_FILL { settle: false }` (worker↔content
+  only, never an /api contract; its result reports `pageSettled: false`) and
+  is re-sent settled only when the fast probe finds no unique target. The
+  batch probe and the rescue probe for a write-revealed field stay settled.
+  `src/harness/freshReprobe.test.ts` pins the outcomes flag off and on; it
+  stays off until a staging fill of a real form shows identical
+  filled/skipped lists both ways.
 
 ## Skills reference
 

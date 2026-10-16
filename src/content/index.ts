@@ -125,7 +125,7 @@ if (!contentGlobal.__mintedPanelContentInstalled) {
       if (message?.type === "PROBE_FILL") {
         // The bounded mutation-quiet wait lets delayed panels render before a
         // selector miss is classified. The request contains shape only.
-        probeFillOnPage(message.instructions ?? [])
+        probeFillOnPage(message.instructions ?? [], null, { settle: message.settle !== false })
           .then((result) => sendResponse({ ok: true, data: result }))
           .catch(() => sendResponse({ ok: false, error: "Could not inspect this form" }));
         return true;

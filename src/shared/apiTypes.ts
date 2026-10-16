@@ -189,7 +189,9 @@ export interface ProviderProfileResponse {
 // this repo used to carry in quickCards.ts). The catalog is the SINGLE source
 // for the picker AND the PUT validator, served together so they can never
 // disagree. `group` is the token family (provider/group/facility/license/
-// assignment/groupInsurance/user); `groupLabel` is its section heading.
+// assignment/groupInsurance/user, and `system` for device-resolved tokens
+// such as `system.today`); `groupLabel` is its section heading. The picker
+// renders whatever families the server serves — no local family list.
 // GET /api/portals — the DB-driven payer-portal registry (2026-07-28), so
 // portal identity stops being a hardcoded list in this bundle. Own-org rows
 // plus global (orgId null) registry rows, the shared-catalog pattern the
@@ -227,6 +229,10 @@ export interface QuickCardCatalogField {
   label: string;
   group: string;
   groupLabel: string;
+  /** `"device"` = resolved on the coordinator's device at fill time, never by
+   * the profile endpoint (`system.today`, mintedpanel PR #523). Optional:
+   * an older panel sends no key. */
+  resolution?: "device";
 }
 
 export interface ViewPrefsResponse {
@@ -575,4 +581,12 @@ export interface FillEventBody {
   completedAt: string;
   fieldsFilled: number;
   fieldsSkipped: unknown;
+  /** The canonical LOCAL `yyyy-mm-dd` the device resolved `system.today` to,
+   * sent only when a `system.today` field was actually written (every such
+   * field in one fill shares the date; a date is not PHI). Panel-first
+   * contract (mintedpanel PR #523): a value that is not a calendar date is a
+   * 422; an older panel without the column drops it and still records the
+   * fill. The map's `transform` says how the page spelled it. Never sent as
+   * null: absent means no such field was written. */
+  systemTodayDate?: string;
 }
