@@ -8,7 +8,7 @@ import ts from "typescript";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import type { FillSummary, ReportedField } from "../shared/fill";
-import { leftBlankLine } from "../shared/leaveBlank";
+import { isNothingToFillRun, leftBlankLine } from "../shared/leaveBlank";
 
 const source = readFileSync("src/sidepanel/main.ts", "utf8");
 const tree = ts.createSourceFile("main.ts", source, ts.ScriptTarget.Latest, true);
@@ -97,6 +97,19 @@ describe("fill result and leave_blank maps", () => {
     expect(fillLeftBlankBox.hidden).toBe(false);
     expect(fillLeftBlankBox.querySelectorAll("li")).toHaveLength(3);
     expect(fillLeftBlankBox.textContent).toContain("Middle Name - intentionally left blank");
+  });
+
+  it("treats a run whose only maps were left blank as nothing to fill, not a failed fill", () => {
+    expect(isNothingToFillRun(summary({ filled: 0, fieldsAttempted: 0, leftBlank }))).toBe(true);
+    expect(isNothingToFillRun(summary({ filled: 0, attemptedLabels: [], leftBlank }))).toBe(true);
+    // Something was attempted, or went missing, or there is nothing left blank: the old rules apply.
+    expect(isNothingToFillRun(summary({ filled: 0, fieldsAttempted: 2, leftBlank }))).toBe(false);
+    expect(isNothingToFillRun(summary({ filled: 1, fieldsAttempted: 1, leftBlank }))).toBe(false);
+    expect(isNothingToFillRun(summary({
+      filled: 0, fieldsAttempted: 0, leftBlank,
+      skipped: [{ label: "NPI", reason: "field not found on this page", kind: "skipped" }],
+    }))).toBe(false);
+    expect(isNothingToFillRun(summary({ filled: 0, fieldsAttempted: 0 }))).toBe(false);
   });
 
   it("writes the muted count line the way the panel does, and nothing when there are none", () => {

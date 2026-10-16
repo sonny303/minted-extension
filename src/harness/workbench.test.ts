@@ -118,6 +118,7 @@ interface MockApi {
     touches: Map<string, unknown>;
     touchBodies: Array<Record<string, unknown>>;
     fillSessions: Map<string, Record<string, unknown>>;
+    fillEventSchemaVersion: number | null;
     learnedMaps: Map<string, Record<string, unknown>>;
     learningRequests: Array<{ body: Record<string, unknown>; orgId: string | null }>;
     viewPrefs: Map<string, string[]>;
@@ -3601,5 +3602,162 @@ describe("Work across pages — recovered fill, the auto-start bump, refused log
     await expect(handleRequest({ ...request, providerId: FIXTURES.PROVIDER2_ID }))
       .rejects.toThrow(/does not match the exact Work context/);
     expect(stub.sessionStore.get(ACTIVE_WORK)).toMatchObject({ boundTabId: TAB_ID });
+  });
+});
+
+// Leave blank on the wire (PR #108): a reviewed leave_blank map is planned
+// for nothing, reported on the summary's own `leftBlank` list, and NEVER
+// posted as a fill-event skip, legacy or V2. The panel's formDrift reads
+// fields_skipped, so a leave_blank row there would date a mapping as drift
+// or a manual item. This pins the shape the panel depends on.
+describe("Leave blank — never a fill-event skip, always on the summary", () => {
+  const TAB_ID = 93;
+  const TAB_URL = "https://portal.example.com/enroll/form";
+  const LEAVE_BLANK_MAP_ID = "6c1b2f8e-2b1a-4c3d-8e9f-0a1b2c3d4e5f";
+  const UUID_FIXTURE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  let previousSendMessage: typeof chrome.tabs.sendMessage;
+  let previousTabGet: typeof chrome.tabs.get;
+  let previousGetAllFrames: typeof chrome.webNavigation.getAllFrames;
+  let originalMaps: typeof mock.state.fieldMaps;
+
+  beforeEach(async () => {
+    stub.reset();
+    const { handleRequest } = await import("../background/index");
+    await handleRequest({ type: "SET_ACTIVE_ORG", orgId: FIXTURES.PRIMARY_ORG });
+    await handleRequest({
+      type: "ENTER_ACTIVE_CASE",
+      caseId: FIXTURES.CASE_ID,
+      providerId: FIXTURES.PROVIDER_ID,
+      orgId: FIXTURES.PRIMARY_ORG,
+    });
+    await handleRequest({ type: "SET_SELECTED_PROVIDER", providerId: FIXTURES.PROVIDER_ID });
+    await handleRequest({ type: "SET_SELECTED_CASE", providerId: FIXTURES.PROVIDER_ID, caseId: FIXTURES.CASE_ID });
+    await handleRequest({ type: "SET_SELECTED_FACILITY", providerId: FIXTURES.PROVIDER_ID, facilityId: FIXTURES.FACILITY_ID });
+
+    stub.setQueryTabs([{ id: TAB_ID, url: TAB_URL, active: true, windowId: 1 } as chrome.tabs.Tab]);
+    previousSendMessage = chrome.tabs.sendMessage;
+    previousTabGet = chrome.tabs.get;
+    previousGetAllFrames = chrome.webNavigation.getAllFrames;
+    chrome.tabs.get = (async (tabId: number) => ({ id: tabId, url: TAB_URL, active: true, windowId: 1 })) as typeof chrome.tabs.get;
+    chrome.webNavigation.getAllFrames = (async () => [{ frameId: 0, url: TAB_URL }]) as unknown as typeof chrome.webNavigation.getAllFrames;
+    // The content script writes every instruction it is handed; the map
+    // under test must never be one of them.
+    chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown) => {
+      const message = rawMessage as {
+        type: string;
+        instructions?: Array<{
+          mapId: string; label: string; selector: string;
+          telemetry?: { targetKey: string; frameKey: string; stepKey: string | null };
+        }>;
+      };
+      if (message.type === "PING") return { ok: true };
+      if (message.type === "PROBE_FILL") {
+        return {
+          ok: true,
+          data: (message.instructions ?? []).map(({ mapId }) => ({
+            mapId, pageStatus: "eligible", targetStatus: "unique", pageSettled: true, radioGroup: false, pageFields: 4,
+          })),
+        };
+      }
+      if (message.type === "APPLY_FILL") {
+        const instructions = message.instructions ?? [];
+        return {
+          ok: true,
+          data: {
+            filled: instructions.map((i) => i.label),
+            attemptedLabels: instructions.map((i) => i.label),
+            writes: instructions.map((i) => ({ selector: i.selector, kind: "static" })),
+            skipped: [],
+            pageFields: 4,
+            // Echo the worker's own run-local identities, as the content
+            // producer does; non-UUID fixture map ids normalize to null.
+            fieldOutcomes: instructions.flatMap((i) => i.telemetry ? [{
+              mapId: UUID_FIXTURE_RE.test(i.mapId) ? i.mapId : null,
+              targetKey: i.telemetry.targetKey, frameKey: i.telemetry.frameKey, stepKey: i.telemetry.stepKey,
+              attempted: true, outcome: "unverified", reasonCode: "readback_unavailable",
+            }] : []),
+          },
+        };
+      }
+      return { ok: true, data: null };
+    }) as typeof chrome.tabs.sendMessage;
+
+    originalMaps = [...mock.state.fieldMaps];
+    const base = originalMaps[0];
+    if (!base) throw new Error("mock panel needs its base approved field map");
+    mock.state.fieldMaps.push({
+      ...base,
+      id: LEAVE_BLANK_MAP_ID,
+      selector: "#middleName",
+      source: "leave_blank",
+      token: null,
+      hardcodedValue: null,
+      status: "approved",
+    });
+  });
+
+  afterEach(() => {
+    chrome.tabs.sendMessage = previousSendMessage;
+    chrome.tabs.get = previousTabGet;
+    chrome.webNavigation.getAllFrames = previousGetAllFrames;
+    mock.state.fieldMaps.splice(0, mock.state.fieldMaps.length, ...originalMaps);
+    mock.state.fillEventSchemaVersion = null;
+  });
+
+  const request = () => ({
+    type: "FILL" as const, tabId: TAB_ID, providerId: FIXTURES.PROVIDER_ID,
+    caseId: FIXTURES.CASE_ID, portalKey: FIXTURES.PORTAL_KEY,
+    portalId: "portal-1", mappingGeneration: 1, state: "CO", facilityId: FIXTURES.FACILITY_ID,
+  });
+
+  // The mock stores the POSTed body as the session row (scripts/mock-panel-api.mjs,
+  // /api/fill-events), so the row IS what the panel received. The V2 block is
+  // spread onto the body at the top level (postFillEvent, api.ts).
+  const postedBody = (fillSessionId: string | null) => mock.state.fillSessions.get(fillSessionId ?? "") as {
+    schemaVersion?: number;
+    fieldsSkipped?: Array<{ mapId?: string; kind?: string; reason?: string }>;
+    fieldOutcomes?: Array<{ mapId: string | null; outcome: string; reasonCode: string | null }>;
+  } | undefined;
+
+  it("keeps the map out of the legacy fieldsSkipped body and never writes the control", async () => {
+    const { handleRequest } = await import("../background/index");
+    const summary = await handleRequest(request()) as import("../shared/fill").FillSummary;
+
+    expect(summary.eventRecorded).toBe(true);
+    expect(summary.leftBlank).toEqual([
+      { label: "#middleName", reason: "intentionally left blank", mapId: LEAVE_BLANK_MAP_ID, kind: "leave_blank" },
+    ]);
+    expect(summary.filledLabels).not.toContain("#middleName");
+    expect(summary.manual.map((f) => f.mapId)).not.toContain(LEAVE_BLANK_MAP_ID);
+    expect(summary.skipped.map((f) => f.mapId)).not.toContain(LEAVE_BLANK_MAP_ID);
+    expect(summary.fieldOutcomes?.map((o) => o.mapId)).not.toContain(LEAVE_BLANK_MAP_ID);
+
+    const posted = postedBody(summary.fillSessionId);
+    expect(posted).toBeDefined();
+    expect(posted?.schemaVersion).toBeUndefined();
+    expect(posted?.fieldOutcomes).toBeUndefined();
+    // The data and mapping gaps still ride the legacy skip list; the
+    // leave-blank row does not, under any kind.
+    expect(posted?.fieldsSkipped?.length).toBeGreaterThan(0);
+    expect(posted?.fieldsSkipped?.map((f) => f.mapId)).not.toContain(LEAVE_BLANK_MAP_ID);
+    expect(posted?.fieldsSkipped?.map((f) => f.kind)).not.toContain("leave_blank");
+  });
+
+  it("keeps the map out of the V2 field outcomes when the panel advertises V2", async () => {
+    mock.state.fillEventSchemaVersion = 2;
+    const { handleRequest } = await import("../background/index");
+    const summary = await handleRequest(request()) as import("../shared/fill").FillSummary;
+
+    expect(summary.eventRecorded).toBe(true);
+    expect(summary.schemaVersion).toBe(2);
+    expect(summary.leftBlank?.map((f) => f.mapId)).toEqual([LEAVE_BLANK_MAP_ID]);
+
+    const posted = postedBody(summary.fillSessionId);
+    expect(posted?.schemaVersion).toBe(2);
+    expect(posted?.fieldsSkipped).toEqual([]);
+    const outcomes = posted?.fieldOutcomes ?? [];
+    expect(outcomes.length).toBeGreaterThan(0);
+    expect(outcomes.map((o) => o.mapId)).not.toContain(LEAVE_BLANK_MAP_ID);
+    expect(outcomes.map((o) => o.reasonCode)).not.toContain("manual_required");
   });
 });

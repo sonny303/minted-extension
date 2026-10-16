@@ -411,13 +411,6 @@ describe("computeCoverage", () => {
 });
 
 describe("legacy fill-event projection", () => {
-  it("names a leave_blank row truthfully if one is ever projected", () => {
-    expect(sanitizeLegacyFields([
-      { label: "Middle Name", reason: "intentionally left blank", kind: "leave_blank", mapId: "lb" },
-    ])).toEqual([
-      { label: "Middle Name", reason: "intentionally left blank", kind: "leave_blank", mapId: "lb" },
-    ]);
-  });
 
   it("preserves qualified drift and keeps unknown context in the old no-evidence bucket", () => {
     const projected = sanitizeLegacyFields([

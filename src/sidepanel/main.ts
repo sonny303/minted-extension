@@ -184,7 +184,7 @@ import {
   SANDBOX_UNAVAILABLE_NOTE,
   type SandboxFillSummary,
 } from "../shared/sandbox";
-import { leftBlankLine } from "../shared/leaveBlank";
+import { isNothingToFillRun, leftBlankLine, NOTHING_TO_FILL_HEADLINE } from "../shared/leaveBlank";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -2671,12 +2671,21 @@ function renderFillSummary(
   const payer = selectedCaseId() != null ? payerLabel() : (portal?.label ?? "payer");
   const fillId = summary.attemptId ?? summary.fillSessionId;
   const needs = needsYou(summary);
+  const leftBlank = leftBlankLine(summary.leftBlank);
+  // Every approved map on this form was a reviewed leave-blank decision:
+  // nothing attempted, nothing missing. The right answer, not a failed fill.
+  const nothingToFill = isNothingToFillRun(summary);
 
   if (summary.filled > 0) {
     const noun = summary.filled === 1 ? "field" : "fields";
     fillNotice(fillSummaryBox, "ok", [
       { text: `Filled ${summary.filled} ${noun} on this page.`, strong: true },
       "Green outline on the page = filled by Minted.",
+    ]);
+  } else if (nothingToFill) {
+    fillNotice(fillSummaryBox, "neutral", [
+      { text: NOTHING_TO_FILL_HEADLINE, strong: true },
+      `${leftBlank}.`,
     ]);
   } else {
     fillNotice(fillSummaryBox, "danger", [
@@ -2696,15 +2705,15 @@ function renderFillSummary(
   }
 
   // Reviewed "leave blank" maps are not hers to act on, but an empty field
-  // she expected to see filled would read as a miss: say it was on purpose.
-  const leftBlank = leftBlankLine(summary.leftBlank);
-  fillLeftBlankLine.textContent = leftBlank ? `${leftBlank}.` : "";
-  fillLeftBlankLine.hidden = leftBlank == null;
+  // she expected to see filled would read as a miss: say it was on purpose
+  // (the headline already says so when there was nothing else to fill).
+  fillLeftBlankLine.textContent = leftBlank && !nothingToFill ? `${leftBlank}.` : "";
+  fillLeftBlankLine.hidden = leftBlank == null || nothingToFill;
 
-  if (summary.filled > 0) {
+  if (summary.filled > 0 || nothingToFill) {
     const steps: string[] = [];
     if (needs.length > 0) steps.push(`Fill the ${needs.length === 1 ? "field" : `${needs.length} fields`} above on the ${payer} page.`);
-    steps.push("Look over the green fields.");
+    if (summary.filled > 0) steps.push("Look over the green fields.");
     steps.push(`Click Continue or Submit on the ${payer} page.`);
     fillNotice(fillYourTurn, "neutral", [
       { text: "Your turn", strong: true },
@@ -2733,8 +2742,8 @@ function renderFillSummary(
   fillEventWarn.hidden = statusLines.length === 0;
   gapFlag.hidden = true;
 
-  fillAgainBtn.textContent = summary.filled > 0 ? "Fill this page again" : "Try again";
-  fillAgainBtn.className = summary.filled > 0 ? "secondary" : "primary";
+  fillAgainBtn.textContent = summary.filled > 0 || nothingToFill ? "Fill this page again" : "Try again";
+  fillAgainBtn.className = summary.filled > 0 || nothingToFill ? "secondary" : "primary";
 
   renderAiReview(AI_FILL_ENABLED ? (summary.aiReview ?? null) : null, restored ?? null);
   renderFillDetails(summary);

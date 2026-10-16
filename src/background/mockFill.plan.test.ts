@@ -20,7 +20,7 @@ function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "select
     portalKey: "demo",
     urlPattern: null,
     pageStep: null,
-    mapType: "web",
+    mapType: over.mapType ?? "web",
     selector: over.selector,
     selectorFallbacks: null,
     source: over.source ?? "token",
@@ -63,6 +63,17 @@ describe("planMockFill", () => {
     expect(plan.gaps).toEqual([]);
     expect(plan.leftBlank).toEqual([
       { label: "Middle Name", reason: "intentionally left blank", mapId: "blank", kind: "leave_blank" },
+    ]);
+  });
+
+  it("reports a non-web leave_blank map as a gap, the same as planFill", () => {
+    const plan = planMockFill([
+      map({ id: "pdf-blank", selector: "label:Middle Name", source: "leave_blank", token: null, mapType: "pdf" }),
+    ]);
+    expect(plan.instructions).toEqual([]);
+    expect(plan.leftBlank).toEqual([]);
+    expect(plan.gaps).toEqual([
+      expect.objectContaining({ mapId: "pdf-blank", reason: "This map is not a web field" }),
     ]);
   });
 

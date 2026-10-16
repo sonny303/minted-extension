@@ -231,7 +231,6 @@ function safeLegacyReason(field: ReportedField): string {
     case "file":
     case "review": return "manual review is required";
     case "unverified": return "field could not be verified; review it on the portal";
-    case "leave_blank": return "intentionally left blank";
     default:
       return /option|dropdown|radio/i.test(field.reason)
         ? "field option mismatch; review options on the portal"

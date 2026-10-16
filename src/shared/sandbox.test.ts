@@ -182,6 +182,28 @@ describe("sandboxFillView (G4)", () => {
     expect(shownText(view).join(" ")).not.toContain("Middle Name");
   });
 
+  it("reads neutral, not red, when every map was left blank on purpose", () => {
+    const view = sandboxFillView(summary({
+      fieldsAttempted: 0,
+      leftBlank: [field("leave_blank", "Middle Name"), field("leave_blank", "Suffix")],
+    }));
+    expect(view).toEqual({
+      filled: 0,
+      tone: "neutral",
+      lines: ["Nothing to fill on this page.", "2 left blank on purpose."],
+      skipLines: [],
+      recordLine: null,
+    });
+    // A planned field that went missing is still the drift case.
+    const drifted = sandboxFillView(summary({
+      fieldsAttempted: 0,
+      skipped: [field("skipped", "NPI")],
+      leftBlank: [field("leave_blank", "Middle Name")],
+    }));
+    expect(drifted.tone).toBe("danger");
+    expect(drifted.skipLines).toContain("1 left blank on purpose.");
+  });
+
   it("adds one neutral line per kind of skip, counts only", () => {
     const view = sandboxFillView(summary({
       skipped: [field("skipped", "NPI"), field(undefined, "Tax ID")],

@@ -14,6 +14,26 @@ import type { ReportedField } from "./fill";
 export const LEAVE_BLANK_KIND = "leave_blank" as const;
 export const LEAVE_BLANK_REASON = "intentionally left blank";
 
+/** A run where the form's only approved maps were leave-blank decisions:
+ * nothing was attempted, nothing went missing, and at least one field was
+ * left blank on purpose. That is the RIGHT answer, not a failed fill, so the
+ * result reads neutral ("nothing to fill") rather than "the portal may have
+ * changed" with a support button. A skipped (not found) row means something
+ * WAS planned and missed, which is the drift case and stays red. */
+export function isNothingToFillRun(summary: {
+  filled: number;
+  fieldsAttempted?: number;
+  attemptedLabels?: readonly string[];
+  skipped: readonly ReportedField[];
+  leftBlank?: readonly ReportedField[];
+}): boolean {
+  const attempted = summary.fieldsAttempted ?? summary.attemptedLabels?.length ?? 0;
+  return (summary.leftBlank?.length ?? 0) > 0 && summary.filled === 0 && attempted === 0 &&
+    summary.skipped.length === 0;
+}
+
+export const NOTHING_TO_FILL_HEADLINE = "Nothing to fill on this page.";
+
 /** The muted summary line: "3 left blank on purpose". Null when none. */
 export function leftBlankLine(fields: readonly ReportedField[] | number | undefined): string | null {
   const count = typeof fields === "number" ? fields : fields?.length ?? 0;

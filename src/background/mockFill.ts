@@ -49,6 +49,12 @@ export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
   for (const map of maps) {
     const classification = classifyFieldMap(map);
     if (classification.decision === "human" || classification.decision === "stale") continue;
+    // Same precedence as planFill: only a WEB map can be left blank on a
+    // web page. A non-web leave_blank map is a gap, not a decision honoured.
+    if (map.mapType !== "web") {
+      gaps.push(gapFor(map, "This map is not a web field"));
+      continue;
+    }
     if (classification.decision === "blank") {
       leftBlank.push(gapFor(map, LEAVE_BLANK_REASON, LEAVE_BLANK_KIND));
       continue;
@@ -59,10 +65,6 @@ export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
     }
     if (classification.needsDecision || classification.decision === "invalid") {
       gaps.push(gapFor(map, classification.reason));
-      continue;
-    }
-    if (map.mapType !== "web") {
-      gaps.push(gapFor(map, "This map is not a web field"));
       continue;
     }
 
