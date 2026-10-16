@@ -94,6 +94,7 @@ const singleProbes = (log: BridgedMessage[]): BridgedMessage[] => log.filter((m)
 
 describe.each([
   { fastReprobe: false },
+  { fastReprobe: true },
 ])("fresh re-probe pins (FAST_REPROBE_ENABLED = $fastReprobe)", ({ fastReprobe }) => {
   let stack: FillStack;
   let log: BridgedMessage[];
@@ -144,7 +145,9 @@ describe.each([
     // One batch probe, the settled rescue probe that found the revealed
     // panel, and the pre-apply refresh for the second field.
     expect(count(log, "PROBE_FILL")).toBe(3);
-    expect(singleProbes(log)).toHaveLength(2);
+    // The rescue probe stays settled either way; only the pre-apply refresh
+    // goes out unsettled when the flag is on (and finds the panel at once).
+    expect(singleProbes(log).map((m) => m.settle)).toEqual([undefined, fastReprobe ? false : undefined]);
   });
 
   it("(b) ends a truly absent field as not found with settled evidence", async () => {
@@ -194,6 +197,9 @@ describe.each([
       // fillable field after the first.
       expect(log.filter((m) => m.type === "PROBE_FILL" && m.instructions === 72)).toHaveLength(1);
       expect(singleProbes(log)).toHaveLength(69);
+      // Flag on: every refresh went out unsettled and none needed the settled
+      // fallback. Flag off: every refresh is the settled probe, as before.
+      expect(singleProbes(log).map((m) => m.settle)).toEqual(Array.from({ length: 69 }, () => (fastReprobe ? false : undefined)));
     } finally {
       stack.timing.setFillTimingEnabled(false);
       page.dispose();

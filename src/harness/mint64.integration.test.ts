@@ -14,6 +14,7 @@ const holder = vi.hoisted(() => ({ baseUrl: "" }));
 vi.mock("../shared/config", () => ({
   SUPABASE_URL: "https://stub.supabase.invalid",
   SUPABASE_ANON_KEY: "stub-anon-key",
+  FAST_REPROBE_ENABLED: false,
   get API_BASE_URL() {
     return holder.baseUrl;
   },

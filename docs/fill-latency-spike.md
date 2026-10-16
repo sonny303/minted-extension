@@ -2,6 +2,11 @@
 
 **Date:** 2026-10-15 · **Branch:** `claude/spike-fill-latency-0fb0df` · **Status:** measurement only, nothing optimised.
 
+**Update, 2026-10-15:** the proposal below is implemented behind
+`FAST_REPROBE_ENABLED` (`src/shared/config.ts`, OFF) with outcome pins in
+`src/harness/freshReprobe.test.ts`; the harness now runs every scenario flag
+off and on.
+
 A real fill of the BCBS Kansas Network Enrollment Form on 2026-10-15 took
 95 s for 70 attempted fields (about 1.3 s per field), with fields appearing one
 at a time. This spike instruments the static fill path and measures it against

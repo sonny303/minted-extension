@@ -631,6 +631,14 @@ others is left alone and not counted.
   settle wait (120–700 ms × every field after the first) is the measured top
   cost of a fill — see `docs/fill-latency-spike.md`; the harness is
   `FILL_LATENCY_SPIKE=1 npx vitest run src/harness/fillLatencySpike.test.ts`.
+- **`FAST_REPROBE_ENABLED` is OFF** (`src/shared/config.ts`). On, that
+  per-field re-probe goes out as `PROBE_FILL { settle: false }` (worker↔content
+  only, never an /api contract; its result reports `pageSettled: false`) and
+  is re-sent settled only when the fast probe finds no unique target. The
+  batch probe and the rescue probe for a write-revealed field stay settled.
+  `src/harness/freshReprobe.test.ts` pins the outcomes flag off and on; it
+  stays off until a staging fill of a real form shows identical
+  filled/skipped lists both ways.
 
 ## Skills reference
 

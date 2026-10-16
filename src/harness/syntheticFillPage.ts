@@ -180,7 +180,7 @@ export function installContentBridge(
     await delay(IPC_HOP_MS);
     let response: unknown;
     if (message.type === "PROBE_FILL") {
-      response = { ok: true, data: await engine.probeFillOnPage((message.instructions ?? []) as Parameters<FillStack["probeFillOnPage"]>[0]) };
+      response = { ok: true, data: await engine.probeFillOnPage((message.instructions ?? []) as Parameters<FillStack["probeFillOnPage"]>[0], null, { settle: message.settle !== false }) };
     } else if (message.type === "APPLY_FILL") {
       response = { ok: true, data: await engine.applyFillSettled((message.instructions ?? []) as FillInstruction[], message.requireUniqueTarget === true) };
     } else {

@@ -14,6 +14,7 @@ import { createFillEventV2OpaqueKey, isFillEventV2FieldOutcome, type FillEventV2
 import { isExactFillPageIdentity, OTHER_PAGE_REASON, PAGE_UNKNOWN_REASON } from "../shared/fillPage";
 import type { ControlSummary } from "../shared/nanoAi";
 import { pageScopeMatches } from "../shared/pageScope";
+import { FAST_REPROBE_ENABLED } from "../shared/config";
 import { fillTimingEnabled, fillTimingNow, reportFillTiming, type FillTimingRow } from "../shared/fillTiming"; // SPIKE(fill-latency)
 
 export interface TabFrame {
@@ -824,27 +825,36 @@ export async function applyFillAcrossFrames(
     row.validateMs = fillTimingNow() - validateStartedAt; // SPIKE(fill-latency)
     const freshProbeStartedAt = fillTimingNow(); // SPIKE(fill-latency)
     if (priorApplyMayHaveChangedPage) {
-      try {
-        const freshProbeRaw = (await sendToFrame(tabId, targetFrame.frameId, {
-          type: "PROBE_FILL",
-          instructions: [{
-            mapId: instruction.mapId,
-            probeKey: targetKeys.get(instruction) as string,
-            selector: instruction.selector,
-            selectorFallbacks: instruction.selectorFallbacks,
-            fieldType: instruction.fieldType,
-            pageStep: instruction.pageStep,
-          }],
-        })) as { ok?: boolean; data?: unknown } | undefined;
-        if (freshProbeRaw?.ok && Array.isArray(freshProbeRaw.data)) {
-          const freshProbe = freshProbeRaw.data.find((r): r is FillProbeResult => isFillProbeResult(r) && r.mapId === instruction.mapId);
-          if (freshProbe && freshProbe.targetStatus === "unique") {
-            targetFrame.probe = freshProbe;
+      const freshProbeInstruction: FillProbeInstruction = {
+        mapId: instruction.mapId,
+        probeKey: targetKeys.get(instruction) as string,
+        selector: instruction.selector,
+        selectorFallbacks: instruction.selectorFallbacks,
+        fieldType: instruction.fieldType,
+        pageStep: instruction.pageStep,
+      };
+      const sendFreshProbe = async (settle: boolean): Promise<FillProbeResult | null> => {
+        try {
+          const freshProbeRaw = (await sendToFrame(tabId, targetFrame.frameId, {
+            type: "PROBE_FILL",
+            instructions: [freshProbeInstruction],
+            ...(settle ? {} : { settle: false }),
+          })) as { ok?: boolean; data?: unknown } | undefined;
+          if (freshProbeRaw?.ok && Array.isArray(freshProbeRaw.data)) {
+            return freshProbeRaw.data.find((r): r is FillProbeResult => isFillProbeResult(r) && r.mapId === instruction.mapId) ?? null;
           }
+        } catch {
+          // proceed with original probe
         }
-      } catch {
-        // proceed with original probe
-      }
+        return null;
+      };
+      // Two-stage re-probe (FAST_REPROBE_ENABLED): an earlier write in this
+      // run rarely moves THIS target, so read the page as it is first and pay
+      // for the settled probe only when that finds no unique target. With the
+      // flag off the settled probe is the only one, exactly as before.
+      let freshProbe = FAST_REPROBE_ENABLED ? await sendFreshProbe(false) : null;
+      if (freshProbe?.targetStatus !== "unique") freshProbe = await sendFreshProbe(true);
+      if (freshProbe?.targetStatus === "unique") targetFrame.probe = freshProbe;
     }
     row.freshProbeMs = fillTimingNow() - freshProbeStartedAt; // SPIKE(fill-latency)
     try {

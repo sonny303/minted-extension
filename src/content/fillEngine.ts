@@ -963,8 +963,11 @@ async function waitForPageSettled(quietMs = 120, maxWaitMs = 700): Promise<boole
 export async function probeFillOnPage(
   instructions: FillProbeInstruction[],
   explicitPageUrl: string | null = null,
+  options: { settle?: boolean } = {},
 ): Promise<FillProbeResult[]> {
-  const pageSettled = await waitForPageSettled();
+  // `settle: false` is the worker's fast re-probe of a target it already
+  // resolved once this run: read the page as it is now, and say so.
+  const pageSettled = options.settle === false ? false : await waitForPageSettled();
   pruneProbedTargets();
   const mutationWatchAvailable = ensureProbeMutationObserver();
   const pageUrl = explicitPageUrl ?? (typeof location !== "undefined" ? location.href : null);

@@ -285,7 +285,15 @@ export interface FillReportRecord {
 export type ContentRequest =
   | { type: "PING" }
   | { type: "APPLY_FILL"; instructions: FillInstruction[]; requireUniqueTarget?: boolean }
-  | { type: "PROBE_FILL"; instructions: FillProbeInstruction[] }
+  | {
+      type: "PROBE_FILL";
+      instructions: FillProbeInstruction[];
+      /** Default true: wait for the page's mutation-quiet window before
+       * resolving. The worker sends `false` only for its per-field re-probe of
+       * a target the batch probe already resolved (`FAST_REPROBE_ENABLED`);
+       * the result then reports `pageSettled: false`. */
+      settle?: boolean;
+    }
   | {
       type: "SCAN_UNMAPPED_CONTROLS";
       scanId: string;
