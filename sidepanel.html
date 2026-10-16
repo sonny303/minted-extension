@@ -141,6 +141,7 @@
                  to guess. -->
             <div id="mock-dry-run-skipped" hidden></div>
             <div id="mock-dry-run-gaps" hidden></div>
+            <div id="mock-dry-run-left-blank" hidden></div>
             <p class="btn-note">
               Review the filled form after a successful dry run before marking it proven.
             </p>
@@ -416,6 +417,9 @@
                   <p id="fill-report-time" class="lbl" hidden></p>
                   <div id="fill-summary" class="notice notice-ok" role="status" aria-live="polite"></div>
                   <div id="fill-manual" class="notice notice-warn" hidden></div>
+                  <!-- Reviewed "leave blank" maps: a muted count, never a
+                       needs-you row (src/shared/leaveBlank.ts). -->
+                  <p id="fill-left-blank" class="status-line hint" hidden></p>
                   <div id="fill-your-turn" class="notice notice-neutral" hidden></div>
                   <p id="fill-event-warn" class="status-line" hidden></p>
                   <div id="gap-flag" class="gap-flag" hidden></div>
@@ -430,6 +434,7 @@
                     <div id="fill-attempted" class="bucket bucket-skipped" hidden></div>
                     <div id="fill-not-checked" class="bucket bucket-skipped" hidden></div>
                     <div id="fill-skipped" class="bucket bucket-skipped" hidden></div>
+                    <div id="fill-left-blank-box" class="bucket bucket-skipped" hidden></div>
                     <!-- AI is off in 0.1.8 (AI_FILL_ENABLED); kept for its return. -->
                     <div id="fill-ai-review" class="ai-review" hidden>
                       <p id="fill-ai-status" class="ai-review-status"></p>

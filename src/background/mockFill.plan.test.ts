@@ -53,6 +53,19 @@ describe("planMockFill", () => {
     ]);
   });
 
+  it("plans nothing for a leave_blank map and reports it apart from gaps", () => {
+    const plan = planMockFill([
+      map({ id: "token", selector: "label:First Name", token: "provider.firstName" }),
+      map({ id: "blank", selector: "label:Middle Name", source: "leave_blank", token: null }),
+    ]);
+
+    expect(plan.instructions.map((i) => i.mapId)).toEqual(["token"]);
+    expect(plan.gaps).toEqual([]);
+    expect(plan.leftBlank).toEqual([
+      { label: "Middle Name", reason: "intentionally left blank", mapId: "blank", kind: "leave_blank" },
+    ]);
+  });
+
   it("fills fixed values with transforms and reports file fields", () => {
     const plan = planMockFill([
       map({

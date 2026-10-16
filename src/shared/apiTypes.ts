@@ -45,7 +45,7 @@ export interface ApiEnvelope<T> {
 
 export type ProviderStatus = "onboarding" | "active" | "terminated";
 
-export type PortalFieldMapSource = "token" | "manual" | "manual_partial" | "hardcoded";
+export type PortalFieldMapSource = "token" | "manual" | "manual_partial" | "hardcoded" | "leave_blank";
 export type PortalFieldMapStatus = "proposed" | "approved" | "retired";
 export type FillMode = "web" | "pdf";
 export type PortalFieldType = "text" | "select" | "radio" | "checkbox" | "date" | "file";

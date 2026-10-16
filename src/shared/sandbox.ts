@@ -15,6 +15,7 @@
 
 import type { ProviderListItem } from "./apiTypes";
 import type { ReportedField, ReportedFieldKind, SandboxFillSummary } from "./fill";
+import { leftBlankLine } from "./leaveBlank";
 
 export type { SandboxFillSummary };
 
@@ -127,7 +128,7 @@ export interface SandboxFillView {
 export function sandboxFillView(
   summary: Pick<
     SandboxFillSummary,
-    "filled" | "fieldsAttempted" | "fieldsRejected" | "skipped" | "manual" | "logError"
+    "filled" | "fieldsAttempted" | "fieldsRejected" | "skipped" | "manual" | "leftBlank" | "logError"
   >,
 ): SandboxFillView {
   const filled = sandboxFilledCount(summary);
@@ -157,6 +158,9 @@ export function sandboxFillView(
         : `${needs} fields on this form need you: not on file, or filled by hand.`,
     );
   }
+  // Reviewed "leave blank" maps: a muted count, never a needs-you line.
+  const leftBlank = leftBlankLine(summary.leftBlank);
+  if (leftBlank) skipLines.push(`${leftBlank}.`);
   return {
     filled,
     tone: filled > 0 ? "ok" : "danger",

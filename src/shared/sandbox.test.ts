@@ -171,6 +171,17 @@ describe("sandboxFillView (G4)", () => {
     expect(view.lines[0]).toBe("Nothing was filled on this page.");
   });
 
+  it("counts leave_blank maps apart, muted, never as a field that needs you", () => {
+    const view = sandboxFillView(summary({
+      fieldsAttempted: 2,
+      manual: [],
+      leftBlank: [field("leave_blank", "Middle Name"), field("leave_blank", "Suffix"), field("leave_blank", "Fax")],
+    }));
+    expect(view.skipLines).toEqual(["3 left blank on purpose."]);
+    expect(shownText(view).join(" ")).not.toMatch(/needs? you/);
+    expect(shownText(view).join(" ")).not.toContain("Middle Name");
+  });
+
   it("adds one neutral line per kind of skip, counts only", () => {
     const view = sandboxFillView(summary({
       skipped: [field("skipped", "NPI"), field(undefined, "Tax ID")],

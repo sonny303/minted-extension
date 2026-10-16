@@ -18,11 +18,14 @@ import {
   mockValueForToken,
 } from "../shared/mockFillProfile";
 import { classifyFieldMap } from "../shared/fieldClassify";
+import { LEAVE_BLANK_KIND, LEAVE_BLANK_REASON } from "../shared/leaveBlank";
 import { buildFillEventV2Metadata, FILL_EVENT_V2_LIMIT_ERROR, type FillEventV2Metadata } from "../shared/fillEventV2";
 
 export interface MockDryRunPlan {
   instructions: FillInstruction[];
   gaps: ReportedField[];
+  /** Reviewed "leave blank" maps: no instruction, no gap. */
+  leftBlank: ReportedField[];
 }
 
 function humanLabel(map: PortalFieldMap): string {
@@ -41,10 +44,15 @@ function gapFor(map: PortalFieldMap, reason: string, kind: ReportedField["kind"]
 export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
   const instructions: FillInstruction[] = [];
   const gaps: ReportedField[] = [];
+  const leftBlank: ReportedField[] = [];
 
   for (const map of maps) {
     const classification = classifyFieldMap(map);
     if (classification.decision === "human" || classification.decision === "stale") continue;
+    if (classification.decision === "blank") {
+      leftBlank.push(gapFor(map, LEAVE_BLANK_REASON, LEAVE_BLANK_KIND));
+      continue;
+    }
     if (map.fieldType === "file") {
       gaps.push(gapFor(map, "File fields must be attached manually", "file"));
       continue;
@@ -79,7 +87,7 @@ export function planMockFill(maps: PortalFieldMap[]): MockDryRunPlan {
     });
   }
 
-  return { instructions, gaps };
+  return { instructions, gaps, leftBlank };
 }
 
 export async function fillMockPortal(input: {
@@ -185,6 +193,7 @@ export async function fillMockPortal(input: {
     filled: localVerified,
     skipped,
     gaps: plan.gaps,
+    leftBlank: plan.leftBlank,
     fillSessionId: resultId ?? "",
     mockProfileVersion: MOCK_FILL_PROFILE_VERSION,
     fieldsAttempted: localAttempted,

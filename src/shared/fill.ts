@@ -103,7 +103,11 @@ export type ReportedFieldKind =
   | "other_page"
   | "hidden"
   | "page_unknown"
-  | "unverified";
+  | "unverified"
+  // A reviewed "leave blank" decision (src/shared/leaveBlank.ts): the field
+  // was never attempted BY DESIGN. Local reporting only — never sent as a
+  // fill-event skip, so the panel cannot read it as drift or a manual item.
+  | "leave_blank";
 
 export interface ReportedField {
   label: string;
@@ -167,6 +171,8 @@ export interface SandboxFillSummary {
   filledLabels: string[];
   skipped: ReportedField[];
   manual: ReportedField[];
+  /** Reviewed "leave blank" maps: untouched on purpose, never a gap. */
+  leftBlank?: ReportedField[];
   pageFields: number;
   fillSessionId: string | null;
   /** Selectors this run wrote, so "Clear portal form" can undo exactly them. */
@@ -188,6 +194,8 @@ export interface MockDryRunSummary {
   filled: number;
   skipped: ReportedField[];
   gaps: ReportedField[];
+  /** Reviewed "leave blank" maps: untouched on purpose, never a gap. */
+  leftBlank?: ReportedField[];
   fillSessionId: string;
   mockProfileVersion: number;
   schemaVersion?: 2;
@@ -208,6 +216,8 @@ export interface FillCoverage {
   available: number;
   total: number;
   gaps: ReportedField[];
+  /** Reviewed "leave blank" maps: in neither `total` nor `gaps`. */
+  leftBlank?: ReportedField[];
 }
 
 // The panel-facing outcome of one fill attempt.
@@ -218,6 +228,10 @@ export interface FillSummary {
   // Never attempted by design: manual-source fields, file uploads, tokens
   // with no value in Minted Panel, and manual_partial review flags.
   manual: ReportedField[];
+  // Reviewed "leave blank" maps: untouched on purpose. Not in `manual`, so
+  // no "needs you" row or gap count ever includes one. Optional because
+  // reports persisted before the decision existed restore without it.
+  leftBlank?: ReportedField[];
   eventRecorded: boolean;
   // The COMPLETE user-facing warning line for a failed fill-event log,
   // composed by the background (it knows the failure kind — e.g. a 403 role

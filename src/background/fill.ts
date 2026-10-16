@@ -9,10 +9,13 @@
 //   source "hardcoded"     fill with hardcoded_value
 //   source "token"         fill with the profile value; null/empty = listed
 //   source "manual_partial" fill the token value AND flag for manual review
+//   source "leave_blank"   never attempted BY DESIGN — reviewed, left empty;
+//                          not a manual item, not a gap, not sent as a skip
 //   status                 ONLY "approved" fills (S5.1, 2026-07-28); proposed
 //                          rows are unreviewed observations and never fill
 import type { PortalFieldMap, PortalMappingMetadata, ProviderProfileResponse } from "../shared/apiTypes";
 import { portalMappingState, type PortalConfigurationTarget } from "../shared/portals";
+import { LEAVE_BLANK_KIND, LEAVE_BLANK_REASON } from "../shared/leaveBlank";
 import type { ControlSummary } from "../shared/nanoAi";
 import type {
   AiFillCandidate,
@@ -228,6 +231,7 @@ function safeLegacyReason(field: ReportedField): string {
     case "file":
     case "review": return "manual review is required";
     case "unverified": return "field could not be verified; review it on the portal";
+    case "leave_blank": return "intentionally left blank";
     default:
       return /option|dropdown|radio/i.test(field.reason)
         ? "field option mismatch; review options on the portal"
@@ -298,6 +302,9 @@ export interface FillPlan {
   staticFills: FillInstruction[];
   aiFills: FillInstruction[];
   manual: ReportedField[];
+  /** Reviewed "leave blank" maps: no instruction, no manual row, never a
+   * telemetry skip. Reported so the empty field reads as intentional. */
+  leftBlank: ReportedField[];
 }
 
 export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
@@ -306,6 +313,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
+  const leftBlank: ReportedField[] = [];
 
   for (const map of maps) {
     // S5.1 invariant (2026-07-28, supersedes the v0 posture): ONLY approved
@@ -317,6 +325,13 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     if (map.mapType !== "web" || map.status !== "approved") continue;
     const label = humanLabel(map);
 
+    // Leave blank wins over every other rule for the row, file fields
+    // included: the decision IS that nothing goes in. The control is never
+    // touched and the row lands in no bucket a coordinator must act on.
+    if (map.source === "leave_blank") {
+      leftBlank.push({ label, reason: LEAVE_BLANK_REASON, mapId: map.id, kind: LEAVE_BLANK_KIND });
+      continue;
+    }
     if (map.fieldType === "file") {
       manual.push({ label, reason: "file upload - attach manually", mapId: map.id, kind: "file" });
       continue;
@@ -397,7 +412,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     }
   }
 
-  return { staticFills, aiFills: [], manual };
+  return { staticFills, aiFills: [], manual, leftBlank };
 }
 
 // The coverage sensor (Epic 3a): reuse planFill so the "we can supply M of N"
@@ -409,11 +424,12 @@ export function computeCoverage(
   maps: PortalFieldMap[],
   profile: ProviderProfileResponse,
 ): FillCoverage {
-  const { staticFills, manual } = planFill(maps, profile);
+  const { staticFills, manual, leftBlank } = planFill(maps, profile);
   return {
     available: staticFills.length,
     total: staticFills.length + manual.length,
     gaps: manual,
+    leftBlank,
   };
 }
 
@@ -948,7 +964,7 @@ export async function fillPortal(
         ]);
         return { maps, profile, fillEventV2, mappingFingerprint };
       })();
-  const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+  const { staticFills, manual, leftBlank } = planFill(resolvedData.maps, resolvedData.profile);
   const fillEventV2 = resolvedData.fillEventV2;
 
   const assertPreparedCurrent = async (): Promise<void> => {
@@ -1262,6 +1278,7 @@ export async function fillPortal(
     filledLabels: pageResult.filled,
     skipped,
     manual,
+    leftBlank,
     eventRecorded,
     eventError,
     // Only reference the session when the server actually stored it — the
@@ -1328,7 +1345,7 @@ export async function sandboxFillPortal(
       facilityId: request.facilityId,
     }),
   ]);
-  const { staticFills, manual } = planFill(maps, profile);
+  const { staticFills, manual, leftBlank } = planFill(maps, profile);
 
   try {
     const frames = await listTabFrames(request.tabId);
@@ -1424,6 +1441,7 @@ export async function sandboxFillPortal(
     filledLabels: [],
     skipped: pageResult.skipped.filter((field) => !isNotChecked(field)),
     manual,
+    leftBlank,
     pageFields: pageResult.pageFields,
     fillSessionId: recordedId,
     filledSelectors,

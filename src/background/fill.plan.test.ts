@@ -333,6 +333,26 @@ describe("planFill", () => {
     expect(plan.manual.map((g) => g.kind)).toEqual(["file", "manual", "no_value", "no_mapping"]);
   });
 
+  it("plans nothing for a leave_blank map and reports it as intentionally blank", () => {
+    const plan = planFill(
+      [
+        map({ id: "lb", selector: "label:Middle Name", source: "leave_blank", token: null }),
+        // Leave blank wins over the file rule: the decision IS that nothing goes in.
+        map({ id: "lbf", selector: "label:Optional W9", source: "leave_blank", token: null, fieldType: "file" }),
+        // A proposed leave_blank row is still unreviewed: not a fill, not a report.
+        map({ id: "lbp", selector: "label:Suffix", source: "leave_blank", token: null, status: "proposed" }),
+        map({ id: "a", selector: "label:First Name" }),
+      ],
+      profile,
+    );
+    expect(plan.staticFills.map((i) => i.label)).toEqual(["First Name"]);
+    expect(plan.manual).toEqual([]);
+    expect(plan.leftBlank).toEqual([
+      { label: "Middle Name", reason: "intentionally left blank", mapId: "lb", kind: "leave_blank" },
+      { label: "Optional W9", reason: "intentionally left blank", mapId: "lbf", kind: "leave_blank" },
+    ]);
+  });
+
   it("applies transforms and flags manual_partial for review", () => {
     const plan = planFill(
       [
@@ -373,9 +393,32 @@ describe("computeCoverage", () => {
     expect(coverage.total).toBe(2);
     expect(coverage.gaps).toHaveLength(1);
   });
+
+  it("keeps leave_blank maps out of total and gaps, and counts them apart", () => {
+    const coverage = computeCoverage(
+      [
+        map({ id: "a", selector: "label:First Name" }),
+        map({ id: "b", selector: "label:DEA", token: "provider.deaNumber" }),
+        map({ id: "lb", selector: "label:Middle Name", source: "leave_blank", token: null }),
+      ],
+      profile,
+    );
+    expect(coverage.available).toBe(1);
+    expect(coverage.total).toBe(2);
+    expect(coverage.gaps.map((g) => g.mapId)).toEqual(["b"]);
+    expect(coverage.leftBlank?.map((g) => g.mapId)).toEqual(["lb"]);
+  });
 });
 
 describe("legacy fill-event projection", () => {
+  it("names a leave_blank row truthfully if one is ever projected", () => {
+    expect(sanitizeLegacyFields([
+      { label: "Middle Name", reason: "intentionally left blank", kind: "leave_blank", mapId: "lb" },
+    ])).toEqual([
+      { label: "Middle Name", reason: "intentionally left blank", kind: "leave_blank", mapId: "lb" },
+    ]);
+  });
+
   it("preserves qualified drift and keeps unknown context in the old no-evidence bucket", () => {
     const projected = sanitizeLegacyFields([
       { label: "NPI", reason: FIELD_NOT_FOUND_REASON, mapId: "map-id", kind: "skipped" },
