@@ -23,16 +23,19 @@ describe("renderMockDryRunDetail diagnostic visibility", () => {
     const dom = new JSDOM(`
       <div id="mock-dry-run-skipped" hidden></div>
       <div id="mock-dry-run-gaps" hidden></div>
+      <div id="mock-dry-run-left-blank" hidden></div>
     `);
     const doc = dom.window.document;
     const mockDryRunSkipped = doc.getElementById("mock-dry-run-skipped")!;
     const mockDryRunGaps = doc.getElementById("mock-dry-run-gaps")!;
+    const mockDryRunLeftBlank = doc.getElementById("mock-dry-run-left-blank")!;
 
     const transpiled = code(["renderMockDryRunDetail", "fieldList", "bucketDetails"]);
     const context = createContext({
       document: doc,
       mockDryRunSkipped,
       mockDryRunGaps,
+      mockDryRunLeftBlank,
     });
     runInContext(transpiled, context);
 
@@ -123,5 +126,43 @@ describe("renderMockDryRunDetail diagnostic visibility", () => {
     // Mapping gaps rendered in gaps container
     expect(mockDryRunGaps.hidden).toBe(false);
     expect(mockDryRunGaps.textContent).toContain("Specialty");
+    // No leave_blank rows: the bucket stays hidden.
+    expect(mockDryRunLeftBlank.hidden).toBe(true);
+  });
+
+  it("lists leave_blank maps in their own bucket, never among the gaps", () => {
+    const dom = new JSDOM(`
+      <div id="mock-dry-run-skipped" hidden></div>
+      <div id="mock-dry-run-gaps" hidden></div>
+      <div id="mock-dry-run-left-blank" hidden></div>
+    `);
+    const doc = dom.window.document;
+    const mockDryRunSkipped = doc.getElementById("mock-dry-run-skipped")!;
+    const mockDryRunGaps = doc.getElementById("mock-dry-run-gaps")!;
+    const mockDryRunLeftBlank = doc.getElementById("mock-dry-run-left-blank")!;
+    const context = createContext({ document: doc, mockDryRunSkipped, mockDryRunGaps, mockDryRunLeftBlank });
+    runInContext(code(["renderMockDryRunDetail", "fieldList", "bucketDetails"]), context);
+
+    const summary: MockDryRunSummary = {
+      pass: true,
+      filled: 1,
+      skipped: [],
+      gaps: [],
+      leftBlank: [
+        { label: "Middle Name", reason: "intentionally left blank", kind: "leave_blank", mapId: "m-mid" },
+      ],
+      fillSessionId: "session-2",
+      mockProfileVersion: 1,
+      attemptedLabels: ["First Name"],
+      logError: null,
+    };
+    (context as Record<string, unknown>).summary = summary;
+    runInContext("renderMockDryRunDetail(summary)", context);
+
+    expect(mockDryRunGaps.hidden).toBe(true);
+    expect(mockDryRunSkipped.hidden).toBe(true);
+    expect(mockDryRunLeftBlank.hidden).toBe(false);
+    expect(mockDryRunLeftBlank.textContent).toContain("Left blank on purpose");
+    expect(mockDryRunLeftBlank.textContent).toContain("Middle Name - intentionally left blank");
   });
 });

@@ -98,6 +98,7 @@ export function applyAiFill(
     filled.push(instruction.selector);
     writes.push({
       selector: instruction.selector,
+      mapId: instruction.mapId,
       kind: "ai",
       ...(instruction.token ? { token: instruction.token } : {}),
       ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),

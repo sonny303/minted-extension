@@ -20,7 +20,7 @@ function map(over: Partial<PortalFieldMap> & Pick<PortalFieldMap, "id" | "select
     portalKey: "demo",
     urlPattern: null,
     pageStep: null,
-    mapType: "web",
+    mapType: over.mapType ?? "web",
     selector: over.selector,
     selectorFallbacks: null,
     source: over.source ?? "token",
@@ -50,6 +50,30 @@ describe("planMockFill", () => {
     expect(plan.instructions[0]?.value).toBe("Sample");
     expect(plan.gaps).toEqual([
       expect.objectContaining({ mapId: "undecided", reason: "Needs a decision" }),
+    ]);
+  });
+
+  it("plans nothing for a leave_blank map and reports it apart from gaps", () => {
+    const plan = planMockFill([
+      map({ id: "token", selector: "label:First Name", token: "provider.firstName" }),
+      map({ id: "blank", selector: "label:Middle Name", source: "leave_blank", token: null }),
+    ]);
+
+    expect(plan.instructions.map((i) => i.mapId)).toEqual(["token"]);
+    expect(plan.gaps).toEqual([]);
+    expect(plan.leftBlank).toEqual([
+      { label: "Middle Name", reason: "intentionally left blank", mapId: "blank", kind: "leave_blank" },
+    ]);
+  });
+
+  it("reports a non-web leave_blank map as a gap, the same as planFill", () => {
+    const plan = planMockFill([
+      map({ id: "pdf-blank", selector: "label:Middle Name", source: "leave_blank", token: null, mapType: "pdf" }),
+    ]);
+    expect(plan.instructions).toEqual([]);
+    expect(plan.leftBlank).toEqual([]);
+    expect(plan.gaps).toEqual([
+      expect.objectContaining({ mapId: "pdf-blank", reason: "This map is not a web field" }),
     ]);
   });
 

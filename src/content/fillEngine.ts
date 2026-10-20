@@ -3,6 +3,7 @@
 // field is wrapped so one bad selector or odd widget skips-and-reports
 // instead of aborting the run. Nothing here reads storage, fetches, or sees
 // anything beyond the values it is handed.
+import { fillTimingEnabled, fillTimingNow, type FillTimingWidget } from "../shared/fillTiming"; // SPIKE(fill-latency)
 import type {
   FillInstruction,
   FillPageResult,
@@ -95,6 +96,8 @@ interface ProbedTarget {
 const probedTargets = new Map<string, ProbedTarget>();
 let probeMutationObserver: MutationObserver | null = null;
 let probeMutationVersion = 0;
+// SPIKE(fill-latency): the two waitForValue durations of the widget being applied.
+const spikeWidgetTiming: { menuWaitMs: number | null; valueWaitMs: number | null } = { menuWaitMs: null, valueWaitMs: null };
 let activePrimeFacesMenu: NonNullable<ReturnType<typeof primeFacesSelectMenu>> | null = null;
 let activePrimeFacesList: PrimeFacesSelectManyMenu | null = null;
 
@@ -351,12 +354,51 @@ function setNativeValue(el: Fillable, value: string): void {
   }
   const proto = Object.getPrototypeOf(el) as object;
   const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
-  if (descriptor?.set) {
+  // An inputmask (PrimeFaces p:inputMask, p:datePicker mask=…) defines its own
+  // `value` accessor that fills the mask's buffer; a prototype-setter write
+  // leaves that buffer empty and the widget writes the empty buffer back on
+  // blur (clearIncomplete). Gated on the mask itself: React's own accessor is
+  // a tracker, and bypassing it would hide the change from the framework.
+  const ownSetter = hasInputMask(el) ? Object.getOwnPropertyDescriptor(el, "value")?.set : undefined;
+  if (ownSetter) {
+    ownSetter.call(el, value);
+  } else if (descriptor?.set) {
     descriptor.set.call(el, value);
   } else if ("value" in el) {
     (el as HTMLElement & { value: string }).value = value;
   }
   fireChanged(el);
+}
+
+/** True when a jquery.inputmask instance owns this input: the plugin stores
+ * itself on `el.inputmask`, PrimeFaces marks p:inputMask with `ui-inputmask`,
+ * and a p:datePicker mask installs its own `value` accessor on the input. */
+function hasInputMask(el: Fillable): el is HTMLInputElement {
+  if (!(el instanceof HTMLInputElement)) return false;
+  if ((el as HTMLInputElement & { inputmask?: unknown }).inputmask) return true;
+  if (el.classList.contains("ui-inputmask")) return true;
+  return Boolean(el.closest(".p-datepicker.ui-calendar")) &&
+    Object.getOwnPropertyDescriptor(el, "value")?.set !== undefined;
+}
+
+/** A mask's readback is judged on content, not shape: "(555) 555-0100" and
+ * "(555)555-0100" post the same digits. Letters and digits in any script
+ * count ("José" truncated to "Jos" must not compare equal), case does not. */
+function maskContent(value: string): string {
+  return value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+/** True when the masked input holds what was asked for. The readback must
+ * CONTAIN the requested content — a mask may add literal characters
+ * ("+1 (999) 999-9999" posts a leading 1) — and both sides must be non-empty:
+ * "--" into a mask that clears to "" is a rejected write, not a match.
+ * Truncation ("12345-6789" into five digits) and leftover placeholders
+ * ("10/02/02__" for an ISO date) both fail because the requested digits are
+ * not all there. */
+function maskRetained(readback: string, requested: string): boolean {
+  const want = maskContent(requested);
+  const have = maskContent(readback);
+  return want.length > 0 && have.length > 0 && have.includes(want);
 }
 
 function fireChanged(el: HTMLElement): void {
@@ -737,8 +779,17 @@ function applyValue(el: Fillable, instruction: FillInstruction, markAttempted: (
   const changed = el.value !== nextValue;
   markAttempted();
   setNativeValue(el, nextValue);
-  if (el.value !== nextValue) {
-    return { ok: false, reason: "field did not retain the requested value", target: el };
+  const retained = hasInputMask(el)
+    ? maskRetained(el.value, nextValue)
+    : el.value === nextValue;
+  if (!retained) {
+    return {
+      ok: false,
+      reason: "field did not retain the requested value",
+      outcome: "write_rejected",
+      reasonCode: "readback_mismatch",
+      target: el,
+    };
   }
   if (el.willValidate && !el.validity.valid) {
     return {
@@ -962,8 +1013,11 @@ async function waitForPageSettled(quietMs = 120, maxWaitMs = 700): Promise<boole
 export async function probeFillOnPage(
   instructions: FillProbeInstruction[],
   explicitPageUrl: string | null = null,
+  options: { settle?: boolean } = {},
 ): Promise<FillProbeResult[]> {
-  const pageSettled = await waitForPageSettled();
+  // `settle: false` is the worker's fast re-probe of a target it already
+  // resolved once this run: read the page as it is now, and say so.
+  const pageSettled = options.settle === false ? false : await waitForPageSettled();
   pruneProbedTargets();
   const mutationWatchAvailable = ensureProbeMutationObserver();
   const pageUrl = explicitPageUrl ?? (typeof location !== "undefined" ? location.href : null);
@@ -1190,6 +1244,7 @@ export function applyFillOnPage(
           decorateFill(outcome.target, kind, instruction.token);
           writes.push({
             selector: instruction.selector,
+            mapId: instruction.mapId,
             kind,
             ...(instruction.token ? { token: instruction.token } : {}),
             ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
@@ -1300,21 +1355,26 @@ async function selectPrimeFacesItem(
   const trigger = menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-trigger") ??
     menu.wrapper.querySelector<HTMLElement>(".ui-selectonemenu-label") ?? menu.wrapper;
   trigger.click();
+  const menuWaitStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   const items = await waitForValue(() => {
     if (!isCurrent()) return null;
     const matches = primeFacesItems(menu, option);
     return matches.length > 0 ? matches : null;
   }, 700);
+  spikeWidgetTiming.menuWaitMs = fillTimingNow() - menuWaitStartedAt; // SPIKE(fill-latency)
   if (!items || items.length !== 1 || !isCurrent()) return false;
   const item = items[0];
   if (!item || item.matches(":disabled, .ui-state-disabled, [aria-disabled='true']")) return false;
   item.click();
   if (!isCurrent()) return false;
-  return (await waitForValue(() =>
+  const valueWaitStartedAt = fillTimingNow(); // SPIKE(fill-latency)
+  const selected = (await waitForValue(() =>
     isCurrent() && menu.select.value === option.value && normalize(primeFacesLabel(menu)) === normalize(option.text)
       ? true
       : null,
   500)) === true;
+  spikeWidgetTiming.valueWaitMs = fillTimingNow() - valueWaitStartedAt; // SPIKE(fill-latency)
+  return selected;
 }
 
 function selectOptionForInstruction(
@@ -1485,6 +1545,7 @@ function widgetFilledResult(instruction: FillInstruction, decorated: Fillable | 
     attemptedLabels: unchanged ? [] : [instruction.label],
     writes: unchanged ? [] : [{
       selector: instruction.selector,
+      mapId: instruction.mapId,
       kind: instruction.kind ?? "static" as const,
       ...(instruction.token ? { token: instruction.token } : {}),
       ...(instruction.confidence != null ? { confidence: instruction.confidence } : {}),
@@ -1671,9 +1732,15 @@ export async function applyFillSettled(
       }
     }
   }
+  const settledStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   const result = applyFill(regular, strictRevalidation);
+  const regularMs = fillTimingNow() - settledStartedAt; // SPIKE(fill-latency)
+  const widgetTimings: FillTimingWidget[] = []; // SPIKE(fill-latency)
   for (const { instruction, apply } of widgets) {
     let widgetResult: FillPageResult;
+    const widgetStartedAt = fillTimingNow(); // SPIKE(fill-latency)
+    spikeWidgetTiming.menuWaitMs = null;
+    spikeWidgetTiming.valueWaitMs = null;
     try {
       widgetResult = await apply(instruction, strictRevalidation);
     } catch {
@@ -1686,13 +1753,21 @@ export async function applyFillSettled(
     result.writes?.push(...(widgetResult.writes ?? []));
     result.skipped.push(...widgetResult.skipped);
     result.fieldOutcomes?.push(...(widgetResult.fieldOutcomes ?? []));
+    widgetTimings.push({ // SPIKE(fill-latency)
+      mapId: instruction.mapId,
+      applyMs: fillTimingNow() - widgetStartedAt,
+      menuWaitMs: spikeWidgetTiming.menuWaitMs,
+      valueWaitMs: spikeWidgetTiming.valueWaitMs,
+    });
   }
 
   const writtenDates = dateTargets.filter(({ instruction }) =>
     !result.skipped.some((field) => field.mapId === instruction.mapId) &&
     result.filled.includes(instruction.label),
   );
+  const dateSettleStartedAt = fillTimingNow(); // SPIKE(fill-latency)
   if (writtenDates.length > 0) await new Promise((resolve) => setTimeout(resolve, 125));
+  const dateSettleMs = fillTimingNow() - dateSettleStartedAt; // SPIKE(fill-latency)
   for (const { instruction, target } of writtenDates) {
     const currentResolution = resolveTarget(instruction);
     if (currentResolution.status !== "unique" || currentResolution.target !== target || !target.isConnected || isHiddenTarget(target)) {
@@ -1703,13 +1778,18 @@ export async function applyFillSettled(
     const expected = target instanceof HTMLInputElement && target.type === "date"
       ? instruction.nativeDateValue ?? safeNativeDate(instruction.value) ?? ""
       : instruction.value;
-    if (isInputOrTextarea && target.value !== expected) {
+    const reverted = (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      (hasInputMask(target) ? !maskRetained(target.value, expected) : target.value !== expected);
+    if (reverted) {
       rejectPostFill(result, instruction, target, "portal changed the date after fill; review this field on the portal", "write_rejected", "mask_reverted");
       continue;
     }
     if (isInputOrTextarea && target.willValidate && !target.validity.valid) {
       rejectPostFill(result, instruction, target, "form rejected the field format; review this field on the portal", "write_rejected", "invalid_format");
     }
+  }
+  if (fillTimingEnabled()) { // SPIKE(fill-latency)
+    result.timing = { regularMs, widgets: widgetTimings, dateSettleMs, totalMs: fillTimingNow() - settledStartedAt };
   }
   return result;
 }

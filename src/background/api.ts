@@ -539,6 +539,9 @@ export interface FillEventBody {
   fieldsFilled: number;
   fieldsSkipped: unknown;
   v2?: FillEventV2Metadata;
+  /** Canonical local date `system.today` resolved to, only when such a field
+   * was written. Mirrors `FillEventBody.systemTodayDate` in shared/apiTypes.ts. */
+  systemTodayDate?: string;
   /** Canonical tuple copied from the validated worker Work guard. */
   workContext?: CanonicalWorkContextTuple;
 }

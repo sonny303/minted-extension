@@ -498,6 +498,7 @@ export async function createMockPanelApi(options = {}) {
       // A mapping gap: the row exists but is linked to no token yet.
       fieldMapRow(FIXTURES.UNTRAINED_MAP_ID, FIXTURES.PORTAL_KEY, "label:Group Medicare PTAN", null),
     ],
+    fillEventSchemaVersion: null,
     // Current unflagged registry target used by reset-aware Extension Fill.
     // Tests may advance its generation or swap its id to simulate an org
     // override taking precedence over a same-key global row.
@@ -1294,6 +1295,9 @@ export async function createMockPanelApi(options = {}) {
       return envelope(res, 200, rows, null, {
         total: rows.length,
         ...(portalMappings.length ? { portal_mappings: portalMappings } : {}),
+        // Off by default (the fixture panel is a legacy reader). A test sets
+        // `mock.state.fillEventSchemaVersion = 2` to have the worker post V2.
+        ...(state.fillEventSchemaVersion ? { fill_event_schema_version: state.fillEventSchemaVersion } : {}),
       });
     }
 
@@ -1331,9 +1335,11 @@ export async function createMockPanelApi(options = {}) {
         ...body,
         performedBy: FIXTURES.USER_ID,
         ...(caseWork ? { didAutoStartCase } : {}),
+        // The panel stamps the receipt's schema version on every fill, with
+        // or without a Work tuple; the worker refuses a V2 receipt without it.
+        eventSchemaVersion: body.schemaVersion === 2 ? 2 : 1,
         ...(tuple ? {
           isTest: false,
-          eventSchemaVersion: body.schemaVersion === 2 ? 2 : 1,
           contextVersion: tuple.contextVersion,
           sopTemplateId: tuple.sopTemplateId,
           sopVersion: tuple.sopVersion,

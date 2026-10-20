@@ -48,6 +48,7 @@ function instr(
     ...(over.telemetry ? { telemetry: over.telemetry } : {}),
     ...(over.nativeDateValue ? { nativeDateValue: over.nativeDateValue } : {}),
     ...(over.exactSelectValue ? { exactSelectValue: true } : {}),
+    ...(over.token ? { token: over.token } : {}),
     ...(over.pageUrlScope !== undefined ? { pageUrlScope: over.pageUrlScope } : {}),
     ...(over.resolvedPage ? { resolvedPage: over.resolvedPage } : {})
   };
@@ -164,7 +165,7 @@ describe("applyFill", () => {
     });
 
     const samePage = applyFillOnPage([scoped], "https://portal.example/provider?case=private#step");
-    expect(samePage.writes).toEqual([{ selector: "#field", kind: "static" }]);
+    expect(samePage.writes).toEqual([{ selector: "#field", mapId: "m1", kind: "static" }]);
     expect((document.querySelector("#field") as HTMLInputElement).value).toBe("Ada");
 
     document.body.innerHTML = '<input id="field" type="text" />';
@@ -529,6 +530,62 @@ describe("applyFill", () => {
     expect(result.filled).toEqual(["Effective date"]);
     expect(input.value).toBe("02/02/2026");
     expect(modelValue).toBe("02/02/2026");
+  });
+
+  describe("system.today lands in each date control kind", () => {
+    // The planner resolves system.today on the device as canonical ISO and
+    // shapes it through the map's transform; the engine sees an ordinary
+    // instruction. Three shapes a signature-date field takes on real forms.
+    const today = "2026-10-15";
+
+    it("writes the transformed string into a plain text box", () => {
+      document.body.innerHTML = `<input id="signature-date" type="text" />`;
+      const result = applyFill([
+        instr({ label: "Signature date", selector: "#signature-date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Signature date"]);
+      expect(result.writes).toEqual([{ selector: "#signature-date", mapId: "m1", kind: "static", token: "system.today" }]);
+      expect(document.querySelector<HTMLInputElement>("#signature-date")?.value).toBe("10/15/2026");
+    });
+
+    it("feeds a masked date widget and survives its blur readback", async () => {
+      document.body.innerHTML = `<span class="p-datepicker ui-calendar"><input id="attest-date" type="text" /></span>`;
+      const input = document.querySelector<HTMLInputElement>("#attest-date")!;
+      let keydownSeen = false;
+      let modelValue = "";
+      input.addEventListener("keydown", () => { keydownSeen = true; });
+      input.addEventListener("input", () => {
+        if (!keydownSeen) return;
+        keydownSeen = false;
+        modelValue = input.value;
+      });
+      input.addEventListener("blur", () => { input.value = modelValue; });
+      const result = await applyFillSettled([
+        instr({ label: "Attestation date", selector: "#attest-date", fieldType: "date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Attestation date"]);
+      expect(result.skipped).toEqual([]);
+      expect(input.value).toBe("10/15/2026");
+      expect(modelValue).toBe("10/15/2026");
+    });
+
+    it("writes the canonical ISO date into an HTML5 date input whatever the display shape", () => {
+      document.body.innerHTML = `<input id="signed-on" type="date" />`;
+      const result = applyFill([
+        instr({ label: "Signed on", selector: "#signed-on", fieldType: "date", token: "system.today", value: "10/15/2026", nativeDateValue: today }),
+      ]);
+      expect(result.filled).toEqual(["Signed on"]);
+      expect(document.querySelector<HTMLInputElement>("#signed-on")?.value).toBe(today);
+    });
+
+    it("still fills an HTML5 date input from an untransformed map (ISO value, no nativeDateValue hint)", () => {
+      document.body.innerHTML = `<input id="signed-on" type="date" />`;
+      const result = applyFill([
+        instr({ label: "Signed on", selector: "#signed-on", fieldType: "date", token: "system.today", value: today }),
+      ]);
+      expect(result.filled).toEqual(["Signed on"]);
+      expect(document.querySelector<HTMLInputElement>("#signed-on")?.value).toBe(today);
+    });
   });
 
   it("selects a taxonomy code from a lazy PrimeFaces menu beyond the capture option cap", async () => {
@@ -1532,7 +1589,7 @@ describe("PrimeFaces SelectManyMenu fill", () => {
     const result = await applyFillSettled([areas({ value: "A12" })]);
     expect(result.filled).toEqual(["Areas of expertise"]);
     expect(result.skipped).toEqual([]);
-    expect(result.writes).toEqual([{ selector: BCBSKS_AREAS_SELECTOR, kind: "static" }]);
+    expect(result.writes).toEqual([{ selector: BCBSKS_AREAS_SELECTOR, mapId: "m1", kind: "static" }]);
     expect(postedCodes(wrapper())).toEqual(["A03", "A12"]);
     expect(highlightedCodes(wrapper())).toEqual(["A03", "A12"]);
     expect(widget.changes()).toBe(2);
@@ -1709,5 +1766,185 @@ describe("multi-select fill and clear", () => {
     wireSelectManyMenu(wrapper, { metaKeySelection: false });
     expect(clearPortalForm()).toBe(0);
     expect(postedCodes(wrapper)).toEqual(["A03", "A12"]);
+  });
+});
+
+/**
+ * Spike 2026-10-15 — BCBS KS Network Enrollment Form, fill 21813fea.
+ * Nine mapped inputs (five phone/fax masks, three DatePicker inputs, one NPI
+ * mask) were logged `context_changed`, attempted=false. The live page shows no
+ * DOM mutation at all during a write; what differs is what the PrimeFaces 10
+ * InputMask does to the VALUE. These tests mimic that widget as measured on
+ * the live form (shape only, no portal markup): an OWN `value` accessor on the
+ * input, re-masking of the raw DOM value on `input`, and — clearIncomplete +
+ * clearMaskOnLostFocus — the widget writing its own buffer back on `blur`.
+ * The fix writes a masked input through its own setter and judges retention
+ * by the mask's content (alphanumerics), reporting a rejected write as
+ * `write_rejected` / `readback_mismatch` instead of silence.
+ * See docs/spike-context-changed-mask-dates.md.
+ */
+describe("PrimeFaces InputMask readback", () => {
+  const phoneMask = (raw: string): string => {
+    const digits = raw.replace(/\D/g, "").slice(0, 10);
+    return digits.length === 10 ? `(${digits.slice(0, 3)})${digits.slice(3, 6)}-${digits.slice(6)}` : digits;
+  };
+  const npiMask = (raw: string): string => raw.replace(/\D/g, "").slice(0, 10);
+  const dateMask = (raw: string): string => (/^\d{2}\/\d{2}\/\d{4}$/.test(raw) ? raw : "");
+
+  /** `complete` says whether the widget's buffer satisfies the mask; an
+   * incomplete buffer is cleared on blur (jquery.inputmask clearIncomplete).
+   * `syncOnInput` false mimics the datetime alias, whose buffer the engine's
+   * synthetic `input` event did not update on the live form. */
+  function installInputMask(
+    input: HTMLInputElement,
+    mask: (raw: string) => string,
+    complete: (masked: string) => boolean,
+    { syncOnInput = true }: { syncOnInput?: boolean } = {},
+  ): void {
+    const proto = Object.getPrototypeOf(input) as object;
+    const native = Object.getOwnPropertyDescriptor(proto, "value");
+    if (!native?.get || !native.set) throw new Error("jsdom input has no prototype value accessor");
+    const read = (): string => native.get!.call(input) as string;
+    const write = (next: string): void => { native.set!.call(input, next); };
+    let buffer = "";
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get: read,
+      set(raw: string) { buffer = mask(String(raw)); write(buffer); },
+    });
+    input.addEventListener("input", () => {
+      if (!syncOnInput) return;
+      buffer = mask(read());
+      write(buffer);
+    });
+    input.addEventListener("blur", () => {
+      if (!complete(buffer)) write("");
+    });
+    input.classList.add("ui-inputmask");
+  }
+
+  const telemetry = () => ({
+    targetKey: createFillEventV2OpaqueKey("t"),
+    frameKey: createFillEventV2OpaqueKey("f"),
+    stepKey: null,
+  });
+
+  it("reports a mask's canonical readback as an attempted write, never as silence the worker files under context_changed", () => {
+    document.body.innerHTML = `<label for="phone">Phone number</label><input id="phone" type="text" />`;
+    installInputMask(document.querySelector("#phone")!, phoneMask, (m) => m.length === 13);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#phone", value: "(555) 555-0100", telemetry: telemetry() }),
+    ], window.location.href);
+    // Today: the retain check (fillEngine.ts applyValue) returns ok:false with
+    // no outcome/reasonCode, so applyFillOnPage records nothing and
+    // applyFillAcrossFrames labels the empty outcome list context_changed.
+    expect(applied.fieldOutcomes).toHaveLength(1);
+    // The synchronous path records every successful write as unverified /
+    // readback_unavailable; applyFillSettled is what upgrades it to filled.
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "unverified", reasonCode: "readback_unavailable" });
+  });
+
+  it("counts a phone the mask re-formatted as filled: the digits the portal will post are the digits asked for", () => {
+    document.body.innerHTML = `<label for="phone">Phone number</label><input id="phone" type="text" />`;
+    const phone = document.querySelector<HTMLInputElement>("#phone")!;
+    installInputMask(phone, phoneMask, (m) => m.length === 13);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#phone", value: "(555) 555-0100", telemetry: telemetry() }),
+    ], window.location.href);
+    // The value IS on the page in the mask's own shape…
+    expect(phone.value).toBe("(555)555-0100");
+    // …and the engine should say so instead of "field did not retain the requested value".
+    expect(applied.filled).toEqual(["Phone number"]);
+    expect(applied.skipped).toEqual([]);
+  });
+
+  it("keeps a PrimeFaces DatePicker's masked date through the engine's synthetic blur", async () => {
+    document.body.innerHTML = `
+      <label id="dob-label">Date of birth</label>
+      <span class="p-datepicker ui-calendar"><input id="dob" type="text" aria-labelledby="dob-label" inputmode="numeric" /></span>
+    `;
+    const dob = document.querySelector<HTMLInputElement>("#dob")!;
+    installInputMask(dob, dateMask, (m) => m.length === 10, { syncOnInput: false });
+    const applied = await applyFillSettled([
+      instr({ label: "Date of birth", selector: "#dob", fieldType: "date", value: "02/02/1980", telemetry: telemetry() }),
+    ]);
+    // Live form, 2026-10-15: the prototype-setter write survives input/change
+    // and is emptied by the widget on blur; a write through the input's own
+    // (mask-installed) setter survives the same blur.
+    expect(dob.value).toBe("02/02/1980");
+    expect(applied.filled).toEqual(["Date of birth"]);
+  });
+
+  it("files a value the mask cannot hold as a rejected write with a reason (an 'n/a' into a 10-digit NPI mask)", () => {
+    document.body.innerHTML = `<label for="npi">Supervising physician NPI</label><input id="npi" type="text" />`;
+    const npi = document.querySelector<HTMLInputElement>("#npi")!;
+    installInputMask(npi, npiMask, (m) => m.length === 10);
+    const applied = applyFillOnPage([
+      instr({ label: "Supervising physician NPI", selector: "#npi", value: "n/a", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(npi.value).toBe("");
+    expect(applied.filled).toEqual([]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("rejects a value a mask truncates (ZIP+4 into a 5-digit mask): the digits on the page are not the digits asked for", () => {
+    document.body.innerHTML = `<label for="zip">ZIP code</label><input id="zip" type="text" />`;
+    const zip = document.querySelector<HTMLInputElement>("#zip")!;
+    installInputMask(zip, (raw) => raw.replace(/\D/g, "").slice(0, 5), (m) => m.length === 5);
+    const applied = applyFillOnPage([
+      instr({ label: "ZIP code", selector: "#zip", value: "12345-6789", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(zip.value).toBe("12345");
+    expect(applied.filled).toEqual([]);
+    expect(applied.skipped.map((field) => field.reason)).toEqual(["field did not retain the requested value"]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("counts a mask that adds a literal as filled when the readback contains the requested digits (+1 (999) 999-9999)", () => {
+    document.body.innerHTML = `<label for="intl">Phone number</label><input id="intl" type="text" />`;
+    const intl = document.querySelector<HTMLInputElement>("#intl")!;
+    installInputMask(intl, (raw) => {
+      const digits = raw.replace(/\D/g, "").replace(/^1/, "").slice(0, 10);
+      return digits.length === 10 ? `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}` : digits;
+    }, (m) => m.length === 17);
+    const applied = applyFillOnPage([
+      instr({ label: "Phone number", selector: "#intl", value: "5555550100", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(intl.value).toBe("+1 (555) 555-0100");
+    expect(applied.filled).toEqual(["Phone number"]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "unverified", reasonCode: "readback_unavailable" });
+  });
+
+  it("rejects a value with no letters or digits into a mask that clears it: an empty readback never matches", () => {
+    document.body.innerHTML = `<label for="npi">Supervising physician NPI</label><input id="npi" type="text" />`;
+    const npi = document.querySelector<HTMLInputElement>("#npi")!;
+    installInputMask(npi, npiMask, (m) => m.length === 10);
+    const applied = applyFillOnPage([
+      instr({ label: "Supervising physician NPI", selector: "#npi", value: "--", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(npi.value).toBe("");
+    expect(applied.filled).toEqual([]);
+    expect(applied.fieldOutcomes?.[0]).toMatchObject({ attempted: true, outcome: "write_rejected", reasonCode: "readback_mismatch" });
+  });
+
+  it("keeps the prototype setter for an unmasked input with its own value accessor (a React-style value tracker)", () => {
+    document.body.innerHTML = `<label for="first">First name</label><input id="first" type="text" />`;
+    const first = document.querySelector<HTMLInputElement>("#first")!;
+    const proto = Object.getPrototypeOf(first) as object;
+    const native = Object.getOwnPropertyDescriptor(proto, "value")!;
+    const trackerWrites: string[] = [];
+    // React's inputValueTracking installs an own accessor to RECORD writes; a
+    // write through it would hide the change from the framework's onChange.
+    Object.defineProperty(first, "value", {
+      configurable: true,
+      get: () => native.get!.call(first) as string,
+      set(next: string) { trackerWrites.push(String(next)); native.set!.call(first, next); },
+    });
+    const applied = applyFillOnPage([
+      instr({ label: "First name", selector: "#first", value: "Taylor", telemetry: telemetry() }),
+    ], window.location.href);
+    expect(first.value).toBe("Taylor");
+    expect(applied.filled).toEqual(["First name"]);
+    expect(trackerWrites).toEqual([]);
   });
 });
