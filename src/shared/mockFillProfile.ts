@@ -4,7 +4,7 @@
 // It is deliberately values-only: the worker resolves these values before
 // sending instructions to the content script, and no provider PHI is read.
 
-export const MOCK_FILL_PROFILE_VERSION = 3;
+export const MOCK_FILL_PROFILE_VERSION = 4;
 
 export const MOCK_FILL_VALUES: Readonly<Record<string, string>> = {
   // --- provider.* ---
@@ -65,7 +65,6 @@ export const MOCK_FILL_VALUES: Readonly<Record<string, string>> = {
   "group.name": "Sample Provider Group",
   "group.tin": "123456789",
   "group.taxIdType": "EIN",
-  "group.npi": "1999999984",
   "group.npiType2": "1999999984",
   "group.states": "NC, SC, VA",
   "group.websiteUrl": "https://example.com",
@@ -144,7 +143,32 @@ export const MOCK_FILL_VALUES: Readonly<Record<string, string>> = {
   "facility.contactName": "Sample Clinic Manager",
   "facility.contactFullName": "Sample Clinic Manager",
   "facility.effectiveDate": "2020-01-15",
-  "facility.hours": "Mon-Fri 8:00am - 5:00pm",
+  // facility.hours is the panel's hoursSummary() text (every mock value must be
+  // non-empty, so the sample clinic is open all week); the 21 per-day keys are
+  // the facility.hours{Day}{Status|Open|Close} composites (times are the stored
+  // 24h HH:MM — a map's transform spells them for the page).
+  "facility.hours": "Open 7 days/week",
+  "facility.hoursMonStatus": "Open",
+  "facility.hoursMonOpen": "08:00",
+  "facility.hoursMonClose": "17:00",
+  "facility.hoursTueStatus": "Open",
+  "facility.hoursTueOpen": "08:00",
+  "facility.hoursTueClose": "17:00",
+  "facility.hoursWedStatus": "Open",
+  "facility.hoursWedOpen": "08:00",
+  "facility.hoursWedClose": "17:00",
+  "facility.hoursThuStatus": "Open",
+  "facility.hoursThuOpen": "08:00",
+  "facility.hoursThuClose": "17:00",
+  "facility.hoursFriStatus": "Open",
+  "facility.hoursFriOpen": "08:00",
+  "facility.hoursFriClose": "17:00",
+  "facility.hoursSatStatus": "Open",
+  "facility.hoursSatOpen": "09:00",
+  "facility.hoursSatClose": "13:00",
+  "facility.hoursSunStatus": "Open",
+  "facility.hoursSunOpen": "09:00",
+  "facility.hoursSunClose": "13:00",
   "facility.acceptingNewPatients": "Yes",
   "facility.adaCompliance": "Yes",
   "facility.languageLine": "Yes",

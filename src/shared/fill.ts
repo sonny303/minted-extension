@@ -2,6 +2,7 @@
 // field maps + profile values), content script (applies them to the page),
 // side panel (renders the outcome). Instructions carry only what the page
 // needs — selectors and final values — never tokens or auth material.
+import type { FillTimingContent } from "./fillTiming"; // SPIKE(fill-latency)
 import type { PortalFieldType } from "./apiTypes";
 import type { FillEventV2FieldOutcome, FillEventV2Metadata } from "./fillEventV2";
 import type { CanonicalWorkContextTuple, WorkContextValidationResponse } from "./workContext";
@@ -103,7 +104,11 @@ export type ReportedFieldKind =
   | "other_page"
   | "hidden"
   | "page_unknown"
-  | "unverified";
+  | "unverified"
+  // A reviewed "leave blank" decision (src/shared/leaveBlank.ts): the field
+  // was never attempted BY DESIGN. Local reporting only — never sent as a
+  // fill-event skip, so the panel cannot read it as drift or a manual item.
+  | "leave_blank";
 
 export interface ReportedField {
   label: string;
@@ -120,10 +125,16 @@ export interface ReportedField {
 // What the content script did with the instructions it was handed.
 export interface FillPageResult {
   filled: string[]; // labels
+  /** SPIKE(fill-latency): content-side durations, present only while the
+   * timing gate is on (`src/shared/fillTiming.ts`). Numbers and map ids only. */
+  timing?: FillTimingContent;
   attemptedLabels?: string[];
   /** Successful writes keyed by selector identity, never display label. */
   writes?: Array<{
     selector: string;
+    /** The instruction's map id, so the worker can tell two maps on one
+     * selector apart (a `label:` selector is not unique across pages). */
+    mapId?: string;
     kind: "static" | "ai";
     token?: string;
     confidence?: number;
@@ -167,6 +178,8 @@ export interface SandboxFillSummary {
   filledLabels: string[];
   skipped: ReportedField[];
   manual: ReportedField[];
+  /** Reviewed "leave blank" maps: untouched on purpose, never a gap. */
+  leftBlank?: ReportedField[];
   pageFields: number;
   fillSessionId: string | null;
   /** Selectors this run wrote, so "Clear portal form" can undo exactly them. */
@@ -188,6 +201,8 @@ export interface MockDryRunSummary {
   filled: number;
   skipped: ReportedField[];
   gaps: ReportedField[];
+  /** Reviewed "leave blank" maps: untouched on purpose, never a gap. */
+  leftBlank?: ReportedField[];
   fillSessionId: string;
   mockProfileVersion: number;
   schemaVersion?: 2;
@@ -208,6 +223,8 @@ export interface FillCoverage {
   available: number;
   total: number;
   gaps: ReportedField[];
+  /** Reviewed "leave blank" maps: in neither `total` nor `gaps`. */
+  leftBlank?: ReportedField[];
 }
 
 // The panel-facing outcome of one fill attempt.
@@ -218,6 +235,10 @@ export interface FillSummary {
   // Never attempted by design: manual-source fields, file uploads, tokens
   // with no value in Minted Panel, and manual_partial review flags.
   manual: ReportedField[];
+  // Reviewed "leave blank" maps: untouched on purpose. Not in `manual`, so
+  // no "needs you" row or gap count ever includes one. Optional because
+  // reports persisted before the decision existed restore without it.
+  leftBlank?: ReportedField[];
   eventRecorded: boolean;
   // The COMPLETE user-facing warning line for a failed fill-event log,
   // composed by the background (it knows the failure kind — e.g. a 403 role
@@ -281,7 +302,15 @@ export interface FillReportRecord {
 export type ContentRequest =
   | { type: "PING" }
   | { type: "APPLY_FILL"; instructions: FillInstruction[]; requireUniqueTarget?: boolean }
-  | { type: "PROBE_FILL"; instructions: FillProbeInstruction[] }
+  | {
+      type: "PROBE_FILL";
+      instructions: FillProbeInstruction[];
+      /** Default true: wait for the page's mutation-quiet window before
+       * resolving. The worker sends `false` only for its per-field re-probe of
+       * a target the batch probe already resolved (`FAST_REPROBE_ENABLED`);
+       * the result then reports `pageSettled: false`. */
+      settle?: boolean;
+    }
   | {
       type: "SCAN_UNMAPPED_CONTROLS";
       scanId: string;

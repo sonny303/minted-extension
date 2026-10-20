@@ -154,6 +154,63 @@ describe("planFill", () => {
     ]);
   });
 
+  it("treats a jsonb object value as a data gap, never as \"[object Object]\"", () => {
+    // facilities.hours defaults to {} and the profile pushes it raw, so even a
+    // facility with no hours used to type "[object Object]" into the form.
+    const withObjects: ProviderProfileResponse = {
+      ...profile,
+      tokens: [
+        ...profile.tokens,
+        { token: "facility.hours", value: {} },
+        { token: "facility.adaCompliance", value: { accessible: true, notes: "ramp" } },
+        { token: "provider.additionalCertifications", value: [{ name: "OCS" }] },
+      ],
+    };
+    const plan = planFill(
+      [
+        map({ id: "hours", selector: "#hours", token: "facility.hours" }),
+        map({ id: "ada", selector: "#ada", token: "facility.adaCompliance" }),
+        map({ id: "certs", selector: "#certs", token: "provider.additionalCertifications" }),
+      ],
+      withObjects,
+    );
+    expect(plan.staticFills).toEqual([]);
+    expect(plan.manual.map((m) => [m.mapId, m.kind, m.reason])).toEqual([
+      ["hours", "no_value", "no value in Minted Panel"],
+      ["ada", "no_value", "no value in Minted Panel"],
+      ["certs", "no_value", "no value in Minted Panel"],
+    ]);
+    expect(plan.staticFills.some((f) => f.value.includes("[object"))).toBe(false);
+  });
+
+  it("joins a primitive array with a comma and a space, and keeps booleans and numbers as text", () => {
+    const withArrays: ProviderProfileResponse = {
+      ...profile,
+      tokens: [
+        ...profile.tokens,
+        { token: "facility.languagesOffered", value: ["English", " Spanish", ""] },
+        { token: "facility.acceptingNewPatients", value: true },
+        { token: "assignment.practiceFrequency", value: 3 },
+        { token: "provider.languages", value: [] },
+      ],
+    };
+    const plan = planFill(
+      [
+        map({ id: "langs", selector: "#langs", token: "facility.languagesOffered" }),
+        map({ id: "accepting", selector: "#accepting", token: "facility.acceptingNewPatients" }),
+        map({ id: "freq", selector: "#freq", token: "assignment.practiceFrequency" }),
+        map({ id: "none", selector: "#none", token: "provider.languages" }),
+      ],
+      withArrays,
+    );
+    expect(plan.staticFills.map((f) => [f.mapId, f.value])).toEqual([
+      ["langs", "English, Spanish"],
+      ["accepting", "true"],
+      ["freq", "3"],
+    ]);
+    expect(plan.manual).toEqual([expect.objectContaining({ mapId: "none", kind: "no_value" })]);
+  });
+
   it("partially fills an authorized Contract profile without substituting signer or submitter", () => {
     const contractProfile: ProviderProfileResponse = {
       provider: { id: "p1" },
@@ -333,6 +390,26 @@ describe("planFill", () => {
     expect(plan.manual.map((g) => g.kind)).toEqual(["file", "manual", "no_value", "no_mapping"]);
   });
 
+  it("plans nothing for a leave_blank map and reports it as intentionally blank", () => {
+    const plan = planFill(
+      [
+        map({ id: "lb", selector: "label:Middle Name", source: "leave_blank", token: null }),
+        // Leave blank wins over the file rule: the decision IS that nothing goes in.
+        map({ id: "lbf", selector: "label:Optional W9", source: "leave_blank", token: null, fieldType: "file" }),
+        // A proposed leave_blank row is still unreviewed: not a fill, not a report.
+        map({ id: "lbp", selector: "label:Suffix", source: "leave_blank", token: null, status: "proposed" }),
+        map({ id: "a", selector: "label:First Name" }),
+      ],
+      profile,
+    );
+    expect(plan.staticFills.map((i) => i.label)).toEqual(["First Name"]);
+    expect(plan.manual).toEqual([]);
+    expect(plan.leftBlank).toEqual([
+      { label: "Middle Name", reason: "intentionally left blank", mapId: "lb", kind: "leave_blank" },
+      { label: "Optional W9", reason: "intentionally left blank", mapId: "lbf", kind: "leave_blank" },
+    ]);
+  });
+
   it("applies transforms and flags manual_partial for review", () => {
     const plan = planFill(
       [
@@ -360,6 +437,67 @@ describe("planFill", () => {
   });
 });
 
+describe("planFill system.today", () => {
+  it("resolves system.today on the device and never from the profile", () => {
+    const plan = planFill(
+      [
+        map({ id: "sig", selector: "#signature-date", token: "system.today" }),
+        map({ id: "sig-us", selector: "#attest-date", token: "system.today", transform: "date_mmddyyyy" }),
+      ],
+      profile,
+      { today: "2026-10-15" },
+    );
+    expect(plan.staticFills).toEqual([
+      expect.objectContaining({ mapId: "sig", value: "2026-10-15", nativeDateValue: "2026-10-15" }),
+      expect.objectContaining({ mapId: "sig-us", value: "10/15/2026", nativeDateValue: "2026-10-15" }),
+    ]);
+    expect(plan.manual).toEqual([]);
+    // Audited as the canonical date whatever the page spelling was.
+    expect(plan.deviceWrites).toEqual([
+      { mapId: "sig", selector: "#signature-date", token: "system.today", value: "2026-10-15" },
+      { mapId: "sig-us", selector: "#attest-date", token: "system.today", value: "2026-10-15" },
+    ]);
+  });
+
+  it("defaults to the local calendar date, not the UTC date", () => {
+    // Pinned west of UTC at 23:30 local so toISOString() would really differ.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-16T06:30:00Z"));
+      expect(new Date().toISOString().slice(0, 10)).toBe("2026-10-16");
+      const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], profile);
+      expect(plan.staticFills[0]?.value).toBe("2026-10-15");
+    } finally {
+      vi.useRealTimers();
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
+  it("lets the device value win over a profile that unexpectedly carries the key", () => {
+    const stale: ProviderProfileResponse = {
+      ...profile,
+      tokens: [...profile.tokens, { token: "system.today", value: "1999-12-31" }],
+    };
+    const plan = planFill([map({ id: "sig", selector: "#signature-date", token: "system.today" })], stale, {
+      today: "2026-10-15",
+    });
+    expect(plan.staticFills[0]?.value).toBe("2026-10-15");
+  });
+
+  it("does not audit a profile-token date as a device write", () => {
+    const plan = planFill(
+      [map({ id: "d", selector: "label:DOB", token: "provider.dob", transform: "date_mmddyyyy" })],
+      profile,
+      { today: "2026-10-15" },
+    );
+    expect(plan.staticFills[0]?.value).toBe("05/04/1980");
+    expect(plan.deviceWrites).toEqual([]);
+  });
+});
+
 describe("computeCoverage", () => {
   it("derives available/total from the same planFill rules", () => {
     const coverage = computeCoverage(
@@ -373,9 +511,25 @@ describe("computeCoverage", () => {
     expect(coverage.total).toBe(2);
     expect(coverage.gaps).toHaveLength(1);
   });
+
+  it("keeps leave_blank maps out of total and gaps, and counts them apart", () => {
+    const coverage = computeCoverage(
+      [
+        map({ id: "a", selector: "label:First Name" }),
+        map({ id: "b", selector: "label:DEA", token: "provider.deaNumber" }),
+        map({ id: "lb", selector: "label:Middle Name", source: "leave_blank", token: null }),
+      ],
+      profile,
+    );
+    expect(coverage.available).toBe(1);
+    expect(coverage.total).toBe(2);
+    expect(coverage.gaps.map((g) => g.mapId)).toEqual(["b"]);
+    expect(coverage.leftBlank?.map((g) => g.mapId)).toEqual(["lb"]);
+  });
 });
 
 describe("legacy fill-event projection", () => {
+
   it("preserves qualified drift and keeps unknown context in the old no-evidence bucket", () => {
     const projected = sanitizeLegacyFields([
       { label: "NPI", reason: FIELD_NOT_FOUND_REASON, mapId: "map-id", kind: "skipped" },

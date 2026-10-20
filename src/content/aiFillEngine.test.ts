@@ -39,7 +39,7 @@ describe("AI fill review", () => {
       value: "12345", pageStep: null, kind: "ai", token: "provider.npi", confidence: 0.91,
     }]);
     const input = document.querySelector("#npi") as HTMLInputElement;
-    expect(result.writes).toEqual([{ selector: "#npi", kind: "ai", token: "provider.npi", confidence: 0.91 }]);
+    expect(result.writes).toEqual([{ selector: "#npi", mapId: "ai:#npi", kind: "ai", token: "provider.npi", confidence: 0.91 }]);
     expect(input.value).toBe("12345");
     expect(input.classList.contains("mp-fill-ai")).toBe(true);
     expect(input.title).toBe("AI Suggested: provider.npi");

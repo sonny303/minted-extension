@@ -184,6 +184,7 @@ import {
   SANDBOX_UNAVAILABLE_NOTE,
   type SandboxFillSummary,
 } from "../shared/sandbox";
+import { isNothingToFillRun, leftBlankLine, NOTHING_TO_FILL_HEADLINE } from "../shared/leaveBlank";
 import { providerDisplayName } from "../shared/providerName";
 import {
   STRUCTURED_TOUCH_TYPES,
@@ -236,6 +237,7 @@ const markPortalProvenBtn = el<HTMLButtonElement>("mark-portal-proven");
 const mockDryRunStatus = el<HTMLElement>("mock-dry-run-status");
 const mockDryRunSkipped = el<HTMLElement>("mock-dry-run-skipped");
 const mockDryRunGaps = el<HTMLElement>("mock-dry-run-gaps");
+const mockDryRunLeftBlank = el<HTMLElement>("mock-dry-run-left-blank");
 const orgField = el<HTMLElement>("org-field");
 const signoutBtn = el<HTMLButtonElement>("signout");
 const accountRow = el<HTMLElement>("account-row");
@@ -356,6 +358,8 @@ const fillAiClearBtn = el<HTMLButtonElement>("fill-ai-clear");
 const fillAiRetryBtn = el<HTMLButtonElement>("fill-ai-retry");
 const fillSkippedBox = el<HTMLElement>("fill-skipped");
 const fillManualBox = el<HTMLElement>("fill-manual");
+const fillLeftBlankLine = el<HTMLElement>("fill-left-blank");
+const fillLeftBlankBox = el<HTMLElement>("fill-left-blank-box");
 const fillEventWarn = el<HTMLElement>("fill-event-warn");
 const gapFlag = el<HTMLElement>("gap-flag");
 const submitDetails = el<HTMLElement>("submit-details");
@@ -2129,7 +2133,9 @@ function clearFillResults(): void {
   fillAttemptedBox.hidden = true;
   fillNotCheckedBox.hidden = true;
   fillSkippedBox.hidden = true;
+  fillLeftBlankBox.hidden = true;
   fillManualBox.hidden = true;
+  fillLeftBlankLine.hidden = true;
   fillYourTurn.hidden = true;
   fillEventWarn.hidden = true;
   fillDetails.hidden = true;
@@ -2646,6 +2652,7 @@ function renderFillDetails(summary: FillSummary): void {
   fieldList(fillSkippedBox, "Not filled on this page:", summary.skipped, actions);
   fieldList(fillNotCheckedBox, "Not checked:", summary.notChecked ?? []);
   fieldList(fillAttemptedBox, "Form-wide planning items (page not checked):", summary.manual, actions);
+  fieldList(fillLeftBlankBox, "Left blank on purpose:", summary.leftBlank ?? []);
 }
 
 // The fill result: one plain headline, the fields that need her, her next
@@ -2664,12 +2671,21 @@ function renderFillSummary(
   const payer = selectedCaseId() != null ? payerLabel() : (portal?.label ?? "payer");
   const fillId = summary.attemptId ?? summary.fillSessionId;
   const needs = needsYou(summary);
+  const leftBlank = leftBlankLine(summary.leftBlank);
+  // Every approved map on this form was a reviewed leave-blank decision:
+  // nothing attempted, nothing missing. The right answer, not a failed fill.
+  const nothingToFill = isNothingToFillRun(summary);
 
   if (summary.filled > 0) {
     const noun = summary.filled === 1 ? "field" : "fields";
     fillNotice(fillSummaryBox, "ok", [
       { text: `Filled ${summary.filled} ${noun} on this page.`, strong: true },
       "Green outline on the page = filled by Minted.",
+    ]);
+  } else if (nothingToFill) {
+    fillNotice(fillSummaryBox, "neutral", [
+      { text: NOTHING_TO_FILL_HEADLINE, strong: true },
+      `${leftBlank}.`,
     ]);
   } else {
     fillNotice(fillSummaryBox, "danger", [
@@ -2688,10 +2704,16 @@ function renderFillSummary(
     fillManualBox.hidden = true;
   }
 
-  if (summary.filled > 0) {
+  // Reviewed "leave blank" maps are not hers to act on, but an empty field
+  // she expected to see filled would read as a miss: say it was on purpose
+  // (the headline already says so when there was nothing else to fill).
+  fillLeftBlankLine.textContent = leftBlank && !nothingToFill ? `${leftBlank}.` : "";
+  fillLeftBlankLine.hidden = leftBlank == null || nothingToFill;
+
+  if (summary.filled > 0 || nothingToFill) {
     const steps: string[] = [];
     if (needs.length > 0) steps.push(`Fill the ${needs.length === 1 ? "field" : `${needs.length} fields`} above on the ${payer} page.`);
-    steps.push("Look over the green fields.");
+    if (summary.filled > 0) steps.push("Look over the green fields.");
     steps.push(`Click Continue or Submit on the ${payer} page.`);
     fillNotice(fillYourTurn, "neutral", [
       { text: "Your turn", strong: true },
@@ -2720,8 +2742,8 @@ function renderFillSummary(
   fillEventWarn.hidden = statusLines.length === 0;
   gapFlag.hidden = true;
 
-  fillAgainBtn.textContent = summary.filled > 0 ? "Fill this page again" : "Try again";
-  fillAgainBtn.className = summary.filled > 0 ? "secondary" : "primary";
+  fillAgainBtn.textContent = summary.filled > 0 || nothingToFill ? "Fill this page again" : "Try again";
+  fillAgainBtn.className = summary.filled > 0 || nothingToFill ? "secondary" : "primary";
 
   renderAiReview(AI_FILL_ENABLED ? (summary.aiReview ?? null) : null, restored ?? null);
   renderFillDetails(summary);
@@ -7297,6 +7319,7 @@ function renderMockDryRunDetail(summary: MockDryRunSummary): void {
   });
   fieldList(mockDryRunSkipped, "Not filled on the page:", notFilled);
   fieldList(mockDryRunGaps, "Mapping gaps:", summary.gaps);
+  fieldList(mockDryRunLeftBlank, "Left blank on purpose:", summary.leftBlank ?? []);
 }
 
 function clearMockDryRunDetail(): void {
@@ -7304,6 +7327,8 @@ function clearMockDryRunDetail(): void {
   mockDryRunSkipped.replaceChildren();
   mockDryRunGaps.hidden = true;
   mockDryRunGaps.replaceChildren();
+  mockDryRunLeftBlank.hidden = true;
+  mockDryRunLeftBlank.replaceChildren();
 }
 
 /** What the open page and the exact Train/Test target are. */
@@ -7469,6 +7494,8 @@ runMockDryRunBtn.addEventListener("click", () => {
       : pass
         ? `Mock dry run passed: filled ${filled} field${filled === 1 ? "" : "s"}. Review the live form, then mark it proven manually.`
         : `Mock dry run needs attention: filled ${filled}, skipped ${skipped.length}, and ${gaps.length} mapping gap${gaps.length === 1 ? "" : "s"}.`;
+    const dryRunLeftBlank = leftBlankLine(response.data.leftBlank);
+    if (dryRunLeftBlank) mockDryRunStatus.textContent += ` ${dryRunLeftBlank}.`;
     if (response.data.logError) mockDryRunStatus.textContent += ` ${response.data.logError}`;
     renderTrainDryRun();
     // A passing run has nothing in either bucket, so `fieldList` hides them

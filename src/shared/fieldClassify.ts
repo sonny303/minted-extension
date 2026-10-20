@@ -11,6 +11,8 @@ export type FieldDecision =
   | "token"
   | "fixed"
   | "human"
+  /** Decided: left empty on purpose. Never autofills, never a gap. */
+  | "blank"
   | "stale"
   | "invalid";
 
@@ -66,6 +68,8 @@ export function classifyFieldMap(
           : result("invalid", false, false, true, "Fixed value is empty");
       case "manual":
         return result("human", false, false, false, "A person fills this");
+      case "leave_blank":
+        return result("blank", true, false, false, "Left blank on purpose");
       default:
         return result("invalid", false, false, true, "Unrecognized source");
     }

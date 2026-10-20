@@ -9,10 +9,13 @@
 //   source "hardcoded"     fill with hardcoded_value
 //   source "token"         fill with the profile value; null/empty = listed
 //   source "manual_partial" fill the token value AND flag for manual review
+//   source "leave_blank"   never attempted BY DESIGN — reviewed, left empty;
+//                          not a manual item, not a gap, not sent as a skip
 //   status                 ONLY "approved" fills (S5.1, 2026-07-28); proposed
 //                          rows are unreviewed observations and never fill
 import type { PortalFieldMap, PortalMappingMetadata, ProviderProfileResponse } from "../shared/apiTypes";
 import { portalMappingState, type PortalConfigurationTarget } from "../shared/portals";
+import { LEAVE_BLANK_KIND, LEAVE_BLANK_REASON } from "../shared/leaveBlank";
 import type { ControlSummary } from "../shared/nanoAi";
 import type {
   AiFillCandidate,
@@ -54,6 +57,8 @@ import {
   type FillEventV2Metadata,
 } from "../shared/fillEventV2";
 import { isExactGroupRecordPath } from "../shared/fixit";
+import { tokenValueText } from "../shared/tokenValue";
+import { localIsoToday, SYSTEM_TODAY_TOKEN, type DeviceResolvedWrite } from "../shared/systemTokens";
 import {
   canonicalizeWorkContextTuple,
   type WorkContextTuple,
@@ -298,14 +303,37 @@ export interface FillPlan {
   staticFills: FillInstruction[];
   aiFills: FillInstruction[];
   manual: ReportedField[];
+  /** Reviewed "leave blank" maps: no instruction, no manual row, never a
+   * telemetry skip. Reported so the empty field reads as intentional. */
+  leftBlank: ReportedField[];
+  /** Planned writes whose value the DEVICE resolved (`system.today`), with the
+   * string that will reach the page. The fill event carries the ones that
+   * were actually written. */
+  deviceWrites: DeviceResolvedWrite[];
 }
 
-export function planFill(maps: PortalFieldMap[], profile: ProviderProfileResponse): FillPlan {
+export interface PlanFillOptions {
+  /** The local calendar date for `system.today`; defaults to now. Tests pin it. */
+  today?: string;
+}
+
+export function planFill(
+  maps: PortalFieldMap[],
+  profile: ProviderProfileResponse,
+  options: PlanFillOptions = {},
+): FillPlan {
   const tokenValues = new Map<string, unknown>(profile.tokens.map((t) => [t.token, t.value]));
+  // system.today is resolved HERE, on the device, from the coordinator's local
+  // calendar — never by the profile endpoint (BITE-DYN-TODAY-01). It enters
+  // the same map as a profile token so the join below, the transform, and the
+  // native-date path treat it exactly like any other canonical date.
+  tokenValues.set(SYSTEM_TODAY_TOKEN, options.today ?? localIsoToday());
   const unresolvedByToken = new Map(profile.unresolved.map((entry) => [entry.token, entry]));
 
   const staticFills: FillInstruction[] = [];
   const manual: ReportedField[] = [];
+  const leftBlank: ReportedField[] = [];
+  const deviceWrites: DeviceResolvedWrite[] = [];
 
   for (const map of maps) {
     // S5.1 invariant (2026-07-28, supersedes the v0 posture): ONLY approved
@@ -317,6 +345,13 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     if (map.mapType !== "web" || map.status !== "approved") continue;
     const label = humanLabel(map);
 
+    // Leave blank wins over every other rule for the row, file fields
+    // included: the decision IS that nothing goes in. The control is never
+    // touched and the row lands in no bucket a coordinator must act on.
+    if (map.source === "leave_blank") {
+      leftBlank.push({ label, reason: LEAVE_BLANK_REASON, mapId: map.id, kind: LEAVE_BLANK_KIND });
+      continue;
+    }
     if (map.fieldType === "file") {
       manual.push({ label, reason: "file upload - attach manually", mapId: map.id, kind: "file" });
       continue;
@@ -347,7 +382,11 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       });
       continue;
     }
-    if (raw == null || raw === "") {
+    // Objects (jsonb such as facilities.hours, which defaults to {}) and
+    // non-primitive arrays have no single-line text: they are DATA gaps,
+    // never "[object Object]" typed into a payer form (shared/tokenValue.ts).
+    const rawString = tokenValueText(raw);
+    if (rawString == null) {
       const unresolved = map.source !== "hardcoded" && map.token != null
         ? unresolvedByToken.get(map.token)
         : undefined;
@@ -372,15 +411,21 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
       continue;
     }
 
-    const rawString = String(raw);
     const canonicalNativeDate = nativeDateValue(rawString);
+    const value = applyTransform(rawString, map.transform);
+    if (map.source !== "hardcoded" && map.token === SYSTEM_TODAY_TOKEN) {
+      // Audited as the canonical date, not the transformed spelling: the
+      // panel validates a calendar date, and the map's transform says how it
+      // was spelled on the page.
+      deviceWrites.push({ mapId: map.id, selector: map.selector, token: SYSTEM_TODAY_TOKEN, value: rawString });
+    }
     staticFills.push({
       mapId: map.id,
       label,
       selector: map.selector,
       selectorFallbacks: map.selectorFallbacks ?? [],
       fieldType: map.fieldType,
-      value: applyTransform(rawString, map.transform),
+      value,
       ...(canonicalNativeDate ? { nativeDateValue: canonicalNativeDate } : {}),
       ...(map.token?.toLowerCase().endsWith("taxonomycode") ? { exactSelectValue: true } : {}),
       pageStep: map.pageStep ?? null,
@@ -397,7 +442,7 @@ export function planFill(maps: PortalFieldMap[], profile: ProviderProfileRespons
     }
   }
 
-  return { staticFills, aiFills: [], manual };
+  return { staticFills, aiFills: [], manual, leftBlank, deviceWrites };
 }
 
 // The coverage sensor (Epic 3a): reuse planFill so the "we can supply M of N"
@@ -409,11 +454,12 @@ export function computeCoverage(
   maps: PortalFieldMap[],
   profile: ProviderProfileResponse,
 ): FillCoverage {
-  const { staticFills, manual } = planFill(maps, profile);
+  const { staticFills, manual, leftBlank } = planFill(maps, profile);
   return {
     available: staticFills.length,
     total: staticFills.length + manual.length,
     gaps: manual,
+    leftBlank,
   };
 }
 
@@ -948,7 +994,7 @@ export async function fillPortal(
         ]);
         return { maps, profile, fillEventV2, mappingFingerprint };
       })();
-  const { staticFills, manual } = planFill(resolvedData.maps, resolvedData.profile);
+  const { staticFills, manual, leftBlank, deviceWrites } = planFill(resolvedData.maps, resolvedData.profile);
   const fillEventV2 = resolvedData.fillEventV2;
 
   const assertPreparedCurrent = async (): Promise<void> => {
@@ -987,8 +1033,8 @@ export async function fillPortal(
   const controlTypes = new Map((prepared?.controls ?? []).map((control) => [control.selector, control.controlType]));
   const aiInstructions: FillInstruction[] = [];
   for (const candidate of options.candidates ?? []) {
-    const raw = tokenValues.get(candidate.token);
-    if (raw == null || raw === "" || !["string", "number", "boolean"].includes(typeof raw)) continue;
+    const candidateText = tokenValueText(tokenValues.get(candidate.token));
+    if (candidateText == null) continue;
     const type = controlTypes.get(candidate.selector);
     if (!type) continue;
     aiInstructions.push({
@@ -997,7 +1043,7 @@ export async function fillPortal(
       selector: candidate.selector,
       selectorFallbacks: [],
       fieldType: type === "select" ? "select" : type === "radio" ? "radio" : type === "checkbox" ? "checkbox" : type === "date" ? "date" : "text",
-      value: String(raw),
+      value: candidateText,
       pageStep: null,
       kind: "ai",
       token: candidate.token,
@@ -1144,6 +1190,14 @@ export async function fillPortal(
   });
   let pageResult = combinePageResult();
   const completedAt = new Date().toISOString();
+  // Audit the device-resolved date that really landed: a date is not PHI, and
+  // "what did the extension sign this with?" must be answerable from the log.
+  // One value per fill event (every system.today field shares it), sent only
+  // when at least one such field was written.
+  // Joined on map id, never selector: a `label:Date` selector can belong to a
+  // system.today map on another page AND a written map on this one.
+  const writtenMapIds = new Set((pageResult.writes ?? []).flatMap((write) => write.mapId ? [write.mapId] : []));
+  const systemTodayDate = deviceWrites.find((write) => writtenMapIds.has(write.mapId))?.value ?? null;
   const localOutcomes = createV2Outcomes(pageResult, manual, [...staticFills, ...aiInstructions]);
   const localAttempted = localOutcomes.filter((field) => field.attempted).length;
   const localVerified = localOutcomes.filter((field) => field.outcome === "verified").length;
@@ -1184,6 +1238,7 @@ export async function fillPortal(
         ...manual.map((f) => ({ ...f, kind: f.kind ?? "manual" })),
       ]),
       ...(telemetry ? { v2: telemetry } : {}),
+      ...(systemTodayDate ? { systemTodayDate } : {}),
       ...(workContext ? { workContext } : {}),
     }, { signal: operation?.abortController.signal });
   } catch (error) {
@@ -1262,6 +1317,7 @@ export async function fillPortal(
     filledLabels: pageResult.filled,
     skipped,
     manual,
+    leftBlank,
     eventRecorded,
     eventError,
     // Only reference the session when the server actually stored it — the
@@ -1328,7 +1384,7 @@ export async function sandboxFillPortal(
       facilityId: request.facilityId,
     }),
   ]);
-  const { staticFills, manual } = planFill(maps, profile);
+  const { staticFills, manual, leftBlank } = planFill(maps, profile);
 
   try {
     const frames = await listTabFrames(request.tabId);
@@ -1424,6 +1480,7 @@ export async function sandboxFillPortal(
     filledLabels: [],
     skipped: pageResult.skipped.filter((field) => !isNotChecked(field)),
     manual,
+    leftBlank,
     pageFields: pageResult.pageFields,
     fillSessionId: recordedId,
     filledSelectors,
