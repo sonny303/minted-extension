@@ -14,7 +14,9 @@ import type {
 } from "../shared/fill";
 import type { FillEventV2FieldOutcome, FillEventV2Outcome, FillEventV2ReasonCode } from "../shared/fillEventV2";
 import {
+  applySequencePageEvidence,
   isOtherPageInstruction,
+  isSequencePageStep,
   otherPageReport,
   pageUnknownReport,
   resolveFillPage,
@@ -1029,7 +1031,9 @@ export async function probeFillOnPage(
     if (isOtherPageInstruction(instruction, currentPage)) {
       return { mapId: instruction.mapId, pageStatus: "other_page", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
-    if (currentPage == null && Boolean(instruction.pageStep?.trim())) {
+    // A "Page N" map is searched anyway: its bucket may prove the page by its
+    // own trained selectors (DYN-PAGE-03), decided over the whole batch below.
+    if (currentPage == null && Boolean(instruction.pageStep?.trim()) && !isSequencePageStep(instruction.pageStep)) {
       return { mapId: instruction.mapId, pageStatus: "page_unknown", targetStatus: "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
     }
 
@@ -1087,8 +1091,14 @@ export async function probeFillOnPage(
     }
     return { mapId: instruction.mapId, pageStatus: "eligible", targetStatus: invalid ? "unsupported" : "missing", pageSettled, radioGroup: false, pageFields, resolvedPage: currentPage };
   });
+  const proven = applySequencePageEvidence(instructions, results, currentPage);
+  // A withheld map must not leave a probe binding behind: apply reads one as
+  // "the probe routed this target here".
+  proven.forEach((row, index) => {
+    if (row.pageStatus === "page_unknown") probedTargets.delete(instructions[index]!.probeKey);
+  });
   stopProbeMutationObserverIfUnused();
-  return results;
+  return proven;
 }
 
 export function applyFill(instructions: FillInstruction[], strictRevalidation = false): FillPageResult {

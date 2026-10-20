@@ -428,6 +428,18 @@ panel, and nothing else would catch it.
   unknown URL) keeps ordinary `"field not found on this page"`. Logging
   preserves producer kinds — it no longer overwrites every content skip to
   `"skipped"`.
+- **A "Page N" bucket proves its own page (DYN-PAGE-03).** When the open URL
+  resolves no exact page, a sequence-named bucket fills in a frame only where
+  at least half of its probed maps find their control (unique, ambiguous or
+  hidden) — `applySequencePageEvidence` (`src/shared/fillPage.ts`), the same
+  half `identifyCapturePage` asks of selector overlap. Found controls come back
+  `pageEvidence: "fingerprint"` and route like any unique target; a missing one
+  is `page_unknown`, **never `not_found`**; a hidden one stays `hidden`; another
+  frame with fields that could not place the map vetoes the write, exactly as
+  for an exact page. The step stays a sequence label: no step key, no drift.
+  Heading-named buckets that no URL tail matches are still withheld. The case
+  it exists for: production `humana-tricare` — one URL (tail `index`), four
+  accordion steps all in the DOM, every approved map on "Page 2".
 - **The fill never writes a hidden control (DYN-PAGE-02).** A wizard keeps its
   inactive steps in the DOM, so a selector can resolve perfectly and still
   point somewhere the coordinator cannot see. `applyValue` guards on

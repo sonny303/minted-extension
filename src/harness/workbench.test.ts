@@ -3612,6 +3612,109 @@ describe("Work across pages — recovered fill, the auto-start bump, refused log
     (chrome.webNavigation as { getFrame?: unknown }).getFrame = previousGetFrame;
   });
 
+  // DYN-PAGE-03, production `humana-tricare`: one URL whose tail names no
+  // trained page, and every approved map on "Page 2". Before the rule a Work
+  // fill wrote nothing. The worker and the mock panel are real; the synthetic
+  // page answers the probe with the content script's own pure page rule.
+  describe("a one-URL form whose maps are all on \"Page 2\" (Humana Tricare)", () => {
+    const HUMANA_PAGE = `${PAGE_1}?ProviderType=PT`;
+    const HUMANA_MAPS = [
+      ["aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaab1", "#firstname", "provider.firstName"],
+      ["aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaab2", "#lastname", "provider.lastName"],
+      ["aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaab3", "#npi", "provider.npi"],
+      ["aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaab4", "#emailaddress", "provider.email"],
+    ].map(([id, selector, token]) => ({ ...mapRow, id, selector, token, pageStep: "Page 2" }));
+    let applied: string[] = [];
+
+    // The page holds `present`; everything else is absent. Probe rows come
+    // from the same `resolveFillPage` + `applySequencePageEvidence` the
+    // content script's probe uses.
+    async function installHumanaPage(present: string[]): Promise<void> {
+      const { applySequencePageEvidence, resolveFillPage } = await import("../shared/fillPage");
+      applied = [];
+      pageUrl = HUMANA_PAGE;
+      stub.setQueryTabs([{ id: TAB_ID, url: HUMANA_PAGE, active: true, windowId: 1 } as chrome.tabs.Tab]);
+      const work = mock.state.workContexts.get(WORK_CASE_TUPLE.portalKey) as { effectiveWebMaps: unknown[] };
+      work.effectiveWebMaps = HUMANA_MAPS;
+      chrome.tabs.sendMessage = (async (_tabId: number, rawMessage: unknown) => {
+        const message = rawMessage as import("../shared/fill").ContentRequest;
+        if (message.type === "PING") return { ok: true };
+        if (message.type === "PROBE_FILL") {
+          const currentPage = resolveFillPage(pageUrl, message.instructions.map((row) => row.pageStep));
+          const rows = message.instructions.map((row) => ({
+            mapId: row.mapId,
+            pageStatus: "eligible" as const,
+            targetStatus: present.includes(row.selector) ? "unique" as const : "missing" as const,
+            pageSettled: true,
+            radioGroup: false,
+            pageFields: present.length,
+            resolvedPage: currentPage,
+          }));
+          return { ok: true, data: applySequencePageEvidence(message.instructions, rows, currentPage) };
+        }
+        if (message.type === "APPLY_FILL") {
+          const routed = message.instructions[0]!;
+          applied.push(routed.selector);
+          return {
+            ok: true,
+            data: {
+              filled: [routed.label],
+              attemptedLabels: [routed.label],
+              writes: [{ selector: routed.selector, kind: "static" }],
+              skipped: [],
+              pageFields: present.length,
+              fieldOutcomes: [{
+                mapId: routed.mapId,
+                targetKey: routed.telemetry!.targetKey,
+                frameKey: routed.telemetry!.frameKey,
+                stepKey: routed.telemetry!.stepKey,
+                attempted: true,
+                outcome: "verified",
+                reasonCode: null,
+              }],
+            },
+          };
+        }
+        throw new Error(`unexpected synthetic portal message ${message.type}`);
+      }) as typeof chrome.tabs.sendMessage;
+    }
+
+    const recordedOutcomes = (fillSessionId: string | null) =>
+      (mock.state.fillSessions.get(fillSessionId ?? "") as { fieldOutcomes?: Array<{ mapId: string; outcome: string; reasonCode: string | null }> } | undefined)
+        ?.fieldOutcomes?.map((row) => [row.mapId, row.outcome, row.reasonCode]);
+
+    it("fills every control the page holds and records the missing one as page_unknown, never drift", async () => {
+      await installHumanaPage(["#firstname", "#lastname", "#npi"]);
+      const summary = await fill();
+      expect(applied).toEqual(["#firstname", "#lastname", "#npi"]);
+      expect(summary.eventRecorded).toBe(true);
+      // Not checked, not skipped: the panel's Needs-you list keeps it apart
+      // from "field not found on this page" (drift).
+      expect(summary.skipped).toEqual([]);
+      expect(summary.notChecked).toEqual([expect.objectContaining({
+        mapId: HUMANA_MAPS[3]!.id,
+        kind: "page_unknown",
+        reason: "current wizard page could not be confirmed",
+      })]);
+      expect(recordedOutcomes(summary.fillSessionId)).toEqual([
+        [HUMANA_MAPS[0]!.id, "verified", null],
+        [HUMANA_MAPS[1]!.id, "verified", null],
+        [HUMANA_MAPS[2]!.id, "verified", null],
+        [HUMANA_MAPS[3]!.id, "page_unknown", "page_unknown"],
+      ]);
+    });
+
+    it("writes nothing on a page holding fewer than half the trained controls", async () => {
+      await installHumanaPage(["#npi"]);
+      const summary = await fill();
+      expect(applied).toEqual([]);
+      expect(summary.notChecked?.map((field) => field.kind)).toEqual(HUMANA_MAPS.map(() => "page_unknown"));
+      expect(recordedOutcomes(summary.fillSessionId)?.map(([, outcome]) => outcome)).toEqual(
+        HUMANA_MAPS.map(() => "page_unknown"),
+      );
+    });
+  });
+
   it("follows the first fill's auto-start bump, so page 2 fills and the log lands (C-1090)", async () => {
     // The panel reads the case on launch: Not Started at the launch's version.
     expect(await readContext()).toMatchObject({ caseStatus: "not_started", contextVersion: 4 });

@@ -31,7 +31,8 @@ function isFillProbeResult(value: unknown): value is FillProbeResult {
     ["unique", "hidden", "ambiguous", "missing", "unsupported"].includes(String(row.targetStatus)) &&
     typeof row.pageSettled === "boolean" && typeof row.radioGroup === "boolean" &&
     typeof row.pageFields === "number" && Number.isFinite(row.pageFields) && row.pageFields >= 0 &&
-    (row.resolvedPage === undefined || row.resolvedPage === null || typeof row.resolvedPage === "string");
+    (row.resolvedPage === undefined || row.resolvedPage === null || typeof row.resolvedPage === "string") &&
+    (row.pageEvidence === undefined || row.pageEvidence === "fingerprint");
 }
 
 function isReportedField(value: unknown): value is ReportedField {
@@ -697,6 +698,9 @@ export async function applyFillAcrossFrames(
     const hidden = eligible.find(({ probe }) => probe.targetStatus === "hidden");
     const unsupported = eligible.find(({ probe }) => probe.targetStatus === "unsupported");
     const candidates = eligible.filter(({ probe }) => probe.targetStatus === "unique");
+    // A "Page N" bucket its own selectors proved (DYN-PAGE-03) is guarded like
+    // an exact page: another frame that could not place this map vetoes it.
+    const provenSequencePage = eligible.some(({ probe }) => probe.pageEvidence === "fingerprint");
     const hasInaccessibleFrame = inaccessibleFrames.some((frame) => !hiddenInaccessibleFrameIds.has(frame.frameId)) ||
       (inaccessibleFrames.length > 0 && candidates.length === 0);
     const unknownPageMayContainFields = rows.some(({ probe }) =>
@@ -711,7 +715,7 @@ export async function applyFillAcrossFrames(
       skip(instruction, "unverified", "frame_inaccessible", "a form frame could not be checked", "unverified");
       continue;
     }
-    if (unknownPage && knownPage && (candidates.length === 0 || unknownPageMayContainFields)) {
+    if (unknownPage && (knownPage || provenSequencePage) && (candidates.length === 0 || unknownPageMayContainFields)) {
       skip(instruction, "page_unknown", "page_unknown", PAGE_UNKNOWN_REASON, "page_unknown");
       continue;
     }

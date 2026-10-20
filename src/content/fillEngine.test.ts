@@ -1297,6 +1297,110 @@ describe("probe-to-apply binding", () => {
     expect(result.skipped).toEqual([]);
   });
 
+  // DYN-PAGE-03. Production `humana-tricare`: 53 approved maps, every one on
+  // "Page 2", at a URL whose tail (`index`) names no trained page. Before this
+  // rule the probe withheld every map and the fill wrote nothing.
+  describe("a Page N bucket at a URL that names no trained page (Humana Tricare)", () => {
+    const humanaUrl = "https://infocenter.humana-military.com/hgbprovider/providercertification/home/index?ProviderType=PT";
+    const trained = ["#firstname", "#lastname", "#npi", "#dob"];
+
+    async function probeAndApply(markup: string, pageSteps: (string | null)[] = trained.map(() => "Page 2")) {
+      document.body.innerHTML = markup;
+      const instructions = trained.map((selector, index) => {
+        const probeKey = createFillEventV2OpaqueKey("t");
+        return instr({
+          label: selector,
+          selector,
+          mapId: `m${index}`,
+          value: `v${index}`,
+          pageStep: pageSteps[index] ?? null,
+          probeKey,
+          telemetry: { targetKey: probeKey, frameKey: createFillEventV2OpaqueKey("f"), stepKey: null },
+        });
+      });
+      const probe = await probeFillOnPage(instructions.map((instruction) => ({
+        mapId: instruction.mapId,
+        probeKey: instruction.probeKey!,
+        selector: instruction.selector,
+        selectorFallbacks: [],
+        fieldType: "text",
+        pageStep: instruction.pageStep,
+      })), humanaUrl);
+      // The worker routes each map alone, as applyFillAcrossFrames does.
+      const applied = instructions.map((instruction) => applyFillOnPage([instruction], humanaUrl, true));
+      const value = (selector: string) => document.querySelector<HTMLInputElement>(selector)?.value ?? null;
+      return { probe, applied, values: trained.map(value) };
+    }
+
+    it("writes each control the page has once half the bucket is found, and withholds the missing one", async () => {
+      const { probe, applied, values } = await probeAndApply(
+        `<input id="firstname" /><input id="lastname" /><input id="npi" />`,
+      );
+      expect(probe.map((row) => [row.pageStatus, row.targetStatus, row.pageEvidence ?? null])).toEqual([
+        ["eligible", "unique", "fingerprint"],
+        ["eligible", "unique", "fingerprint"],
+        ["eligible", "unique", "fingerprint"],
+        ["page_unknown", "missing", null],
+      ]);
+      expect(values).toEqual(["v0", "v1", "v2", null]);
+      expect(applied.map((result) => result.filled)).toEqual([["#firstname"], ["#lastname"], ["#npi"], []]);
+      // A missing control is page_unknown — never drift ("field not found").
+      expect(applied[3]?.skipped).toEqual([
+        { label: "#dob", reason: PAGE_UNKNOWN_REASON, mapId: "m3", kind: PAGE_UNKNOWN_KIND },
+      ]);
+      expect(applied.flatMap((result) => result.skipped).some((field) => field.reason === FIELD_NOT_FOUND_REASON)).toBe(false);
+    });
+
+    it("writes nothing on a page that holds fewer than half the bucket's controls", async () => {
+      const { probe, applied, values } = await probeAndApply(`<input id="npi" /><input id="intro-question" />`);
+      expect(probe.every((row) => row.pageStatus === "page_unknown")).toBe(true);
+      expect(values).toEqual([null, null, "", null]);
+      expect(applied.flatMap((result) => result.filled)).toEqual([]);
+      expect(applied.flatMap((result) => result.skipped).map((field) => field.kind)).toEqual(
+        trained.map(() => PAGE_UNKNOWN_KIND),
+      );
+    });
+
+    it("counts a hidden control as evidence but never writes it (DYN-PAGE-02)", async () => {
+      const { probe, applied, values } = await probeAndApply(
+        `<input id="firstname" /><div style="display:none"><input id="lastname" /></div>`,
+      );
+      // The worker reports a hidden probe row as "field is hidden on this
+      // page" and never routes it (frameMessaging.test.ts pins that side).
+      expect(probe[1]).toMatchObject({ pageStatus: "eligible", targetStatus: "hidden", pageEvidence: "fingerprint" });
+      expect(values).toEqual(["v0", "", null, null]);
+      expect(applied[1]?.filled).toEqual([]);
+    });
+
+    it("judges each Page N bucket separately", async () => {
+      const { values } = await probeAndApply(
+        `<input id="firstname" /><input id="lastname" /><input id="npi" />`,
+        ["Page 2", "Page 2", "Page 3", "Page 3"],
+      );
+      // Page 2: 2 of 2 found. Page 3: 1 of 2 found, which is half, so it fills too.
+      expect(values).toEqual(["v0", "v1", "v2", null]);
+    });
+
+    it("leaves a heading-named page withheld at this URL", async () => {
+      const { probe, values } = await probeAndApply(
+        `<input id="firstname" /><input id="lastname" /><input id="npi" /><input id="dob" />`,
+        trained.map(() => "Demographic information"),
+      );
+      expect(probe.every((row) => row.pageStatus === "page_unknown")).toBe(true);
+      expect(values).toEqual(["", "", "", ""]);
+    });
+
+    it("never writes a Page N map through the unprobed path", () => {
+      document.body.innerHTML = `<input id="firstname" />`;
+      const result = applyFillOnPage(
+        [instr({ label: "First", selector: "#firstname", pageStep: "Page 2" })],
+        humanaUrl,
+      );
+      expect(result.filled).toEqual([]);
+      expect(result.skipped[0]?.kind).toBe(PAGE_UNKNOWN_KIND);
+    });
+  });
+
   it("waits for a delayed panel before declaring a unique target", async () => {
     document.body.innerHTML = "";
     const probeKey = createFillEventV2OpaqueKey("t");

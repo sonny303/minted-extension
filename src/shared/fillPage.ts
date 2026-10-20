@@ -3,16 +3,24 @@
 // Capture already stores pageStep; fill historically ignored it and tried
 // every approved map on every wizard page. Off-page misses then used the
 // same reason the panel calls drift. This module is the fill-side matcher:
-// exact URL-tail ↔ an existing exact page bucket. No selector-overlap scoring
-// and no "Page N" guessing — when identity is ambiguous, callers withhold
-// every step-bound write as page_unknown.
+// exact URL-tail ↔ an existing exact page bucket. A "Page N" name is a
+// sequence label, never an identity, so when the URL names no trained page a
+// "Page N" bucket fills only on its own trained evidence (DYN-PAGE-03,
+// `applySequencePageEvidence` below). Every other unconfirmed step-bound map
+// is withheld as page_unknown.
 //
 // Kind/reason strings are pinned to match panel `src/lib/formDrift.ts`
 // (DYN-PAGE-00). The extension Fix-it strip keys on reason alone, so the
 // off-page reason MUST differ from FIELD_NOT_FOUND_REASON.
 
 import { pageUrlTail } from "./trainForms";
-import type { FillInstruction, ReportedField } from "./fill";
+import type {
+  FillInstruction,
+  FillProbeInstruction,
+  FillProbeResult,
+  FillProbeTargetStatus,
+  ReportedField,
+} from "./fill";
 
 /** Producer kind for a map that belongs to a different exact URL-page. */
 export const OTHER_PAGE_KIND = "other_page";
@@ -36,6 +44,70 @@ export function isExactFillPageIdentity(pageStep: string | null | undefined): bo
   const name = tidyPageName(pageStep);
   if (name == null) return false;
   return !SEQUENCE_PAGE_RE.test(name);
+}
+
+/** True for capture's sequence fallback (`Page 2`). */
+export function isSequencePageStep(pageStep: string | null | undefined): boolean {
+  const name = tidyPageName(pageStep);
+  return name != null && SEQUENCE_PAGE_RE.test(name);
+}
+
+/** Share of a "Page N" bucket's maps that must find their control in a frame
+ * before any of them is written there. The same half that capture's
+ * `identifyCapturePage` asks of selector overlap to call a scan the same page. */
+export const SEQUENCE_PAGE_EVIDENCE_RATIO = 0.5;
+
+/** Target statuses that mean the trained selector found its control. */
+const PRESENT_TARGETS: ReadonlySet<FillProbeTargetStatus> = new Set(["unique", "ambiguous", "hidden"]);
+
+/**
+ * DYN-PAGE-03 — a "Page N" bucket proven by its own trained selectors.
+ *
+ * Applies only when the open URL resolved to no exact page (`currentPage`
+ * null). Production `humana-tricare` is the case: one URL (`…/home/index`),
+ * four accordion steps, 53 approved maps all named "Page 2". Without this,
+ * every one of them reads page_unknown and the fill writes nothing.
+ *
+ * `rows` are one frame's probe results, index-aligned with `instructions`,
+ * with each "Page N" target already searched. Per bucket: when at least
+ * SEQUENCE_PAGE_EVIDENCE_RATIO of its maps found their control in this frame
+ * (unique, ambiguous or hidden), every map whose selector matched something
+ * keeps its result, marked `pageEvidence: "fingerprint"`, and the caller may
+ * write a unique visible one. Everything else in the bucket — every map when
+ * the share falls short, and a map whose control is missing even when it is
+ * met — reads page_unknown.
+ *
+ * Absence never becomes drift here: the page is still a sequence label, so a
+ * missing control is page_unknown, never not_found. Hidden stays hidden.
+ */
+export function applySequencePageEvidence(
+  instructions: readonly Pick<FillProbeInstruction, "pageStep">[],
+  rows: readonly FillProbeResult[],
+  currentPage: string | null,
+): FillProbeResult[] {
+  const out = [...rows];
+  if (currentPage != null) return out;
+  const buckets = new Map<string, number[]>();
+  instructions.forEach((instruction, index) => {
+    if (!isSequencePageStep(instruction.pageStep)) return;
+    const name = tidyPageName(instruction.pageStep) as string;
+    buckets.set(name, [...(buckets.get(name) ?? []), index]);
+  });
+  for (const indices of buckets.values()) {
+    const present = indices.filter((index) => {
+      const row = rows[index];
+      return row != null && row.pageStatus === "eligible" && PRESENT_TARGETS.has(row.targetStatus);
+    }).length;
+    const proven = present / indices.length >= SEQUENCE_PAGE_EVIDENCE_RATIO;
+    for (const index of indices) {
+      const row = rows[index];
+      if (row == null) continue;
+      out[index] = proven && row.pageStatus === "eligible" && row.targetStatus !== "missing"
+        ? { ...row, pageEvidence: "fingerprint" }
+        : { ...row, pageStatus: "page_unknown", targetStatus: "missing", radioGroup: false };
+    }
+  }
+  return out;
 }
 
 /** Match the open URL to an existing exact page bucket. Returns null when the
